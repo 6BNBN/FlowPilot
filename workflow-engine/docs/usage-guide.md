@@ -9,11 +9,14 @@
 
 - Node.js >= 20
 - Claude Code (CC) 已安装
-- 推荐安装以下 CC 插件（非必须）：
-  - superpowers（任务拆解）
-  - frontend-design（前端任务）
-  - feature-dev（后端任务）
-  - code-review（代码审查）
+- **必须开启 Agent Teams 功能**：
+  - 路径：Claude Code → Settings → Feature Flags → Agent Teams → 开启
+  - 这是核心依赖，未开启则无法派发子Agent执行任务
+- 推荐安装以下 CC 插件（非必须但强烈推荐）：
+  - superpowers（任务拆解与头脑风暴）
+  - frontend-design（前端任务专业化执行）
+  - feature-dev（后端任务专业化执行）
+  - code-review（收尾代码审查）
 
 ## 快速开始
 
@@ -90,13 +93,13 @@ CC：恢复工作流: 博客系统 | 进度: 7/12 | 继续执行
 | `node flow.js init` | 初始化/接管项目 |
 | `node flow.js init --force` | 强制重新初始化（覆盖已有工作流） |
 | `node flow.js status` | 查看当前进度 |
-| `node flow.js next` | 获取下一个任务 |
+| `node flow.js next` | 获取下一个任务（含依赖上下文） |
 | `node flow.js next --batch` | 获取所有可并行任务 |
-| `node flow.js checkpoint <id>` | 标记任务完成 |
+| `node flow.js checkpoint <id>` | 标记任务完成（stdin/--file/内联文本） |
 | `node flow.js skip <id>` | 跳过某个任务 |
-| `node flow.js resume` | 中断恢复 |
-| `node flow.js finish` | 智能收尾（验证+提交） |
-| `node flow.js add <描述>` | 追加新任务 |
+| `node flow.js resume` | 中断恢复（重置active→pending） |
+| `node flow.js finish` | 智能收尾（验证+汇报跳过失败项+提交） |
+| `node flow.js add <描述> [--type T]` | 追加新任务（参数顺序任意） |
 
 > 注意：正常使用时你不需要手动执行这些命令，CC 会按协议自动调用。
 
@@ -148,15 +151,17 @@ CC：恢复工作流: 博客系统 | 进度: 7/12 | 继续执行
     ↓
 CC 读 CLAUDE.md → 发现 protocol.md → 进入调度模式
     ↓
-flow next → 返回下一个任务 + 依赖上下文
+flow resume → 检查是否有未完成工作流
     ↓
-CC 派子Agent执行任务（自动选择插件）
+flow next --batch → 返回所有可并行任务 + 依赖上下文
     ↓
-flow checkpoint → 记录产出 + 自动git提交
+CC 用 Task 工具并行派发子Agent（Agent Teams）
     ↓
-循环直到全部完成
+子Agent自行 checkpoint → 记录产出 + 自动git提交
     ↓
-flow finish → 自动跑 build/test/lint → 最终提交
+主Agent确认进度 → 循环直到全部完成
+    ↓
+flow finish → 自动跑 build/test/lint → 汇报完成/跳过/失败项 → 最终提交
     ↓
 回到待命，等待下一个需求
 ```
@@ -178,17 +183,23 @@ flow finish → 自动跑 build/test/lint → 最终提交
 
 ## 常见问题
 
+**Q: Agent Teams 没开启会怎样？**
+协议会要求 CC 立即停止并提示你开启。路径：Settings → Feature Flags → Agent Teams。
+
 **Q: 上下文满了怎么办？**
 CC 自动 compact 后，说"开始"即可恢复。所有状态都在文件里，不依赖对话历史。
 
 **Q: 任务失败了怎么办？**
-自动重试 3 次。3 次都失败则跳过，继续下一个。全部完成后汇报失败项。
+自动重试 3 次。3 次都失败则跳过，继续下一个。finish 收尾时会汇报所有跳过和失败的任务。
 
 **Q: 可以中途加需求吗？**
-可以。直接告诉 CC 新需求，它会执行 `flow add` 追加任务。
+可以。直接告诉 CC 新需求，它会执行 `flow add` 追加任务。参数顺序任意：`flow add 搜索功能 --type frontend` 或 `flow add --type frontend 搜索功能` 都行。
 
 **Q: 不想用某个插件怎么办？**
 插件是可选的。没有 frontend-design 插件时，前端任务会以 general 模式执行。
 
 **Q: .workflow 目录要提交到 git 吗？**
 建议提交。这样团队成员也能看到任务进度和历史决策。
+
+**Q: 任务很多时摘要会不会太长？**
+不会。超过 10 个已完成任务后，摘要会自动按类型压缩，只保留每组最近 3 个任务名。

@@ -1,12 +1,16 @@
 # 全自动工作流引擎改造设计
 
+> **实现状态：已完成** (2026-02-20)
+> 所有核心目标已达成，额外实现了并行任务批处理、多语言验证、Agent Teams强制检测等增强功能。
+
 ## 目标
 
 将 workflow-engine 改造为 CC (Claude Code) 环境下的全自动开发调度工具：
-- 主Agent极简调度，所有任务派发子Agent
-- 分层记忆实现无限上下文
-- 跨会话无缝恢复（万步0偏移）
-- 插件驱动的专业化子Agent分工
+- ✅ 主Agent极简调度，所有任务派发子Agent（协议铁律强制）
+- ✅ 分层记忆实现无限上下文（超10任务自动压缩摘要）
+- ✅ 跨会话无缝恢复（万步0偏移）
+- ✅ 插件驱动的专业化子Agent分工
+- ✅ **新增** Agent Teams 前置检测（未开启则阻止启动）
 
 ## 核心架构
 
@@ -32,25 +36,23 @@
 
 ## 命令设计
 
-### 新增命令
+### 已实现命令（8个）
 
-| 命令 | 用途 | 输出大小 |
-|------|------|----------|
-| `flow init <doc.md>` | 解析文档→任务树+协议+CLAUDE.md引用 | 一次性 |
-| `flow next` | 返回下一个待执行任务（含依赖上下文） | ~20行 |
-| `flow checkpoint <id> <摘要>` | 记录任务完成+详细产出 | ~5行 |
-| `flow status` | 全局进度概览 | ~任务数行 |
-| `flow resume` | 中断恢复，重置未完成任务 | ~10行 |
-| `flow add <描述>` | 运行中追加任务 | ~5行 |
+| 命令 | 用途 | 状态 |
+|------|------|------|
+| `flow init [--force]` | 解析文档→任务树+协议+CLAUDE.md引用 / 无stdin则接管项目 | ✅ |
+| `flow next [--batch]` | 返回下一个/所有可并行任务（含依赖上下文） | ✅ |
+| `flow checkpoint <id>` | 记录任务完成（stdin/--file/内联文本）+ FAILED重试 | ✅ |
+| `flow skip <id>` | 手动跳过任务 | ✅ 新增 |
+| `flow finish` | 智能收尾（多语言验证+汇报跳过失败项+回到idle） | ✅ 新增 |
+| `flow status` | 全局进度概览 | ✅ |
+| `flow resume` | 中断恢复，重置active→pending（支持并行中断） | ✅ |
+| `flow add <描述> [--type T]` | 运行中追加任务（参数顺序任意） | ✅ |
 
-### 保留命令
+### 已移除命令
 
-- `flow list` - 列出工作流
-- `flow caps` - 能力清单
-
-### 移除/合并命令
-
-- `create/start/advance/branch/spawn/return` → 合并进 `init/next/checkpoint` 简化流程
+- `flow list` / `flow caps` — 不再需要
+- `create/start/advance/branch/spawn/return` → 合并进 `init/next/checkpoint`
 
 ## 分层记忆机制
 
@@ -199,46 +201,51 @@
 
 ## 实现计划
 
-### 阶段1：领域层改造
+> 全部4个阶段已完成，额外新增 git.ts、verify.ts、stdin.ts。
 
-改造 `src/domain/`：
-- `types.ts` — 新增 TaskType、TaskEntry、ProgressData 类型
-- `task-store.ts` — 新建，任务持久化（progress.md + tasks.md + context/）
-- 移除 runtime.ts、task-tree.ts（不再需要复杂运行时）
+### 阶段1：领域层 ✅
 
-### 阶段2：应用层改造
+- `types.ts` — TaskType、TaskEntry、ProgressData、WorkflowStatus ✅
+- `task-store.ts` — findNextTask/findParallelTasks/completeTask/failTask/resumeProgress ✅
+- `workflow.ts` — 简化为 TaskDefinition + WorkflowDefinition ✅
+- runtime.ts、task-tree.ts — 已移除 ✅
 
-改造 `src/application/`：
-- `workflow-service.ts` — 重写为 init/next/checkpoint/resume/add/status 六个用例
-- `context-service.ts` — 重写为分层记忆读取（summary + 依赖任务上下文注入）
-- `protocol-generator.ts` — 新建，生成 protocol.md 并写入 CLAUDE.md
+### 阶段2：应用层 ✅
 
-### 阶段3：接口层改造
+- `workflow-service.ts` — 8个用例（init/next/nextBatch/checkpoint/skip/resume/add/finish/setup/status） ✅
+- 上下文注入直接内置于 next/nextBatch，无需独立 context-service ✅
+- `protocol-generator.ts` — 含Agent Teams检测+铁律+并行/串行强制Task工具 ✅
 
-改造 `src/interfaces/`：
-- `cli.ts` — 重写命令路由为新的6个命令
-- `formatter.ts` — 简化为 progress 表格输出
+### 阶段3：接口层 ✅
 
-### 阶段4：基础设施层改造
+- `cli.ts` — 8个命令路由 ✅
+- `formatter.ts` — formatStatus/formatTask/formatBatch ✅
+- `stdin.ts` — 新增，管道输入检测 ✅
 
-改造 `src/infrastructure/`：
-- `fs-repository.ts` — 适配新文件结构（progress.md、context/、tasks.md）
-- `markdown-parser.ts` — 适配新的任务树格式（含类型、依赖）
+### 阶段4：基础设施层 ✅
 
-### 文件变更清单
+- `fs-repository.ts` — progress.md读写+context/+summary+protocol+CLAUDE.md ✅
+- `markdown-parser.ts` — 支持类型+依赖+缩进描述 ✅
+- `git.ts` — 新增，每任务自动commit ✅
+- `verify.ts` — 新增，7种语言自动检测验证 ✅
 
-| 文件 | 操作 |
-|------|------|
-| src/domain/types.ts | 修改：新增任务类型 |
-| src/domain/task-store.ts | 新建：任务存储 |
-| src/domain/runtime.ts | 删除 |
-| src/domain/task-tree.ts | 删除 |
-| src/domain/workflow.ts | 简化 |
-| src/application/workflow-service.ts | 重写 |
-| src/application/context-service.ts | 重写 |
-| src/application/protocol-generator.ts | 新建 |
-| src/infrastructure/fs-repository.ts | 重写 |
-| src/infrastructure/markdown-parser.ts | 重写 |
-| src/interfaces/cli.ts | 重写 |
-| src/interfaces/formatter.ts | 简化 |
-| src/main.ts | 适配 |
+### 最终文件清单
+
+| 文件 | 操作 | 状态 |
+|------|------|------|
+| src/domain/types.ts | 修改 | ✅ |
+| src/domain/task-store.ts | 新建 | ✅ |
+| src/domain/workflow.ts | 简化 | ✅ |
+| src/domain/runtime.ts | 删除 | ✅ |
+| src/domain/task-tree.ts | 删除 | ✅ |
+| src/application/workflow-service.ts | 重写(8用例) | ✅ |
+| src/application/protocol-generator.ts | 新建 | ✅ |
+| src/infrastructure/fs-repository.ts | 重写 | ✅ |
+| src/infrastructure/markdown-parser.ts | 重写 | ✅ |
+| src/infrastructure/git.ts | 新建(计划外) | ✅ |
+| src/infrastructure/verify.ts | 新建(计划外) | ✅ |
+| src/infrastructure/repository.ts | 新建(接口) | ✅ |
+| src/interfaces/cli.ts | 重写(8命令) | ✅ |
+| src/interfaces/formatter.ts | 简化 | ✅ |
+| src/interfaces/stdin.ts | 新建(计划外) | ✅ |
+| src/main.ts | 适配 | ✅ |

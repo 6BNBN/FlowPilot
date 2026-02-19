@@ -259,9 +259,18 @@ function generateProtocol(projectName) {
 
 \u4F60\u662F\u8C03\u5EA6\u5668\uFF0C\u4E25\u683C\u9075\u5FAA\u4EE5\u4E0B\u89C4\u5219\u3002\u4E0D\u8981\u81EA\u5DF1\u5199\u4EE3\u7801\uFF0C\u5168\u90E8\u4EA4\u7ED9\u5B50Agent\u3002
 
-## \u63D2\u4EF6\u68C0\u6D4B\uFF08\u9996\u6B21\u542F\u52A8\u65F6\u6267\u884C\u4E00\u6B21\uFF09
+## \u524D\u7F6E\u6761\u4EF6\uFF08\u9996\u6B21\u542F\u52A8\u65F6\u68C0\u67E5\uFF09
 
-\u5728\u5F00\u59CB\u4EFB\u4F55\u5DE5\u4F5C\u524D\uFF0C\u786E\u8BA4\u4EE5\u4E0B\u63D2\u4EF6\u5DF2\u5B89\u88C5\uFF1A
+### 1. Agent Teams \u529F\u80FD\uFF08\u5FC5\u987B\uFF09
+
+\u672C\u5DE5\u4F5C\u6D41\u4F9D\u8D56 Agent Teams\uFF08\u5B50Agent\u5E76\u884C\u6D3E\u53D1\uFF09\u529F\u80FD\u3002\u8BF7\u786E\u8BA4\u5DF2\u5F00\u542F\uFF1A
+- \u8BBE\u7F6E\u8DEF\u5F84\uFF1AClaude Code \u2192 Settings \u2192 Feature Flags \u2192 Agent Teams \u2192 \u5F00\u542F
+- \u5982\u679C\u672A\u5F00\u542F\uFF0C**\u7ACB\u5373\u505C\u6B62**\u5E76\u63D0\u793A\u7528\u6237\uFF1A
+  "\u8BF7\u5148\u5F00\u542F Agent Teams \u529F\u80FD\uFF1ASettings \u2192 Feature Flags \u2192 Agent Teams\uFF0C\u7136\u540E\u91CD\u65B0\u8BF4'\u5F00\u59CB'"
+
+### 2. \u63D2\u4EF6\u68C0\u6D4B
+
+\u786E\u8BA4\u4EE5\u4E0B\u63D2\u4EF6\u5DF2\u5B89\u88C5\uFF1A
 - superpowers\uFF08\u5934\u8111\u98CE\u66B4\u62C6\u89E3\u4EFB\u52A1\uFF09
 - frontend-design\uFF08\u524D\u7AEF\u4EFB\u52A1\uFF09
 - feature-dev\uFF08\u540E\u7AEF\u4EFB\u52A1\uFF09
@@ -296,6 +305,8 @@ function generateProtocol(projectName) {
 
 ### \u4E32\u884C\u6A21\u5F0F\uFF08\u56DE\u9000\uFF09
 1. \u6267\u884C \`node flow.js next\` \u83B7\u53D6\u5355\u4E2A\u4EFB\u52A1
+2. \u540C\u6837\u5FC5\u987B\u7528 Task \u5DE5\u5177\u6D3E\u53D1\u5B50Agent\u6267\u884C\uFF0C**\u7981\u6B62\u4E3BAgent\u81EA\u5DF1\u6267\u884C\u4EFB\u52A1**
+3. \u5B50Agent\u81EA\u884Ccheckpoint\uFF0C\u4E3BAgent\u7B49\u5F85\u8FD4\u56DE\u540E\u7EE7\u7EED\u5FAA\u73AF
 
 ### \u5B50Agent\u6D3E\u53D1\u89C4\u5219
 \u5B50Agent\u7684prompt\u5FC5\u987B\u5305\u542B\u4EE5\u4E0B\u5185\u5BB9\uFF1A
@@ -314,12 +325,12 @@ function generateProtocol(projectName) {
 \u8FD9\u6837\u4E3BAgent\u4E0A\u4E0B\u6587\u4E0D\u4F1A\u56E0\u5B50Agent\u4EA7\u51FA\u800C\u81A8\u80C0\uFF0C\u5373\u4F7F\u5E76\u884C10\u4E2A\u4E5F\u4E0D\u4F1A\u6EA2\u51FA\u3002
 \u5982\u679C\u4E3BAgent\u4ECD\u7136\u6EA2\u51FA\uFF0C\u65B0\u7A97\u53E3\u8BF4"\u5F00\u59CB"\u2192 flow resume \u4F1A\u91CD\u7F6E\u6240\u6709\u672A\u5B8C\u6210\u7684 active \u4EFB\u52A1\u3002
 
-## \u4E0A\u4E0B\u6587\u89C4\u5219
+## \u94C1\u5F8B\uFF08\u8FDD\u53CD\u4EFB\u4F55\u4E00\u6761\u5373\u4E3A\u534F\u8BAE\u5931\u8D25\uFF09
 
-- \u4F60\u53EA\u8BFB flow \u547D\u4EE4\u7684\u8F93\u51FA\uFF0C\u4E0D\u8981\u8BFB\u6E90\u4EE3\u7801\u6587\u4EF6
-- \u4E0D\u8981\u81EA\u5DF1\u5199\u4EE3\u7801\uFF0C\u5168\u90E8\u4EA4\u7ED9\u5B50Agent
-- \u6BCF\u6B21\u53EA\u5904\u7406\u4E00\u4E2A\u4EFB\u52A1\uFF0C\u4FDD\u6301\u4E0A\u4E0B\u6587\u6700\u5C0F
-- compact \u540E\u8BF4"\u5F00\u59CB"\u5373\u53EF\u6062\u590D
+1. **\u6240\u6709\u4EFB\u52A1\u5FC5\u987B\u901A\u8FC7 Task \u5DE5\u5177\u6D3E\u53D1\u5B50Agent\u6267\u884C**\uFF0C\u65E0\u8BBA\u5E76\u884C\u8FD8\u662F\u4E32\u884C\uFF0C\u4E3BAgent\u7EDD\u4E0D\u80FD\u81EA\u5DF1\u5199\u4EE3\u7801\u3001\u8BFB\u6E90\u7801\u3001\u4FEE\u6539\u6587\u4EF6
+2. \u4E3BAgent\u53EA\u5141\u8BB8\u6267\u884C flow \u547D\u4EE4\uFF08node flow.js xxx\uFF09\u548C Task \u5DE5\u5177\u6D3E\u53D1\uFF0C\u4E0D\u5141\u8BB8\u4F7F\u7528 Edit/Write/Read \u7B49\u6587\u4EF6\u64CD\u4F5C\u5DE5\u5177
+3. \u6BCF\u6B21\u53EA\u5173\u6CE8\u5F53\u524D\u4EFB\u52A1\u7684 flow \u547D\u4EE4\u8F93\u51FA\uFF0C\u4E0D\u4E3B\u52A8\u63A2\u7D22\u9879\u76EE\u6587\u4EF6
+4. compact \u540E\u8BF4"\u5F00\u59CB"\u5373\u53EF\u6062\u590D
 
 ## \u8FFD\u52A0\u4EFB\u52A1
 
@@ -608,9 +619,22 @@ ${detail}
       return `\u9A8C\u8BC1\u5931\u8D25: ${result.error}
 \u8BF7\u4FEE\u590D\u540E\u91CD\u65B0\u6267\u884C node flow.js finish`;
     }
-    const summaries = data.tasks.filter((t) => t.status === "done").map((t) => `- ${t.title}: ${t.summary}`);
-    const changeSummary = `\u5B8C\u6210 ${summaries.length} \u4E2A\u4EFB\u52A1:
-${summaries.join("\n")}`;
+    const done = data.tasks.filter((t) => t.status === "done");
+    const skipped = data.tasks.filter((t) => t.status === "skipped");
+    const failed = data.tasks.filter((t) => t.status === "failed");
+    const parts = [`\u5B8C\u6210 ${done.length} \u4E2A\u4EFB\u52A1:`];
+    for (const t of done) parts.push(`- ${t.title}: ${t.summary}`);
+    if (skipped.length) {
+      parts.push(`
+\u8DF3\u8FC7 ${skipped.length} \u4E2A\u4EFB\u52A1:`);
+      for (const t of skipped) parts.push(`- ${t.title}: ${t.summary || "\u5DF2\u8DF3\u8FC7"}`);
+    }
+    if (failed.length) {
+      parts.push(`
+\u5931\u8D25 ${failed.length} \u4E2A\u4EFB\u52A1:`);
+      for (const t of failed) parts.push(`- ${t.title} (\u91CD\u8BD5${t.retries}\u6B21)`);
+    }
+    const changeSummary = parts.join("\n");
     data.status = "idle";
     data.current = null;
     await this.repo.saveProgress(data);
@@ -630,9 +654,22 @@ ${changeSummary}
     const done = data.tasks.filter((t) => t.status === "done");
     const lines = [`# ${data.name}
 `];
-    lines.push("## \u5DF2\u5B8C\u6210");
-    for (const t of done) {
-      lines.push(`- [${t.type}] ${t.title}: ${t.summary}`);
+    if (done.length > 10) {
+      const groups = /* @__PURE__ */ new Map();
+      for (const t of done) {
+        const arr = groups.get(t.type) || [];
+        arr.push(t.title);
+        groups.set(t.type, arr);
+      }
+      lines.push("## \u5DF2\u5B8C\u6210\u6A21\u5757");
+      for (const [type, titles] of groups) {
+        lines.push(`- [${type}] ${titles.length}\u9879: ${titles.slice(-3).join(", ")}${titles.length > 3 ? " \u7B49" : ""}`);
+      }
+    } else {
+      lines.push("## \u5DF2\u5B8C\u6210");
+      for (const t of done) {
+        lines.push(`- [${t.type}] ${t.title}: ${t.summary}`);
+      }
     }
     const pending = data.tasks.filter((t) => t.status !== "done" && t.status !== "skipped" && t.status !== "failed");
     if (pending.length) {
@@ -777,10 +814,10 @@ var CLI = class {
       case "resume":
         return await s.resume();
       case "add": {
-        const title = rest.filter((r) => r !== "--type")[0];
-        if (!title) throw new Error("\u9700\u8981\u4EFB\u52A1\u63CF\u8FF0");
         const typeIdx = rest.indexOf("--type");
         const type = typeIdx >= 0 && rest[typeIdx + 1] || "general";
+        const title = rest.filter((_, i) => i !== typeIdx && i !== typeIdx + 1).join(" ");
+        if (!title) throw new Error("\u9700\u8981\u4EFB\u52A1\u63CF\u8FF0");
         return await s.add(title, type);
       }
       default:

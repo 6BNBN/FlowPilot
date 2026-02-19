@@ -82,10 +82,10 @@ export class CLI {
         return await s.resume();
 
       case 'add': {
-        const title = rest.filter(r => r !== '--type')[0];
-        if (!title) throw new Error('需要任务描述');
         const typeIdx = rest.indexOf('--type');
         const type = (typeIdx >= 0 && rest[typeIdx + 1]) || 'general';
+        const title = rest.filter((_, i) => i !== typeIdx && i !== typeIdx + 1).join(' ');
+        if (!title) throw new Error('需要任务描述');
         return await s.add(title, type as any);
       }
 

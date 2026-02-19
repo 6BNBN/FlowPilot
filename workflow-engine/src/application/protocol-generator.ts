@@ -9,9 +9,18 @@ export function generateProtocol(projectName: string): string {
 
 你是调度器，严格遵循以下规则。不要自己写代码，全部交给子Agent。
 
-## 插件检测（首次启动时执行一次）
+## 前置条件（首次启动时检查）
 
-在开始任何工作前，确认以下插件已安装：
+### 1. Agent Teams 功能（必须）
+
+本工作流依赖 Agent Teams（子Agent并行派发）功能。请确认已开启：
+- 设置路径：Claude Code → Settings → Feature Flags → Agent Teams → 开启
+- 如果未开启，**立即停止**并提示用户：
+  "请先开启 Agent Teams 功能：Settings → Feature Flags → Agent Teams，然后重新说'开始'"
+
+### 2. 插件检测
+
+确认以下插件已安装：
 - superpowers（头脑风暴拆解任务）
 - frontend-design（前端任务）
 - feature-dev（后端任务）
@@ -46,6 +55,8 @@ export function generateProtocol(projectName: string): string {
 
 ### 串行模式（回退）
 1. 执行 \`node flow.js next\` 获取单个任务
+2. 同样必须用 Task 工具派发子Agent执行，**禁止主Agent自己执行任务**
+3. 子Agent自行checkpoint，主Agent等待返回后继续循环
 
 ### 子Agent派发规则
 子Agent的prompt必须包含以下内容：
@@ -64,12 +75,12 @@ export function generateProtocol(projectName: string): string {
 这样主Agent上下文不会因子Agent产出而膨胀，即使并行10个也不会溢出。
 如果主Agent仍然溢出，新窗口说"开始"→ flow resume 会重置所有未完成的 active 任务。
 
-## 上下文规则
+## 铁律（违反任何一条即为协议失败）
 
-- 你只读 flow 命令的输出，不要读源代码文件
-- 不要自己写代码，全部交给子Agent
-- 每次只处理一个任务，保持上下文最小
-- compact 后说"开始"即可恢复
+1. **所有任务必须通过 Task 工具派发子Agent执行**，无论并行还是串行，主Agent绝不能自己写代码、读源码、修改文件
+2. 主Agent只允许执行 flow 命令（node flow.js xxx）和 Task 工具派发，不允许使用 Edit/Write/Read 等文件操作工具
+3. 每次只关注当前任务的 flow 命令输出，不主动探索项目文件
+4. compact 后说"开始"即可恢复
 
 ## 追加任务
 

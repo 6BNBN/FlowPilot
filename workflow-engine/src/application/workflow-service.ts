@@ -216,10 +216,20 @@ export class WorkflowService {
     }
 
     // 生成变更总结
-    const summaries = data.tasks
-      .filter(t => t.status === 'done')
-      .map(t => `- ${t.title}: ${t.summary}`);
-    const changeSummary = `完成 ${summaries.length} 个任务:\n${summaries.join('\n')}`;
+    const done = data.tasks.filter(t => t.status === 'done');
+    const skipped = data.tasks.filter(t => t.status === 'skipped');
+    const failed = data.tasks.filter(t => t.status === 'failed');
+    const parts = [`完成 ${done.length} 个任务:`];
+    for (const t of done) parts.push(`- ${t.title}: ${t.summary}`);
+    if (skipped.length) {
+      parts.push(`\n跳过 ${skipped.length} 个任务:`);
+      for (const t of skipped) parts.push(`- ${t.title}: ${t.summary || '已跳过'}`);
+    }
+    if (failed.length) {
+      parts.push(`\n失败 ${failed.length} 个任务:`);
+      for (const t of failed) parts.push(`- ${t.title} (重试${t.retries}次)`);
+    }
+    const changeSummary = parts.join('\n');
 
     // 最终提交 + 状态回到 idle
     data.status = 'idle';
@@ -240,12 +250,26 @@ export class WorkflowService {
   private async updateSummary(data: ProgressData): Promise<void> {
     const done = data.tasks.filter(t => t.status === 'done');
     const lines = [`# ${data.name}\n`];
-    // 已完成任务摘要
-    lines.push('## 已完成');
-    for (const t of done) {
-      lines.push(`- [${t.type}] ${t.title}: ${t.summary}`);
+
+    // 每10个已完成任务压缩为按类型分组的摘要
+    if (done.length > 10) {
+      const groups = new Map<string, string[]>();
+      for (const t of done) {
+        const arr = groups.get(t.type) || [];
+        arr.push(t.title);
+        groups.set(t.type, arr);
+      }
+      lines.push('## 已完成模块');
+      for (const [type, titles] of groups) {
+        lines.push(`- [${type}] ${titles.length}项: ${titles.slice(-3).join(', ')}${titles.length > 3 ? ' 等' : ''}`);
+      }
+    } else {
+      lines.push('## 已完成');
+      for (const t of done) {
+        lines.push(`- [${t.type}] ${t.title}: ${t.summary}`);
+      }
     }
-    // 待完成任务概览
+
     const pending = data.tasks.filter(t => t.status !== 'done' && t.status !== 'skipped' && t.status !== 'failed');
     if (pending.length) {
       lines.push('\n## 待完成');
