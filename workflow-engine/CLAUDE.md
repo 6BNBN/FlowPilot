@@ -1,11 +1,18 @@
-# FlowPilot
+# FlowPilot — Claude Code Agent Teams 全自动工作流调度工具
 
-全自动工作流调度工具，配合 Claude Code 实现万步0偏移的全自动开发。
+基于 CC (Claude Code) **Agent Teams** 功能构建的全自动开发调度引擎。
+主Agent作为调度器，通过 Task 工具将所有任务派发给子Agent并行/串行执行，实现：
+- 无限上下文（分层记忆，主Agent上下文 < 100行）
+- 跨会话无缝恢复（万步0偏移，新窗口说"开始"即继续）
+- 插件驱动的专业化分工（frontend-design / feature-dev / superpowers）
 
-## 前置条件
+**本工具必须在 Agent Teams 开启的环境下使用，否则无法派发子Agent。**
+
+## 前置条件（必须）
 
 - Node.js >= 20
 - Claude Code 已开启 **Agent Teams** 功能（Settings → Feature Flags → Agent Teams）
+  - 这是核心依赖，未开启则协议会阻止启动
 - 推荐插件：superpowers、frontend-design、feature-dev、code-review
 
 ## Architecture
