@@ -63,15 +63,19 @@ export function failTask(data: ProgressData, id: string): 'retry' | 'skip' {
   return 'retry';
 }
 
-/** 恢复中断：将 active 任务重置为 pending */
+/** 恢复中断：将所有 active 任务重置为 pending（支持并行中断恢复） */
 export function resumeProgress(data: ProgressData): string | null {
+  let firstId: string | null = null;
   for (const t of data.tasks) {
     if (t.status === 'active') {
       t.status = 'pending';
-      data.current = null;
-      data.status = 'running';
-      return t.id;
+      if (!firstId) firstId = t.id;
     }
+  }
+  if (firstId) {
+    data.current = null;
+    data.status = 'running';
+    return firstId;
   }
   if (data.status === 'running') return data.current;
   return null;

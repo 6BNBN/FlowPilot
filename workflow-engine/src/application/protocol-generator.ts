@@ -40,19 +40,29 @@ export function generateProtocol(projectName: string): string {
 
 ### 并行模式（优先）
 1. 执行 \`node flow.js next --batch\` 获取所有可并行的任务
-2. 如果返回多个任务，用多个 Task 工具调用**在同一条消息中并行派发**子Agent
-3. 所有子Agent返回后，依次执行 \`node flow.js checkpoint <id>\`
+2. 对每个任务，用 Task 工具在同一条消息中并行派发子Agent
+3. 子Agent自行执行 checkpoint（见派发规则），主Agent无需代劳
+4. 所有子Agent返回后，执行 \`node flow.js status\` 确认进度，继续循环
 
 ### 串行模式（回退）
 1. 执行 \`node flow.js next\` 获取单个任务
 
 ### 子Agent派发规则
-- 将输出的「上下文」部分完整复制到子Agent的prompt中，这是子Agent的记忆来源
-- type=frontend → 子Agent prompt 包含上下文 + 任务描述 + 指令"调用 /frontend-design 插件"
-- type=backend → 子Agent prompt 包含上下文 + 任务描述 + 指令"调用 /feature-dev 插件"
-- type=general → 子Agent prompt 包含上下文 + 任务描述
-- 子Agent返回结果后，执行 \`node flow.js checkpoint <id>\`，通过stdin传入子Agent的详细产出
-- 如果子Agent失败，重试。连续失败3次则 \`node flow.js checkpoint <id> FAILED\`
+子Agent的prompt必须包含以下内容：
+1. flow next 输出的「上下文」部分（子Agent的记忆来源）
+2. 任务描述
+3. 插件指令：
+   - type=frontend → "调用 /frontend-design 插件"
+   - type=backend → "调用 /feature-dev 插件"
+   - type=general → 直接执行
+4. **自行checkpoint指令**：
+   "任务完成后，执行以下命令记录成果（将摘要通过stdin传入）：
+   echo '你的产出摘要（修改了哪些文件、关键决策）' | node flow.js checkpoint <id>
+   如果失败则执行：node flow.js checkpoint <id> FAILED"
+
+重要：子Agent自行checkpoint后，返回给主Agent的消息只需一句话确认即可。
+这样主Agent上下文不会因子Agent产出而膨胀，即使并行10个也不会溢出。
+如果主Agent仍然溢出，新窗口说"开始"→ flow resume 会重置所有未完成的 active 任务。
 
 ## 上下文规则
 
