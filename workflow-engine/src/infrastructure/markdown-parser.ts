@@ -1,96 +1,52 @@
 /**
  * @module infrastructure/markdown-parser
- * @description Markdown 工作流定义解析器 - 将 Markdown 转换为 WorkflowDefinition
+ * @description Markdown 任务解析器
  *
- * 格式约定：
- * - 第一行 `# 名称` 为工作流名称
- * - 名称下方段落为描述
- * - 有序列表项为步骤：`1. 步骤标题`
- * - 控制流标记：`[loop]`、`[branch]`、`[factory]`
- * - 并行步骤用字母后缀子列表：`  2a. 子步骤A`
+ * tasks.md 格式：
+ * - `# 名称`
+ * - 描述段落
+ * - `1. [frontend] 标题 (deps: 002,003)`
+ * - `   描述文本`
  */
 
-import { StepId } from '../domain/types';
-import { StepDefinition, WorkflowDefinition } from '../domain/workflow';
-import type { StepType } from '../domain/types';
+import type { TaskType } from '../domain/types';
+import type { TaskDefinition, WorkflowDefinition } from '../domain/workflow';
+import { makeTaskId } from '../domain/task-store';
 
-/** 从标题文本中提取控制流类型标记 */
-function extractType(text: string): { type: StepType; title: string } {
-  const match = text.match(/\[(loop|branch|factory)\]\s*/i);
-  if (match) {
-    const type = match[1].toLowerCase() as StepType;
-    return { type, title: text.replace(match[0], '').trim() };
-  }
-  return { type: 'sequence', title: text.trim() };
-}
+const TASK_RE = /^(\d+)\.\s+\[(\w+)\]\s+(.+?)(?:\s*\(deps?:\s*([^)]*)\))?$/;
+const DESC_RE = /^\s{2,}(.+)$/;
 
-/** 从标题文本中提取能力标记：`{read-file}` */
-function extractCapability(title: string): { clean: string; capability?: string } {
-  const m = title.match(/\{([a-z-]+)\}\s*/);
-  if (m) return { clean: title.replace(m[0], '').trim(), capability: m[1] };
-  return { clean: title };
-}
-
-/** 解析条件表达式：标题中 `when: ...` 或 `until: ...` */
-function extractCondition(title: string): { clean: string; condition?: string } {
-  const m = title.match(/(?:when|until):\s*(.+)$/i);
-  if (m) return { clean: title.replace(m[0], '').trim(), condition: m[1].trim() };
-  return { clean: title };
-}
-
-/** 主行匹配：`1. text` */
-const MAIN_RE = /^(\d+)\.\s+(.+)$/;
-/** 并行子行匹配：`  2a. text` */
-const SUB_RE = /^\s+(\d+)([a-z])\.\s+(.+)$/;
-
-/** 将 Markdown 文本解析为 WorkflowDefinition */
-export function parseWorkflowMarkdown(markdown: string): WorkflowDefinition {
+/** 解析 tasks.md 为 WorkflowDefinition */
+export function parseTasksMarkdown(markdown: string): WorkflowDefinition {
   const lines = markdown.split('\n');
   let name = '';
   let description = '';
-  const steps: StepDefinition[] = [];
-  let pendingParallel: { parentNum: string; children: StepDefinition[] } | null = null;
+  const tasks: TaskDefinition[] = [];
 
-  /** 将收集的并行子步骤刷入 steps */
-  const flushParallel = () => {
-    if (!pendingParallel) return;
-    const id = StepId(pendingParallel.parentNum);
-    steps.push({ id, type: 'parallel', title: `并行组 ${id}`, description: '', children: pendingParallel.children });
-    pendingParallel = null;
-  };
-
-  for (const line of lines) {
-    if (!name && line.startsWith('# ')) { name = line.slice(2).trim(); continue; }
-    if (name && !description && !line.startsWith('#') && line.trim() && !MAIN_RE.test(line)) {
-      description = line.trim(); continue;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!name && line.startsWith('# ')) {
+      name = line.slice(2).trim();
+      continue;
     }
-
-    const sub = line.match(SUB_RE);
-    if (sub) {
-      const [, num, letter, text] = sub;
-      if (!pendingParallel || pendingParallel.parentNum !== num) {
-        flushParallel();
-        pendingParallel = { parentNum: num, children: [] };
-      }
-      const { type, title } = extractType(text);
-      const { clean, condition } = extractCondition(title);
-      const { clean: final, capability } = extractCapability(clean);
-      pendingParallel.children.push({
-        id: StepId(`${num}${letter}`), type, title: final, description: '', condition, capability,
-      });
+    if (name && !description && !line.startsWith('#') && line.trim() && !TASK_RE.test(line)) {
+      description = line.trim();
       continue;
     }
 
-    const main = line.match(MAIN_RE);
-    if (main) {
-      flushParallel();
-      const [, num, text] = main;
-      const { type, title } = extractType(text);
-      const { clean, condition } = extractCondition(title);
-      const { clean: final, capability } = extractCapability(clean);
-      steps.push({ id: StepId(num), type, title: final, description: '', condition, capability });
+    const m = line.match(TASK_RE);
+    if (m) {
+      const type = m[2] as TaskType;
+      const title = m[3].trim();
+      const deps = m[4] ? m[4].split(',').map(d => d.trim().padStart(3, '0')).filter(Boolean) : [];
+      // 收集缩进描述行
+      let desc = '';
+      while (i + 1 < lines.length && DESC_RE.test(lines[i + 1])) {
+        i++;
+        desc += (desc ? '\n' : '') + lines[i].trim();
+      }
+      tasks.push({ title, type, deps, description: desc });
     }
   }
-  flushParallel();
-  return { name, description, steps };
+  return { name, description, tasks };
 }

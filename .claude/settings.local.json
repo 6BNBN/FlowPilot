@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(npx --yes tsc:*)",
+      "Bash(npm install)",
+      "Bash(where npm:*)",
+      "Bash(where:*)",
+      "Bash(./node_modules/.bin/tsc:*)",
+      "Bash(npm run build)",
+      "Bash(node:*)"
+    ]
+  }
+}

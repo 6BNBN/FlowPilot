@@ -1,5 +1,5 @@
 {
-  "name": "@agent-habitat/workflow-engine",
+  "name": "workflow-engine",
   "version": "0.1.0",
   "type": "module",
   "bin": {

@@ -1,29 +1,36 @@
 /**
  * @module domain/types
- * @description 领域值对象与枚举 (DDD Value Objects & Enums)
+ * @description 领域值对象与枚举
  */
 
-/** 步骤类型 - 值对象，定义工作流节点的控制流语义 */
-export type StepType = 'sequence' | 'parallel' | 'loop' | 'branch' | 'factory';
+/** 任务类型 - 决定子Agent调用哪个插件 */
+export type TaskType = 'frontend' | 'backend' | 'general';
 
-/** 步骤状态 - 值对象，表示运行时单步的生命周期 */
-export type StepStatus = 'pending' | 'active' | 'done' | 'skipped' | 'failed';
+/** 任务状态 */
+export type TaskStatus = 'pending' | 'active' | 'done' | 'skipped' | 'failed';
 
-/** 工作流状态 - 值对象，表示整个工作流的生命周期 */
-export type WorkflowStatus = 'draft' | 'running' | 'paused' | 'completed' | 'aborted';
+/** 工作流状态 */
+export type WorkflowStatus = 'idle' | 'running' | 'completed' | 'aborted';
 
-/** 品牌类型 - 防止原始字符串混用 (DDD Identity) */
-export type StepId = string & { readonly __brand: 'StepId' };
-export type WorkflowId = string & { readonly __brand: 'WorkflowId' };
+/** 单个任务条目 */
+export interface TaskEntry {
+  /** 三位数编号如 "001" */
+  id: string;
+  title: string;
+  type: TaskType;
+  status: TaskStatus;
+  /** 依赖的前置任务ID列表 */
+  deps: string[];
+  /** 完成摘要 */
+  summary: string;
+  /** 失败重试次数 */
+  retries: number;
+}
 
-/** 构造品牌类型的工厂函数 */
-export const StepId = (id: string): StepId => id as StepId;
-export const WorkflowId = (id: string): WorkflowId => id as WorkflowId;
-
-/** 制品 - 值对象，步骤产出的文件或资源 */
-export interface Artifact {
-  /** 制品路径 */
-  readonly path: string;
-  /** 制品描述 */
-  readonly description: string;
+/** 工作流全局状态 */
+export interface ProgressData {
+  name: string;
+  status: WorkflowStatus;
+  current: string | null;
+  tasks: TaskEntry[];
 }

@@ -1,3 +1,3 @@
-export { WorkflowRepository, ActivePointer } from './repository';
+export { WorkflowRepository } from './repository';
 export { FsWorkflowRepository } from './fs-repository';
-export { parseWorkflowMarkdown } from './markdown-parser';
+export { parseTasksMarkdown } from './markdown-parser';
