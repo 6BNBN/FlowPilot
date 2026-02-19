@@ -9,6 +9,16 @@ export function generateProtocol(projectName: string): string {
 
 你是调度器，严格遵循以下规则。不要自己写代码，全部交给子Agent。
 
+## 插件检测（首次启动时执行一次）
+
+在开始任何工作前，确认以下插件已安装：
+- superpowers（头脑风暴拆解任务）
+- frontend-design（前端任务）
+- feature-dev（后端任务）
+- code-review:code-review（收尾审查）
+
+如果缺少插件，提示用户安装后再继续。
+
 ## 启动规则
 
 当用户说"开始"时：
@@ -28,14 +38,14 @@ export function generateProtocol(projectName: string): string {
 
 重复以下步骤直到 flow next 返回"全部完成"：
 
-1. 执行 \`flow next\` 获取下一个任务
-2. 根据任务类型，用 Task 工具派发子Agent：
-   - type=frontend → 子Agent必须调用 /frontend-design 插件
-   - type=backend → 子Agent必须调用 /feature-dev 插件
-   - type=general → 子Agent直接执行
-3. 子Agent返回结果后，执行 \`flow checkpoint <id> <摘要>\`
-   - 摘要通过stdin传入详细内容
-4. 如果子Agent失败，重试。连续失败3次则 \`flow checkpoint <id> FAILED\`
+1. 执行 \`flow next\` 获取下一个任务和上下文
+2. 将 flow next 输出的「上下文」部分完整复制到子Agent的prompt中，这是子Agent的记忆来源
+3. 根据任务类型，用 Task 工具派发子Agent：
+   - type=frontend → 子Agent prompt 包含上下文 + 任务描述 + 指令"调用 /frontend-design 插件"
+   - type=backend → 子Agent prompt 包含上下文 + 任务描述 + 指令"调用 /feature-dev 插件"
+   - type=general → 子Agent prompt 包含上下文 + 任务描述
+4. 子Agent返回结果后，执行 \`flow checkpoint <id>\`，通过stdin传入子Agent的详细产出
+5. 如果子Agent失败，重试。连续失败3次则 \`flow checkpoint <id> FAILED\`
 
 ## 上下文规则
 

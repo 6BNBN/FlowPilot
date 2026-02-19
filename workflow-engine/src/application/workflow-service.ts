@@ -87,6 +87,7 @@ export class WorkflowService {
 
     await this.repo.saveProgress(data);
     await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
+    await this.updateSummary(data);
     autoCommit(id, task.title, summaryLine);
 
     const doneCount = data.tasks.filter(t => t.status === 'done').length;
@@ -133,11 +134,15 @@ export class WorkflowService {
     const wrote = await this.repo.ensureClaudeMd();
     const lines: string[] = [];
 
-    if (existing && existing.status === 'running') {
+    if (existing && (existing.status === 'running' || existing.status === 'finishing')) {
       const done = existing.tasks.filter(t => t.status === 'done').length;
       lines.push(`检测到进行中的工作流: ${existing.name}`);
       lines.push(`进度: ${done}/${existing.tasks.length}`);
-      lines.push('执行 flow resume 继续');
+      if (existing.status === 'finishing') {
+        lines.push('状态: 收尾阶段，执行 flow finish 继续');
+      } else {
+        lines.push('执行 flow resume 继续');
+      }
     } else {
       lines.push('项目已接管，工作流工具就绪');
       lines.push('等待需求输入（文档或对话描述）');
@@ -184,6 +189,24 @@ export class WorkflowService {
   /** status: 全局进度 */
   async status(): Promise<ProgressData | null> {
     return this.repo.loadProgress();
+  }
+
+  /** 滚动摘要：每次checkpoint追加，每10个任务压缩 */
+  private async updateSummary(data: ProgressData): Promise<void> {
+    const done = data.tasks.filter(t => t.status === 'done');
+    const lines = [`# ${data.name}\n`];
+    // 已完成任务摘要
+    lines.push('## 已完成');
+    for (const t of done) {
+      lines.push(`- [${t.type}] ${t.title}: ${t.summary}`);
+    }
+    // 待完成任务概览
+    const pending = data.tasks.filter(t => t.status !== 'done' && t.status !== 'skipped' && t.status !== 'failed');
+    if (pending.length) {
+      lines.push('\n## 待完成');
+      for (const t of pending) lines.push(`- [${t.type}] ${t.title}`);
+    }
+    await this.repo.saveSummary(lines.join('\n') + '\n');
   }
 
   private async requireProgress(): Promise<ProgressData> {

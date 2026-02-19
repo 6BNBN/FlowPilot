@@ -211,6 +211,16 @@ function generateProtocol(projectName) {
 
 \u4F60\u662F\u8C03\u5EA6\u5668\uFF0C\u4E25\u683C\u9075\u5FAA\u4EE5\u4E0B\u89C4\u5219\u3002\u4E0D\u8981\u81EA\u5DF1\u5199\u4EE3\u7801\uFF0C\u5168\u90E8\u4EA4\u7ED9\u5B50Agent\u3002
 
+## \u63D2\u4EF6\u68C0\u6D4B\uFF08\u9996\u6B21\u542F\u52A8\u65F6\u6267\u884C\u4E00\u6B21\uFF09
+
+\u5728\u5F00\u59CB\u4EFB\u4F55\u5DE5\u4F5C\u524D\uFF0C\u786E\u8BA4\u4EE5\u4E0B\u63D2\u4EF6\u5DF2\u5B89\u88C5\uFF1A
+- superpowers\uFF08\u5934\u8111\u98CE\u66B4\u62C6\u89E3\u4EFB\u52A1\uFF09
+- frontend-design\uFF08\u524D\u7AEF\u4EFB\u52A1\uFF09
+- feature-dev\uFF08\u540E\u7AEF\u4EFB\u52A1\uFF09
+- code-review:code-review\uFF08\u6536\u5C3E\u5BA1\u67E5\uFF09
+
+\u5982\u679C\u7F3A\u5C11\u63D2\u4EF6\uFF0C\u63D0\u793A\u7528\u6237\u5B89\u88C5\u540E\u518D\u7EE7\u7EED\u3002
+
 ## \u542F\u52A8\u89C4\u5219
 
 \u5F53\u7528\u6237\u8BF4"\u5F00\u59CB"\u65F6\uFF1A
@@ -230,14 +240,14 @@ function generateProtocol(projectName) {
 
 \u91CD\u590D\u4EE5\u4E0B\u6B65\u9AA4\u76F4\u5230 flow next \u8FD4\u56DE"\u5168\u90E8\u5B8C\u6210"\uFF1A
 
-1. \u6267\u884C \`flow next\` \u83B7\u53D6\u4E0B\u4E00\u4E2A\u4EFB\u52A1
-2. \u6839\u636E\u4EFB\u52A1\u7C7B\u578B\uFF0C\u7528 Task \u5DE5\u5177\u6D3E\u53D1\u5B50Agent\uFF1A
-   - type=frontend \u2192 \u5B50Agent\u5FC5\u987B\u8C03\u7528 /frontend-design \u63D2\u4EF6
-   - type=backend \u2192 \u5B50Agent\u5FC5\u987B\u8C03\u7528 /feature-dev \u63D2\u4EF6
-   - type=general \u2192 \u5B50Agent\u76F4\u63A5\u6267\u884C
-3. \u5B50Agent\u8FD4\u56DE\u7ED3\u679C\u540E\uFF0C\u6267\u884C \`flow checkpoint <id> <\u6458\u8981>\`
-   - \u6458\u8981\u901A\u8FC7stdin\u4F20\u5165\u8BE6\u7EC6\u5185\u5BB9
-4. \u5982\u679C\u5B50Agent\u5931\u8D25\uFF0C\u91CD\u8BD5\u3002\u8FDE\u7EED\u5931\u8D253\u6B21\u5219 \`flow checkpoint <id> FAILED\`
+1. \u6267\u884C \`flow next\` \u83B7\u53D6\u4E0B\u4E00\u4E2A\u4EFB\u52A1\u548C\u4E0A\u4E0B\u6587
+2. \u5C06 flow next \u8F93\u51FA\u7684\u300C\u4E0A\u4E0B\u6587\u300D\u90E8\u5206\u5B8C\u6574\u590D\u5236\u5230\u5B50Agent\u7684prompt\u4E2D\uFF0C\u8FD9\u662F\u5B50Agent\u7684\u8BB0\u5FC6\u6765\u6E90
+3. \u6839\u636E\u4EFB\u52A1\u7C7B\u578B\uFF0C\u7528 Task \u5DE5\u5177\u6D3E\u53D1\u5B50Agent\uFF1A
+   - type=frontend \u2192 \u5B50Agent prompt \u5305\u542B\u4E0A\u4E0B\u6587 + \u4EFB\u52A1\u63CF\u8FF0 + \u6307\u4EE4"\u8C03\u7528 /frontend-design \u63D2\u4EF6"
+   - type=backend \u2192 \u5B50Agent prompt \u5305\u542B\u4E0A\u4E0B\u6587 + \u4EFB\u52A1\u63CF\u8FF0 + \u6307\u4EE4"\u8C03\u7528 /feature-dev \u63D2\u4EF6"
+   - type=general \u2192 \u5B50Agent prompt \u5305\u542B\u4E0A\u4E0B\u6587 + \u4EFB\u52A1\u63CF\u8FF0
+4. \u5B50Agent\u8FD4\u56DE\u7ED3\u679C\u540E\uFF0C\u6267\u884C \`flow checkpoint <id>\`\uFF0C\u901A\u8FC7stdin\u4F20\u5165\u5B50Agent\u7684\u8BE6\u7EC6\u4EA7\u51FA
+5. \u5982\u679C\u5B50Agent\u5931\u8D25\uFF0C\u91CD\u8BD5\u3002\u8FDE\u7EED\u5931\u8D253\u6B21\u5219 \`flow checkpoint <id> FAILED\`
 
 ## \u4E0A\u4E0B\u6587\u89C4\u5219
 
@@ -413,6 +423,7 @@ ${def.description}
 
 ${detail}
 `);
+    await this.updateSummary(data);
     autoCommit(id, task.title, summaryLine);
     const doneCount = data.tasks.filter((t) => t.status === "done").length;
     const msg = `\u4EFB\u52A1 ${id} \u5B8C\u6210 (${doneCount}/${data.tasks.length}) [\u5DF2\u81EA\u52A8\u63D0\u4EA4]`;
@@ -461,11 +472,15 @@ ${detail}
     await this.repo.saveProtocol(generateProtocol("project"));
     const wrote = await this.repo.ensureClaudeMd();
     const lines = [];
-    if (existing && existing.status === "running") {
+    if (existing && (existing.status === "running" || existing.status === "finishing")) {
       const done = existing.tasks.filter((t) => t.status === "done").length;
       lines.push(`\u68C0\u6D4B\u5230\u8FDB\u884C\u4E2D\u7684\u5DE5\u4F5C\u6D41: ${existing.name}`);
       lines.push(`\u8FDB\u5EA6: ${done}/${existing.tasks.length}`);
-      lines.push("\u6267\u884C flow resume \u7EE7\u7EED");
+      if (existing.status === "finishing") {
+        lines.push("\u72B6\u6001: \u6536\u5C3E\u9636\u6BB5\uFF0C\u6267\u884C flow finish \u7EE7\u7EED");
+      } else {
+        lines.push("\u6267\u884C flow resume \u7EE7\u7EED");
+      }
     } else {
       lines.push("\u9879\u76EE\u5DF2\u63A5\u7BA1\uFF0C\u5DE5\u4F5C\u6D41\u5DE5\u5177\u5C31\u7EEA");
       lines.push("\u7B49\u5F85\u9700\u6C42\u8F93\u5165\uFF08\u6587\u6863\u6216\u5BF9\u8BDD\u63CF\u8FF0\uFF09");
@@ -504,6 +519,22 @@ ${changeSummary}
   /** status: 全局进度 */
   async status() {
     return this.repo.loadProgress();
+  }
+  /** 滚动摘要：每次checkpoint追加，每10个任务压缩 */
+  async updateSummary(data) {
+    const done = data.tasks.filter((t) => t.status === "done");
+    const lines = [`# ${data.name}
+`];
+    lines.push("## \u5DF2\u5B8C\u6210");
+    for (const t of done) {
+      lines.push(`- [${t.type}] ${t.title}: ${t.summary}`);
+    }
+    const pending = data.tasks.filter((t) => t.status !== "done" && t.status !== "skipped" && t.status !== "failed");
+    if (pending.length) {
+      lines.push("\n## \u5F85\u5B8C\u6210");
+      for (const t of pending) lines.push(`- [${t.type}] ${t.title}`);
+    }
+    await this.repo.saveSummary(lines.join("\n") + "\n");
   }
   async requireProgress() {
     const data = await this.repo.loadProgress();
