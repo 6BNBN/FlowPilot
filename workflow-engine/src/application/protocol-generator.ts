@@ -49,5 +49,22 @@ export function generateProtocol(projectName: string): string {
 用户中途提新需求时：
 1. 执行 \`flow add <描述>\` 追加任务
 2. 继续执行循环
+
+## 收尾阶段
+
+当 flow next 返回"全部完成"或 checkpoint 提示"请执行 flow finish"时：
+
+1. 执行 \`flow finish\` 进行自动验证（检测 npm test/build/lint）
+   - 如果验证失败 → 用 Task 工具派子Agent修复 → 再次 \`flow finish\`（最多重试3次）
+2. 验证通过后，用 Task 工具派子Agent调用 /code-review:code-review 审查本轮变更
+3. 审查有问题 → 派子Agent修复 → 再次 \`flow finish\`
+4. 全部通过 → flow finish 已自动提交最终commit
+
+## 待命状态
+
+收尾完成后工作流回到 idle。此时：
+- 用户提供新需求文档或描述 → 回到「需求拆解规则」
+- 用户说"开始" → flow resume 检查（无活跃工作流则等待需求输入）
+- 无需重新 flow init，直接接收下一个需求即可
 `;
 }

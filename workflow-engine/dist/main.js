@@ -251,6 +251,23 @@ function generateProtocol(projectName) {
 \u7528\u6237\u4E2D\u9014\u63D0\u65B0\u9700\u6C42\u65F6\uFF1A
 1. \u6267\u884C \`flow add <\u63CF\u8FF0>\` \u8FFD\u52A0\u4EFB\u52A1
 2. \u7EE7\u7EED\u6267\u884C\u5FAA\u73AF
+
+## \u6536\u5C3E\u9636\u6BB5
+
+\u5F53 flow next \u8FD4\u56DE"\u5168\u90E8\u5B8C\u6210"\u6216 checkpoint \u63D0\u793A"\u8BF7\u6267\u884C flow finish"\u65F6\uFF1A
+
+1. \u6267\u884C \`flow finish\` \u8FDB\u884C\u81EA\u52A8\u9A8C\u8BC1\uFF08\u68C0\u6D4B npm test/build/lint\uFF09
+   - \u5982\u679C\u9A8C\u8BC1\u5931\u8D25 \u2192 \u7528 Task \u5DE5\u5177\u6D3E\u5B50Agent\u4FEE\u590D \u2192 \u518D\u6B21 \`flow finish\`\uFF08\u6700\u591A\u91CD\u8BD53\u6B21\uFF09
+2. \u9A8C\u8BC1\u901A\u8FC7\u540E\uFF0C\u7528 Task \u5DE5\u5177\u6D3E\u5B50Agent\u8C03\u7528 /code-review:code-review \u5BA1\u67E5\u672C\u8F6E\u53D8\u66F4
+3. \u5BA1\u67E5\u6709\u95EE\u9898 \u2192 \u6D3E\u5B50Agent\u4FEE\u590D \u2192 \u518D\u6B21 \`flow finish\`
+4. \u5168\u90E8\u901A\u8FC7 \u2192 flow finish \u5DF2\u81EA\u52A8\u63D0\u4EA4\u6700\u7EC8commit
+
+## \u5F85\u547D\u72B6\u6001
+
+\u6536\u5C3E\u5B8C\u6210\u540E\u5DE5\u4F5C\u6D41\u56DE\u5230 idle\u3002\u6B64\u65F6\uFF1A
+- \u7528\u6237\u63D0\u4F9B\u65B0\u9700\u6C42\u6587\u6863\u6216\u63CF\u8FF0 \u2192 \u56DE\u5230\u300C\u9700\u6C42\u62C6\u89E3\u89C4\u5219\u300D
+- \u7528\u6237\u8BF4"\u5F00\u59CB" \u2192 flow resume \u68C0\u67E5\uFF08\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41\u5219\u7B49\u5F85\u9700\u6C42\u8F93\u5165\uFF09
+- \u65E0\u9700\u91CD\u65B0 flow init\uFF0C\u76F4\u63A5\u63A5\u6536\u4E0B\u4E00\u4E2A\u9700\u6C42\u5373\u53EF
 `;
 }
 
@@ -264,6 +281,33 @@ function autoCommit(taskId, title, summary) {
 ${summary}`;
     execSync(`git commit -m ${JSON.stringify(msg)} --allow-empty`, { stdio: "pipe" });
   } catch {
+  }
+}
+
+// src/infrastructure/verify.ts
+import { execSync as execSync2 } from "child_process";
+import { readFileSync } from "fs";
+import { join as join2 } from "path";
+function runVerify(cwd) {
+  const scripts = detectScripts(cwd);
+  if (!scripts.length) return { passed: true, scripts: [] };
+  for (const s of scripts) {
+    try {
+      execSync2(`npm run ${s}`, { cwd, stdio: "pipe", timeout: 12e4 });
+    } catch (e) {
+      return { passed: false, scripts, error: `npm run ${s} \u5931\u8D25:
+${(e.stderr || e.stdout || "").toString().slice(0, 500)}` };
+    }
+  }
+  return { passed: true, scripts };
+}
+function detectScripts(cwd) {
+  try {
+    const pkg = JSON.parse(readFileSync(join2(cwd, "package.json"), "utf-8"));
+    const s = pkg.scripts || {};
+    return ["build", "test", "lint"].filter((k) => k in s);
+  } catch {
+    return [];
   }
 }
 
@@ -330,7 +374,6 @@ ${def.description}
     }
     const summaryLine = detail.split("\n")[0].slice(0, 80);
     completeTask(data, id, summaryLine);
-    if (isAllDone(data.tasks)) data.status = "completed";
     await this.repo.saveProgress(data);
     await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}
 
@@ -338,13 +381,17 @@ ${detail}
 `);
     autoCommit(id, task.title, summaryLine);
     const doneCount = data.tasks.filter((t) => t.status === "done").length;
-    return `\u4EFB\u52A1 ${id} \u5B8C\u6210 (${doneCount}/${data.tasks.length}) [\u5DF2\u81EA\u52A8\u63D0\u4EA4]`;
+    const msg = `\u4EFB\u52A1 ${id} \u5B8C\u6210 (${doneCount}/${data.tasks.length}) [\u5DF2\u81EA\u52A8\u63D0\u4EA4]`;
+    return isAllDone(data.tasks) ? msg + "\n\u5168\u90E8\u4EFB\u52A1\u5DF2\u5B8C\u6210\uFF0C\u8BF7\u6267\u884C flow finish \u8FDB\u884C\u6536\u5C3E" : msg;
   }
   /** resume: 中断恢复 */
   async resume() {
     const data = await this.repo.loadProgress();
-    if (!data) return "\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41";
+    if (!data) return "\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41\uFF0C\u7B49\u5F85\u9700\u6C42\u8F93\u5165";
+    if (data.status === "idle") return "\u5DE5\u4F5C\u6D41\u5F85\u547D\u4E2D\uFF0C\u7B49\u5F85\u9700\u6C42\u8F93\u5165";
     if (data.status === "completed") return "\u5DE5\u4F5C\u6D41\u5DF2\u5168\u90E8\u5B8C\u6210";
+    if (data.status === "finishing") return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${data.name}
+\u6B63\u5728\u6536\u5C3E\u9636\u6BB5\uFF0C\u8BF7\u6267\u884C flow finish`;
     const resetId = resumeProgress(data);
     await this.repo.saveProgress(data);
     const doneCount = data.tasks.filter((t) => t.status === "done").length;
@@ -395,6 +442,30 @@ ${detail}
     lines.push("");
     lines.push('\u7528\u6237\u8BF4"\u5F00\u59CB"\u5373\u53EF\u542F\u52A8\u5168\u81EA\u52A8\u5F00\u53D1');
     return lines.join("\n");
+  }
+  /** finish: 智能收尾 - 验证+总结+回到待命 */
+  async finish() {
+    const data = await this.requireProgress();
+    if (!isAllDone(data.tasks)) throw new Error("\u8FD8\u6709\u672A\u5B8C\u6210\u7684\u4EFB\u52A1\uFF0C\u8BF7\u5148\u5B8C\u6210\u6240\u6709\u4EFB\u52A1");
+    data.status = "finishing";
+    await this.repo.saveProgress(data);
+    const result = runVerify(process.cwd());
+    if (!result.passed) {
+      return `\u9A8C\u8BC1\u5931\u8D25: ${result.error}
+\u8BF7\u4FEE\u590D\u540E\u91CD\u65B0\u6267\u884C flow finish`;
+    }
+    const summaries = data.tasks.filter((t) => t.status === "done").map((t) => `- ${t.title}: ${t.summary}`);
+    const changeSummary = `\u5B8C\u6210 ${summaries.length} \u4E2A\u4EFB\u52A1:
+${summaries.join("\n")}`;
+    data.status = "idle";
+    data.current = null;
+    await this.repo.saveProgress(data);
+    autoCommit("finish", data.name, changeSummary);
+    const scripts = result.scripts.length ? result.scripts.join(", ") : "\u65E0\u9A8C\u8BC1\u811A\u672C";
+    return `\u9A8C\u8BC1\u901A\u8FC7: ${scripts}
+${changeSummary}
+\u5DF2\u63D0\u4EA4\u6700\u7EC8commit\uFF0C\u5DE5\u4F5C\u6D41\u56DE\u5230\u5F85\u547D\u72B6\u6001
+\u7B49\u5F85\u4E0B\u4E00\u4E2A\u9700\u6C42...`;
   }
   /** status: 全局进度 */
   async status() {
@@ -499,6 +570,8 @@ var CLI = class {
         if (!data) return "\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41";
         return formatStatus(data);
       }
+      case "finish":
+        return await s.finish();
       case "resume":
         return await s.resume();
       case "add": {
@@ -517,6 +590,7 @@ var USAGE = `\u7528\u6CD5: flow <command>
   init             \u521D\u59CB\u5316\u5DE5\u4F5C\u6D41 (stdin\u4F20\u5165\u4EFB\u52A1markdown)
   next             \u83B7\u53D6\u4E0B\u4E00\u4E2A\u5F85\u6267\u884C\u4EFB\u52A1
   checkpoint <id>  \u8BB0\u5F55\u4EFB\u52A1\u5B8C\u6210 (stdin\u4F20\u5165\u8BE6\u7EC6\u5185\u5BB9)
+  finish           \u667A\u80FD\u6536\u5C3E (\u9A8C\u8BC1+\u603B\u7ED3+\u56DE\u5230\u5F85\u547D)
   status           \u67E5\u770B\u5168\u5C40\u8FDB\u5EA6
   resume           \u4E2D\u65AD\u6062\u590D
   add <\u63CF\u8FF0>       \u8FFD\u52A0\u4EFB\u52A1 [--type frontend|backend|general]`;

@@ -9,6 +9,7 @@ import type { WorkflowRepository } from '../infrastructure/repository';
 import { makeTaskId, findNextTask, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
 import { generateProtocol } from './protocol-generator';
 import { autoCommit } from '../infrastructure/git';
+import { runVerify } from '../infrastructure/verify';
 
 export class WorkflowService {
   constructor(
@@ -84,20 +85,22 @@ export class WorkflowService {
     const summaryLine = detail.split('\n')[0].slice(0, 80);
     completeTask(data, id, summaryLine);
 
-    if (isAllDone(data.tasks)) data.status = 'completed';
     await this.repo.saveProgress(data);
     await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
     autoCommit(id, task.title, summaryLine);
 
     const doneCount = data.tasks.filter(t => t.status === 'done').length;
-    return `任务 ${id} 完成 (${doneCount}/${data.tasks.length}) [已自动提交]`;
+    const msg = `任务 ${id} 完成 (${doneCount}/${data.tasks.length}) [已自动提交]`;
+    return isAllDone(data.tasks) ? msg + '\n全部任务已完成，请执行 flow finish 进行收尾' : msg;
   }
 
   /** resume: 中断恢复 */
   async resume(): Promise<string> {
     const data = await this.repo.loadProgress();
-    if (!data) return '无活跃工作流';
+    if (!data) return '无活跃工作流，等待需求输入';
+    if (data.status === 'idle') return '工作流待命中，等待需求输入';
     if (data.status === 'completed') return '工作流已全部完成';
+    if (data.status === 'finishing') return `恢复工作流: ${data.name}\n正在收尾阶段，请执行 flow finish`;
 
     const resetId = resumeProgress(data);
     await this.repo.saveProgress(data);
@@ -146,6 +149,36 @@ export class WorkflowService {
     lines.push('');
     lines.push('用户说"开始"即可启动全自动开发');
     return lines.join('\n');
+  }
+
+  /** finish: 智能收尾 - 验证+总结+回到待命 */
+  async finish(): Promise<string> {
+    const data = await this.requireProgress();
+    if (!isAllDone(data.tasks)) throw new Error('还有未完成的任务，请先完成所有任务');
+
+    data.status = 'finishing';
+    await this.repo.saveProgress(data);
+
+    // 自动检测并执行验证脚本
+    const result = runVerify(process.cwd());
+    if (!result.passed) {
+      return `验证失败: ${result.error}\n请修复后重新执行 flow finish`;
+    }
+
+    // 生成变更总结
+    const summaries = data.tasks
+      .filter(t => t.status === 'done')
+      .map(t => `- ${t.title}: ${t.summary}`);
+    const changeSummary = `完成 ${summaries.length} 个任务:\n${summaries.join('\n')}`;
+
+    // 最终提交 + 状态回到 idle
+    data.status = 'idle';
+    data.current = null;
+    await this.repo.saveProgress(data);
+    autoCommit('finish', data.name, changeSummary);
+
+    const scripts = result.scripts.length ? result.scripts.join(', ') : '无验证脚本';
+    return `验证通过: ${scripts}\n${changeSummary}\n已提交最终commit，工作流回到待命状态\n等待下一个需求...`;
   }
 
   /** status: 全局进度 */

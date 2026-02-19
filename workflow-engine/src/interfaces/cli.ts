@@ -57,6 +57,9 @@ export class CLI {
         return formatStatus(data);
       }
 
+      case 'finish':
+        return await s.finish();
+
       case 'resume':
         return await s.resume();
 
@@ -78,6 +81,7 @@ const USAGE = `用法: flow <command>
   init             初始化工作流 (stdin传入任务markdown)
   next             获取下一个待执行任务
   checkpoint <id>  记录任务完成 (stdin传入详细内容)
+  finish           智能收尾 (验证+总结+回到待命)
   status           查看全局进度
   resume           中断恢复
   add <描述>       追加任务 [--type frontend|backend|general]`;

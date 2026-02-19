@@ -10,7 +10,7 @@ export type TaskType = 'frontend' | 'backend' | 'general';
 export type TaskStatus = 'pending' | 'active' | 'done' | 'skipped' | 'failed';
 
 /** 工作流状态 */
-export type WorkflowStatus = 'idle' | 'running' | 'completed' | 'aborted';
+export type WorkflowStatus = 'idle' | 'running' | 'finishing' | 'completed' | 'aborted';
 
 /** 单个任务条目 */
 export interface TaskEntry {

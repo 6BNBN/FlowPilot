@@ -1,9 +1,8 @@
-# 测试项目
+# 收尾测试
 
-测试描述
+测试收尾功能
 
 ## 任务
 
-1. [frontend] 创建首页
-2. [backend] 创建API (deps: 001)
-3. [general] 集成测试 (deps: 001,002)
+1. [general] 编写功能代码
+2. [general] 添加配置 (deps: 001)
