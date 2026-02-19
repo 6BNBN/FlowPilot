@@ -10,7 +10,8 @@
       "Bash(npm run build)",
       "Bash(node:*)",
       "Bash(printf:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(npx vitest run)"
     ]
   }
 }
