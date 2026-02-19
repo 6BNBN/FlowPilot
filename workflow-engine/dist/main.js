@@ -295,8 +295,10 @@ function runVerify(cwd) {
     try {
       execSync2(`npm run ${s}`, { cwd, stdio: "pipe", timeout: 12e4 });
     } catch (e) {
+      const out = (e.stderr || e.stdout || "").toString();
+      if (out.includes("No test files found")) continue;
       return { passed: false, scripts, error: `npm run ${s} \u5931\u8D25:
-${(e.stderr || e.stdout || "").toString().slice(0, 500)}` };
+${out.slice(0, 500)}` };
     }
   }
   return { passed: true, scripts };

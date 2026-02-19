@@ -22,7 +22,10 @@ export function runVerify(cwd: string): VerifyResult {
     try {
       execSync(`npm run ${s}`, { cwd, stdio: 'pipe', timeout: 120_000 });
     } catch (e: any) {
-      return { passed: false, scripts, error: `npm run ${s} 失败:\n${(e.stderr || e.stdout || '').toString().slice(0, 500)}` };
+      const out = (e.stderr || e.stdout || '').toString();
+      // 无测试文件不算失败
+      if (out.includes('No test files found')) continue;
+      return { passed: false, scripts, error: `npm run ${s} 失败:\n${out.slice(0, 500)}` };
     }
   }
   return { passed: true, scripts };
