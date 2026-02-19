@@ -13,7 +13,7 @@ import type { TaskType } from '../domain/types';
 import type { TaskDefinition, WorkflowDefinition } from '../domain/workflow';
 import { makeTaskId } from '../domain/task-store';
 
-const TASK_RE = /^(\d+)\.\s+\[(\w+)\]\s+(.+?)(?:\s*\(deps?:\s*([^)]*)\))?$/;
+const TASK_RE = /^(\d+)\.\s+\[\s*(\w+)\s*\]\s+(.+?)(?:\s*\((?:deps?|依赖)\s*:\s*([^)]*)\))?\s*$/i;
 const DESC_RE = /^\s{2,}(.+)$/;
 
 /** 解析 tasks.md 为 WorkflowDefinition */
@@ -36,7 +36,7 @@ export function parseTasksMarkdown(markdown: string): WorkflowDefinition {
 
     const m = line.match(TASK_RE);
     if (m) {
-      const type = m[2] as TaskType;
+      const type = m[2].toLowerCase() as TaskType;
       const title = m[3].trim();
       const deps = m[4] ? m[4].split(',').map(d => d.trim().padStart(3, '0')).filter(Boolean) : [];
       // 收集缩进描述行

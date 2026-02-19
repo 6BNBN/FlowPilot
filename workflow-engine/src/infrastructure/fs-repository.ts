@@ -31,12 +31,13 @@ export class FsWorkflowRepository implements WorkflowRepository {
       `状态: ${data.status}`,
       `当前: ${data.current ?? '无'}`,
       '',
-      '| ID | 标题 | 类型 | 依赖 | 状态 | 摘要 |',
-      '|----|------|------|------|------|------|',
+      '| ID | 标题 | 类型 | 依赖 | 状态 | 重试 | 摘要 | 描述 |',
+      '|----|------|------|------|------|------|------|------|',
     ];
     for (const t of data.tasks) {
       const deps = t.deps.length ? t.deps.join(',') : '-';
-      lines.push(`| ${t.id} | ${t.title} | ${t.type} | ${deps} | ${t.status} | ${t.summary || '-'} |`);
+      const desc = (t.description || '-').slice(0, 80).replace(/\|/g, '/').replace(/\n/g, ' ');
+      lines.push(`| ${t.id} | ${t.title} | ${t.type} | ${deps} | ${t.status} | ${t.retries} | ${t.summary || '-'} | ${desc} |`);
     }
     await writeFile(join(this.root, 'progress.md'), lines.join('\n') + '\n', 'utf-8');
   }
@@ -62,15 +63,16 @@ export class FsWorkflowRepository implements WorkflowRepository {
       if (line.startsWith('当前: ')) current = line.slice(4).trim();
       if (current === '无') current = null;
 
-      const m = line.match(/^\|\s*(\d{3})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(.*?)\s*\|$/);
+      const m = line.match(/^\|\s*(\d{3})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
       if (m) {
         const depsRaw = m[4].trim();
         tasks.push({
           id: m[1], title: m[2], type: m[3] as TaskEntry['type'],
-          status: m[5] as TaskEntry['status'],
-          summary: m[6] === '-' ? '' : m[6],
           deps: depsRaw === '-' ? [] : depsRaw.split(',').map(d => d.trim()),
-          retries: 0,
+          status: m[5] as TaskEntry['status'],
+          retries: parseInt(m[6], 10),
+          summary: m[7] === '-' ? '' : m[7],
+          description: m[8] === '-' ? '' : m[8],
         });
       }
     }

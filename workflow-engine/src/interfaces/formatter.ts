@@ -31,8 +31,20 @@ export function formatTask(task: TaskEntry, context: string): string {
     `类型: ${task.type}`,
     `依赖: ${task.deps.length ? task.deps.join(', ') : '无'}`,
   ];
+  if (task.description) {
+    lines.push(`描述: ${task.description}`);
+  }
   if (context) {
     lines.push('', '--- 上下文 ---', context);
+  }
+  return lines.join('\n');
+}
+
+/** 格式化多个并行任务（flow next --batch 输出） */
+export function formatBatch(items: { task: TaskEntry; context: string }[]): string {
+  const lines = [`=== 并行任务批次 (${items.length}个) ===`, ''];
+  for (const { task, context } of items) {
+    lines.push(formatTask(task, context), '');
   }
   return lines.join('\n');
 }

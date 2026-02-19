@@ -1,17 +1,18 @@
 #!/usr/bin/env node
+"use strict";
 
 // src/infrastructure/fs-repository.ts
-import { mkdir, readFile, writeFile } from "fs/promises";
-import { join } from "path";
+var import_promises = require("fs/promises");
+var import_path = require("path");
 var FsWorkflowRepository = class {
   root;
   ctxDir;
   constructor(basePath) {
-    this.root = join(basePath, ".workflow");
-    this.ctxDir = join(this.root, "context");
+    this.root = (0, import_path.join)(basePath, ".workflow");
+    this.ctxDir = (0, import_path.join)(this.root, "context");
   }
   async ensure(dir) {
-    await mkdir(dir, { recursive: true });
+    await (0, import_promises.mkdir)(dir, { recursive: true });
   }
   // --- progress.md 读写 ---
   async saveProgress(data) {
@@ -22,18 +23,19 @@ var FsWorkflowRepository = class {
       `\u72B6\u6001: ${data.status}`,
       `\u5F53\u524D: ${data.current ?? "\u65E0"}`,
       "",
-      "| ID | \u6807\u9898 | \u7C7B\u578B | \u4F9D\u8D56 | \u72B6\u6001 | \u6458\u8981 |",
-      "|----|------|------|------|------|------|"
+      "| ID | \u6807\u9898 | \u7C7B\u578B | \u4F9D\u8D56 | \u72B6\u6001 | \u91CD\u8BD5 | \u6458\u8981 | \u63CF\u8FF0 |",
+      "|----|------|------|------|------|------|------|------|"
     ];
     for (const t of data.tasks) {
       const deps = t.deps.length ? t.deps.join(",") : "-";
-      lines.push(`| ${t.id} | ${t.title} | ${t.type} | ${deps} | ${t.status} | ${t.summary || "-"} |`);
+      const desc = (t.description || "-").slice(0, 80).replace(/\|/g, "/").replace(/\n/g, " ");
+      lines.push(`| ${t.id} | ${t.title} | ${t.type} | ${deps} | ${t.status} | ${t.retries} | ${t.summary || "-"} | ${desc} |`);
     }
-    await writeFile(join(this.root, "progress.md"), lines.join("\n") + "\n", "utf-8");
+    await (0, import_promises.writeFile)((0, import_path.join)(this.root, "progress.md"), lines.join("\n") + "\n", "utf-8");
   }
   async loadProgress() {
     try {
-      const raw = await readFile(join(this.root, "progress.md"), "utf-8");
+      const raw = await (0, import_promises.readFile)((0, import_path.join)(this.root, "progress.md"), "utf-8");
       return this.parseProgress(raw);
     } catch {
       return null;
@@ -49,17 +51,18 @@ var FsWorkflowRepository = class {
       if (line.startsWith("\u72B6\u6001: ")) status = line.slice(4).trim();
       if (line.startsWith("\u5F53\u524D: ")) current = line.slice(4).trim();
       if (current === "\u65E0") current = null;
-      const m = line.match(/^\|\s*(\d{3})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(.*?)\s*\|$/);
+      const m = line.match(/^\|\s*(\d{3})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
       if (m) {
         const depsRaw = m[4].trim();
         tasks.push({
           id: m[1],
           title: m[2],
           type: m[3],
-          status: m[5],
-          summary: m[6] === "-" ? "" : m[6],
           deps: depsRaw === "-" ? [] : depsRaw.split(",").map((d) => d.trim()),
-          retries: 0
+          status: m[5],
+          retries: parseInt(m[6], 10),
+          summary: m[7] === "-" ? "" : m[7],
+          description: m[8] === "-" ? "" : m[8]
         });
       }
     }
@@ -68,11 +71,11 @@ var FsWorkflowRepository = class {
   // --- context/ 任务详细产出 ---
   async saveTaskContext(taskId, content) {
     await this.ensure(this.ctxDir);
-    await writeFile(join(this.ctxDir, `task-${taskId}.md`), content, "utf-8");
+    await (0, import_promises.writeFile)((0, import_path.join)(this.ctxDir, `task-${taskId}.md`), content, "utf-8");
   }
   async loadTaskContext(taskId) {
     try {
-      return await readFile(join(this.ctxDir, `task-${taskId}.md`), "utf-8");
+      return await (0, import_promises.readFile)((0, import_path.join)(this.ctxDir, `task-${taskId}.md`), "utf-8");
     } catch {
       return null;
     }
@@ -80,11 +83,11 @@ var FsWorkflowRepository = class {
   // --- summary.md ---
   async saveSummary(content) {
     await this.ensure(this.ctxDir);
-    await writeFile(join(this.ctxDir, "summary.md"), content, "utf-8");
+    await (0, import_promises.writeFile)((0, import_path.join)(this.ctxDir, "summary.md"), content, "utf-8");
   }
   async loadSummary() {
     try {
-      return await readFile(join(this.ctxDir, "summary.md"), "utf-8");
+      return await (0, import_promises.readFile)((0, import_path.join)(this.ctxDir, "summary.md"), "utf-8");
     } catch {
       return "";
     }
@@ -92,36 +95,36 @@ var FsWorkflowRepository = class {
   // --- protocol.md / tasks.md ---
   async saveProtocol(content) {
     await this.ensure(this.root);
-    await writeFile(join(this.root, "protocol.md"), content, "utf-8");
+    await (0, import_promises.writeFile)((0, import_path.join)(this.root, "protocol.md"), content, "utf-8");
   }
   async saveTasks(content) {
     await this.ensure(this.root);
-    await writeFile(join(this.root, "tasks.md"), content, "utf-8");
+    await (0, import_promises.writeFile)((0, import_path.join)(this.root, "tasks.md"), content, "utf-8");
   }
   async loadTasks() {
     try {
-      return await readFile(join(this.root, "tasks.md"), "utf-8");
+      return await (0, import_promises.readFile)((0, import_path.join)(this.root, "tasks.md"), "utf-8");
     } catch {
       return null;
     }
   }
   async ensureClaudeMd() {
-    const base = join(this.root, "..");
-    const path = join(base, "CLAUDE.md");
+    const base = (0, import_path.join)(this.root, "..");
+    const path = (0, import_path.join)(base, "CLAUDE.md");
     const ref = "\u9075\u5FAA .workflow/protocol.md \u5DE5\u4F5C\u6D41\u8C03\u5EA6\u534F\u8BAE";
     try {
-      const content = await readFile(path, "utf-8");
+      const content = await (0, import_promises.readFile)(path, "utf-8");
       if (content.includes(ref)) return false;
-      await writeFile(path, content.trimEnd() + "\n\n" + ref + "\n", "utf-8");
+      await (0, import_promises.writeFile)(path, content.trimEnd() + "\n\n" + ref + "\n", "utf-8");
     } catch {
-      await writeFile(path, "# Project\n\n" + ref + "\n", "utf-8");
+      await (0, import_promises.writeFile)(path, "# Project\n\n" + ref + "\n", "utf-8");
     }
     return true;
   }
 };
 
 // src/infrastructure/markdown-parser.ts
-var TASK_RE = /^(\d+)\.\s+\[(\w+)\]\s+(.+?)(?:\s*\(deps?:\s*([^)]*)\))?$/;
+var TASK_RE = /^(\d+)\.\s+\[\s*(\w+)\s*\]\s+(.+?)(?:\s*\((?:deps?|依赖)\s*:\s*([^)]*)\))?\s*$/i;
 var DESC_RE = /^\s{2,}(.+)$/;
 function parseTasksMarkdown(markdown) {
   const lines = markdown.split("\n");
@@ -140,7 +143,7 @@ function parseTasksMarkdown(markdown) {
     }
     const m = line.match(TASK_RE);
     if (m) {
-      const type = m[2];
+      const type = m[2].toLowerCase();
       const title = m[3].trim();
       const deps = m[4] ? m[4].split(",").map((d) => d.trim().padStart(3, "0")).filter(Boolean) : [];
       let desc = "";
@@ -159,6 +162,22 @@ function makeTaskId(n) {
   return String(n).padStart(3, "0");
 }
 function findNextTask(tasks) {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const t of tasks) {
+      if (t.status !== "pending") continue;
+      const blocked = t.deps.some((d) => {
+        const dep = tasks.find((x) => x.id === d);
+        return dep && (dep.status === "failed" || dep.status === "skipped");
+      });
+      if (blocked) {
+        t.status = "skipped";
+        t.summary = "\u4F9D\u8D56\u4EFB\u52A1\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7";
+        changed = true;
+      }
+    }
+  }
   for (const t of tasks) {
     if (t.status !== "pending") continue;
     const depsOk = t.deps.every((d) => {
@@ -201,6 +220,31 @@ function resumeProgress(data) {
   if (data.status === "running") return data.current;
   return null;
 }
+function findParallelTasks(tasks) {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const t of tasks) {
+      if (t.status !== "pending") continue;
+      const blocked = t.deps.some((d) => {
+        const dep = tasks.find((x) => x.id === d);
+        return dep && (dep.status === "failed" || dep.status === "skipped");
+      });
+      if (blocked) {
+        t.status = "skipped";
+        t.summary = "\u4F9D\u8D56\u4EFB\u52A1\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7";
+        changed = true;
+      }
+    }
+  }
+  return tasks.filter((t) => {
+    if (t.status !== "pending") return false;
+    return t.deps.every((d) => {
+      const dep = tasks.find((x) => x.id === d);
+      return dep && dep.status === "done";
+    });
+  });
+}
 function isAllDone(tasks) {
   return tasks.every((t) => t.status === "done" || t.status === "skipped" || t.status === "failed");
 }
@@ -224,7 +268,7 @@ function generateProtocol(projectName) {
 ## \u542F\u52A8\u89C4\u5219
 
 \u5F53\u7528\u6237\u8BF4"\u5F00\u59CB"\u65F6\uFF1A
-1. \u6267\u884C \`flow resume\` \u68C0\u67E5\u662F\u5426\u6709\u672A\u5B8C\u6210\u5DE5\u4F5C\u6D41
+1. \u6267\u884C \`node flow.js resume\` \u68C0\u67E5\u662F\u5426\u6709\u672A\u5B8C\u6210\u5DE5\u4F5C\u6D41
 2. \u5982\u679C\u6709 \u2192 \u4ECE\u4E2D\u65AD\u70B9\u7EE7\u7EED\u6267\u884C\u5FAA\u73AF
 3. \u5982\u679C\u6CA1\u6709 \u2192 \u8BE2\u95EE\u7528\u6237\u63D0\u4F9B\u9700\u6C42\u6587\u6863\u6216\u63CF\u8FF0\u9700\u6C42
 
@@ -233,21 +277,28 @@ function generateProtocol(projectName) {
 \u6536\u5230\u9700\u6C42\u540E\uFF1A
 1. \u8C03\u7528 /superpowers:brainstorming \u8FDB\u884C\u5934\u8111\u98CE\u66B4
 2. \u5C06\u7ED3\u679C\u6574\u7406\u4E3A\u4EFB\u52A1\u5217\u8868\uFF0C\u6BCF\u4E2A\u4EFB\u52A1\u6807\u6CE8\u7C7B\u578B(frontend/backend/general)\u548C\u4F9D\u8D56
-3. \u7528 \`flow init\` \u5199\u5165\u4EFB\u52A1\u6811\uFF08\u901A\u8FC7stdin\u4F20\u5165markdown\uFF09
+3. \u7528 \`node flow.js init\` \u5199\u5165\u4EFB\u52A1\u6811\uFF08\u901A\u8FC7stdin\u4F20\u5165markdown\uFF09
 4. \u5C55\u793A\u4EFB\u52A1\u6811\u7ED9\u7528\u6237\u786E\u8BA4
 
 ## \u6267\u884C\u5FAA\u73AF
 
-\u91CD\u590D\u4EE5\u4E0B\u6B65\u9AA4\u76F4\u5230 flow next \u8FD4\u56DE"\u5168\u90E8\u5B8C\u6210"\uFF1A
+\u91CD\u590D\u4EE5\u4E0B\u6B65\u9AA4\u76F4\u5230 node flow.js next \u8FD4\u56DE"\u5168\u90E8\u5B8C\u6210"\uFF1A
 
-1. \u6267\u884C \`flow next\` \u83B7\u53D6\u4E0B\u4E00\u4E2A\u4EFB\u52A1\u548C\u4E0A\u4E0B\u6587
-2. \u5C06 flow next \u8F93\u51FA\u7684\u300C\u4E0A\u4E0B\u6587\u300D\u90E8\u5206\u5B8C\u6574\u590D\u5236\u5230\u5B50Agent\u7684prompt\u4E2D\uFF0C\u8FD9\u662F\u5B50Agent\u7684\u8BB0\u5FC6\u6765\u6E90
-3. \u6839\u636E\u4EFB\u52A1\u7C7B\u578B\uFF0C\u7528 Task \u5DE5\u5177\u6D3E\u53D1\u5B50Agent\uFF1A
-   - type=frontend \u2192 \u5B50Agent prompt \u5305\u542B\u4E0A\u4E0B\u6587 + \u4EFB\u52A1\u63CF\u8FF0 + \u6307\u4EE4"\u8C03\u7528 /frontend-design \u63D2\u4EF6"
-   - type=backend \u2192 \u5B50Agent prompt \u5305\u542B\u4E0A\u4E0B\u6587 + \u4EFB\u52A1\u63CF\u8FF0 + \u6307\u4EE4"\u8C03\u7528 /feature-dev \u63D2\u4EF6"
-   - type=general \u2192 \u5B50Agent prompt \u5305\u542B\u4E0A\u4E0B\u6587 + \u4EFB\u52A1\u63CF\u8FF0
-4. \u5B50Agent\u8FD4\u56DE\u7ED3\u679C\u540E\uFF0C\u6267\u884C \`flow checkpoint <id>\`\uFF0C\u901A\u8FC7stdin\u4F20\u5165\u5B50Agent\u7684\u8BE6\u7EC6\u4EA7\u51FA
-5. \u5982\u679C\u5B50Agent\u5931\u8D25\uFF0C\u91CD\u8BD5\u3002\u8FDE\u7EED\u5931\u8D253\u6B21\u5219 \`flow checkpoint <id> FAILED\`
+### \u5E76\u884C\u6A21\u5F0F\uFF08\u4F18\u5148\uFF09
+1. \u6267\u884C \`node flow.js next --batch\` \u83B7\u53D6\u6240\u6709\u53EF\u5E76\u884C\u7684\u4EFB\u52A1
+2. \u5982\u679C\u8FD4\u56DE\u591A\u4E2A\u4EFB\u52A1\uFF0C\u7528\u591A\u4E2A Task \u5DE5\u5177\u8C03\u7528**\u5728\u540C\u4E00\u6761\u6D88\u606F\u4E2D\u5E76\u884C\u6D3E\u53D1**\u5B50Agent
+3. \u6240\u6709\u5B50Agent\u8FD4\u56DE\u540E\uFF0C\u4F9D\u6B21\u6267\u884C \`node flow.js checkpoint <id>\`
+
+### \u4E32\u884C\u6A21\u5F0F\uFF08\u56DE\u9000\uFF09
+1. \u6267\u884C \`node flow.js next\` \u83B7\u53D6\u5355\u4E2A\u4EFB\u52A1
+
+### \u5B50Agent\u6D3E\u53D1\u89C4\u5219
+- \u5C06\u8F93\u51FA\u7684\u300C\u4E0A\u4E0B\u6587\u300D\u90E8\u5206\u5B8C\u6574\u590D\u5236\u5230\u5B50Agent\u7684prompt\u4E2D\uFF0C\u8FD9\u662F\u5B50Agent\u7684\u8BB0\u5FC6\u6765\u6E90
+- type=frontend \u2192 \u5B50Agent prompt \u5305\u542B\u4E0A\u4E0B\u6587 + \u4EFB\u52A1\u63CF\u8FF0 + \u6307\u4EE4"\u8C03\u7528 /frontend-design \u63D2\u4EF6"
+- type=backend \u2192 \u5B50Agent prompt \u5305\u542B\u4E0A\u4E0B\u6587 + \u4EFB\u52A1\u63CF\u8FF0 + \u6307\u4EE4"\u8C03\u7528 /feature-dev \u63D2\u4EF6"
+- type=general \u2192 \u5B50Agent prompt \u5305\u542B\u4E0A\u4E0B\u6587 + \u4EFB\u52A1\u63CF\u8FF0
+- \u5B50Agent\u8FD4\u56DE\u7ED3\u679C\u540E\uFF0C\u6267\u884C \`node flow.js checkpoint <id>\`\uFF0C\u901A\u8FC7stdin\u4F20\u5165\u5B50Agent\u7684\u8BE6\u7EC6\u4EA7\u51FA
+- \u5982\u679C\u5B50Agent\u5931\u8D25\uFF0C\u91CD\u8BD5\u3002\u8FDE\u7EED\u5931\u8D253\u6B21\u5219 \`node flow.js checkpoint <id> FAILED\`
 
 ## \u4E0A\u4E0B\u6587\u89C4\u5219
 
@@ -259,51 +310,51 @@ function generateProtocol(projectName) {
 ## \u8FFD\u52A0\u4EFB\u52A1
 
 \u7528\u6237\u4E2D\u9014\u63D0\u65B0\u9700\u6C42\u65F6\uFF1A
-1. \u6267\u884C \`flow add <\u63CF\u8FF0>\` \u8FFD\u52A0\u4EFB\u52A1
+1. \u6267\u884C \`node flow.js add <\u63CF\u8FF0>\` \u8FFD\u52A0\u4EFB\u52A1
 2. \u7EE7\u7EED\u6267\u884C\u5FAA\u73AF
 
 ## \u6536\u5C3E\u9636\u6BB5
 
-\u5F53 flow next \u8FD4\u56DE"\u5168\u90E8\u5B8C\u6210"\u6216 checkpoint \u63D0\u793A"\u8BF7\u6267\u884C flow finish"\u65F6\uFF1A
+\u5F53 node flow.js next \u8FD4\u56DE"\u5168\u90E8\u5B8C\u6210"\u6216 checkpoint \u63D0\u793A"\u8BF7\u6267\u884C node flow.js finish"\u65F6\uFF1A
 
-1. \u6267\u884C \`flow finish\` \u8FDB\u884C\u81EA\u52A8\u9A8C\u8BC1\uFF08\u68C0\u6D4B npm test/build/lint\uFF09
-   - \u5982\u679C\u9A8C\u8BC1\u5931\u8D25 \u2192 \u7528 Task \u5DE5\u5177\u6D3E\u5B50Agent\u4FEE\u590D \u2192 \u518D\u6B21 \`flow finish\`\uFF08\u6700\u591A\u91CD\u8BD53\u6B21\uFF09
+1. \u6267\u884C \`node flow.js finish\` \u8FDB\u884C\u81EA\u52A8\u9A8C\u8BC1\uFF08\u68C0\u6D4B npm test/build/lint\uFF09
+   - \u5982\u679C\u9A8C\u8BC1\u5931\u8D25 \u2192 \u7528 Task \u5DE5\u5177\u6D3E\u5B50Agent\u4FEE\u590D \u2192 \u518D\u6B21 \`node flow.js finish\`\uFF08\u6700\u591A\u91CD\u8BD53\u6B21\uFF09
 2. \u9A8C\u8BC1\u901A\u8FC7\u540E\uFF0C\u7528 Task \u5DE5\u5177\u6D3E\u5B50Agent\u8C03\u7528 /code-review:code-review \u5BA1\u67E5\u672C\u8F6E\u53D8\u66F4
-3. \u5BA1\u67E5\u6709\u95EE\u9898 \u2192 \u6D3E\u5B50Agent\u4FEE\u590D \u2192 \u518D\u6B21 \`flow finish\`
-4. \u5168\u90E8\u901A\u8FC7 \u2192 flow finish \u5DF2\u81EA\u52A8\u63D0\u4EA4\u6700\u7EC8commit
+3. \u5BA1\u67E5\u6709\u95EE\u9898 \u2192 \u6D3E\u5B50Agent\u4FEE\u590D \u2192 \u518D\u6B21 \`node flow.js finish\`
+4. \u5168\u90E8\u901A\u8FC7 \u2192 node flow.js finish \u5DF2\u81EA\u52A8\u63D0\u4EA4\u6700\u7EC8commit
 
 ## \u5F85\u547D\u72B6\u6001
 
 \u6536\u5C3E\u5B8C\u6210\u540E\u5DE5\u4F5C\u6D41\u56DE\u5230 idle\u3002\u6B64\u65F6\uFF1A
 - \u7528\u6237\u63D0\u4F9B\u65B0\u9700\u6C42\u6587\u6863\u6216\u63CF\u8FF0 \u2192 \u56DE\u5230\u300C\u9700\u6C42\u62C6\u89E3\u89C4\u5219\u300D
-- \u7528\u6237\u8BF4"\u5F00\u59CB" \u2192 flow resume \u68C0\u67E5\uFF08\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41\u5219\u7B49\u5F85\u9700\u6C42\u8F93\u5165\uFF09
-- \u65E0\u9700\u91CD\u65B0 flow init\uFF0C\u76F4\u63A5\u63A5\u6536\u4E0B\u4E00\u4E2A\u9700\u6C42\u5373\u53EF
+- \u7528\u6237\u8BF4"\u5F00\u59CB" \u2192 node flow.js resume \u68C0\u67E5\uFF08\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41\u5219\u7B49\u5F85\u9700\u6C42\u8F93\u5165\uFF09
+- \u65E0\u9700\u91CD\u65B0 node flow.js init\uFF0C\u76F4\u63A5\u63A5\u6536\u4E0B\u4E00\u4E2A\u9700\u6C42\u5373\u53EF
 `;
 }
 
 // src/infrastructure/git.ts
-import { execSync } from "child_process";
+var import_node_child_process = require("child_process");
 function autoCommit(taskId, title, summary) {
   try {
-    execSync("git add -A", { stdio: "pipe" });
+    (0, import_node_child_process.execSync)("git add .", { stdio: "pipe" });
     const msg = `task-${taskId}: ${title}
 
 ${summary}`;
-    execSync(`git commit -m ${JSON.stringify(msg)} --allow-empty`, { stdio: "pipe" });
+    (0, import_node_child_process.execSync)(`git commit -m ${JSON.stringify(msg)} --allow-empty`, { stdio: "pipe" });
   } catch {
   }
 }
 
 // src/infrastructure/verify.ts
-import { execSync as execSync2 } from "child_process";
-import { existsSync, readFileSync } from "fs";
-import { join as join2 } from "path";
+var import_node_child_process2 = require("child_process");
+var import_node_fs = require("fs");
+var import_node_path = require("path");
 function runVerify(cwd) {
   const cmds = detectCommands(cwd);
   if (!cmds.length) return { passed: true, scripts: [] };
   for (const cmd of cmds) {
     try {
-      execSync2(cmd, { cwd, stdio: "pipe", timeout: 3e5 });
+      (0, import_node_child_process2.execSync)(cmd, { cwd, stdio: "pipe", timeout: 3e5 });
     } catch (e) {
       const out = (e.stderr || e.stdout || "").toString();
       if (out.includes("No test files found")) continue;
@@ -315,10 +366,10 @@ ${out.slice(0, 500)}` };
   return { passed: true, scripts: cmds };
 }
 function detectCommands(cwd) {
-  const has = (f) => existsSync(join2(cwd, f));
+  const has = (f) => (0, import_node_fs.existsSync)((0, import_node_path.join)(cwd, f));
   if (has("package.json")) {
     try {
-      const s = JSON.parse(readFileSync(join2(cwd, "package.json"), "utf-8")).scripts || {};
+      const s = JSON.parse((0, import_node_fs.readFileSync)((0, import_node_path.join)(cwd, "package.json"), "utf-8")).scripts || {};
       return ["build", "test", "lint"].filter((k) => k in s).map((k) => `npm run ${k}`);
     } catch {
     }
@@ -329,7 +380,7 @@ function detectCommands(cwd) {
     const cmds = [];
     if (has("pyproject.toml")) {
       try {
-        const txt = readFileSync(join2(cwd, "pyproject.toml"), "utf-8");
+        const txt = (0, import_node_fs.readFileSync)((0, import_node_path.join)(cwd, "pyproject.toml"), "utf-8");
         if (txt.includes("ruff")) cmds.push("ruff check .");
         if (txt.includes("mypy")) cmds.push("mypy .");
       } catch {
@@ -343,7 +394,7 @@ function detectCommands(cwd) {
   if (has("CMakeLists.txt")) return ["cmake --build build", "ctest --test-dir build"];
   if (has("Makefile")) {
     try {
-      const mk = readFileSync(join2(cwd, "Makefile"), "utf-8");
+      const mk = (0, import_node_fs.readFileSync)((0, import_node_path.join)(cwd, "Makefile"), "utf-8");
       const targets = [];
       if (/^build\s*:/m.test(mk)) targets.push("make build");
       if (/^test\s*:/m.test(mk)) targets.push("make test");
@@ -362,11 +413,16 @@ var WorkflowService = class {
     this.parse = parse;
   }
   /** init: 解析任务markdown → 生成progress/tasks/protocol */
-  async init(tasksMd) {
+  async init(tasksMd, force = false) {
+    const existing = await this.repo.loadProgress();
+    if (existing && existing.status === "running" && !force) {
+      throw new Error(`\u5DF2\u6709\u8FDB\u884C\u4E2D\u7684\u5DE5\u4F5C\u6D41: ${existing.name}\uFF0C\u4F7F\u7528 --force \u8986\u76D6`);
+    }
     const def = this.parse(tasksMd);
     const tasks = def.tasks.map((t, i) => ({
       id: makeTaskId(i + 1),
       title: t.title,
+      description: t.description,
       type: t.type,
       status: "pending",
       deps: t.deps,
@@ -406,6 +462,28 @@ ${def.description}
     }
     return { task, context: parts.join("\n\n---\n\n") };
   }
+  /** nextBatch: 获取所有可并行执行的任务 */
+  async nextBatch() {
+    const data = await this.requireProgress();
+    if (isAllDone(data.tasks)) return [];
+    const tasks = findParallelTasks(data.tasks);
+    if (!tasks.length) return [];
+    for (const t of tasks) t.status = "active";
+    data.current = tasks[0].id;
+    await this.repo.saveProgress(data);
+    const summary = await this.repo.loadSummary();
+    const results = [];
+    for (const task of tasks) {
+      const parts = [];
+      if (summary) parts.push(summary);
+      for (const depId of task.deps) {
+        const ctx = await this.repo.loadTaskContext(depId);
+        if (ctx) parts.push(ctx);
+      }
+      results.push({ task, context: parts.join("\n\n---\n\n") });
+    }
+    return results;
+  }
   /** checkpoint: 记录任务完成 */
   async checkpoint(id, detail) {
     const data = await this.requireProgress();
@@ -427,7 +505,7 @@ ${detail}
     autoCommit(id, task.title, summaryLine);
     const doneCount = data.tasks.filter((t) => t.status === "done").length;
     const msg = `\u4EFB\u52A1 ${id} \u5B8C\u6210 (${doneCount}/${data.tasks.length}) [\u5DF2\u81EA\u52A8\u63D0\u4EA4]`;
-    return isAllDone(data.tasks) ? msg + "\n\u5168\u90E8\u4EFB\u52A1\u5DF2\u5B8C\u6210\uFF0C\u8BF7\u6267\u884C flow finish \u8FDB\u884C\u6536\u5C3E" : msg;
+    return isAllDone(data.tasks) ? msg + "\n\u5168\u90E8\u4EFB\u52A1\u5DF2\u5B8C\u6210\uFF0C\u8BF7\u6267\u884C node flow.js finish \u8FDB\u884C\u6536\u5C3E" : msg;
   }
   /** resume: 中断恢复 */
   async resume() {
@@ -436,7 +514,7 @@ ${detail}
     if (data.status === "idle") return "\u5DE5\u4F5C\u6D41\u5F85\u547D\u4E2D\uFF0C\u7B49\u5F85\u9700\u6C42\u8F93\u5165";
     if (data.status === "completed") return "\u5DE5\u4F5C\u6D41\u5DF2\u5168\u90E8\u5B8C\u6210";
     if (data.status === "finishing") return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${data.name}
-\u6B63\u5728\u6536\u5C3E\u9636\u6BB5\uFF0C\u8BF7\u6267\u884C flow finish`;
+\u6B63\u5728\u6536\u5C3E\u9636\u6BB5\uFF0C\u8BF7\u6267\u884C node flow.js finish`;
     const resetId = resumeProgress(data);
     await this.repo.saveProgress(data);
     const doneCount = data.tasks.filter((t) => t.status === "done").length;
@@ -457,6 +535,7 @@ ${detail}
     data.tasks.push({
       id,
       title,
+      description: "",
       type,
       status: "pending",
       deps: [],
@@ -465,6 +544,18 @@ ${detail}
     });
     await this.repo.saveProgress(data);
     return `\u5DF2\u8FFD\u52A0\u4EFB\u52A1 ${id}: ${title} [${type}]`;
+  }
+  /** skip: 手动跳过任务 */
+  async skip(id) {
+    const data = await this.requireProgress();
+    const task = data.tasks.find((t) => t.id === id);
+    if (!task) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
+    if (task.status === "done") return `\u4EFB\u52A1 ${id} \u5DF2\u5B8C\u6210\uFF0C\u65E0\u9700\u8DF3\u8FC7`;
+    task.status = "skipped";
+    task.summary = "\u624B\u52A8\u8DF3\u8FC7";
+    data.current = null;
+    await this.repo.saveProgress(data);
+    return `\u5DF2\u8DF3\u8FC7\u4EFB\u52A1 ${id}: ${task.title}`;
   }
   /** setup: 项目接管模式 - 生成协议+写入CLAUDE.md */
   async setup() {
@@ -477,9 +568,9 @@ ${detail}
       lines.push(`\u68C0\u6D4B\u5230\u8FDB\u884C\u4E2D\u7684\u5DE5\u4F5C\u6D41: ${existing.name}`);
       lines.push(`\u8FDB\u5EA6: ${done}/${existing.tasks.length}`);
       if (existing.status === "finishing") {
-        lines.push("\u72B6\u6001: \u6536\u5C3E\u9636\u6BB5\uFF0C\u6267\u884C flow finish \u7EE7\u7EED");
+        lines.push("\u72B6\u6001: \u6536\u5C3E\u9636\u6BB5\uFF0C\u6267\u884C node flow.js finish \u7EE7\u7EED");
       } else {
-        lines.push("\u6267\u884C flow resume \u7EE7\u7EED");
+        lines.push("\u6267\u884C node flow.js resume \u7EE7\u7EED");
       }
     } else {
       lines.push("\u9879\u76EE\u5DF2\u63A5\u7BA1\uFF0C\u5DE5\u4F5C\u6D41\u5DE5\u5177\u5C31\u7EEA");
@@ -501,7 +592,7 @@ ${detail}
     const result = runVerify(process.cwd());
     if (!result.passed) {
       return `\u9A8C\u8BC1\u5931\u8D25: ${result.error}
-\u8BF7\u4FEE\u590D\u540E\u91CD\u65B0\u6267\u884C flow finish`;
+\u8BF7\u4FEE\u590D\u540E\u91CD\u65B0\u6267\u884C node flow.js finish`;
     }
     const summaries = data.tasks.filter((t) => t.status === "done").map((t) => `- ${t.title}: ${t.summary}`);
     const changeSummary = `\u5B8C\u6210 ${summaries.length} \u4E2A\u4EFB\u52A1:
@@ -538,10 +629,13 @@ ${changeSummary}
   }
   async requireProgress() {
     const data = await this.repo.loadProgress();
-    if (!data) throw new Error("\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41\uFF0C\u8BF7\u5148 flow init");
+    if (!data) throw new Error("\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41\uFF0C\u8BF7\u5148 node flow.js init");
     return data;
   }
 };
+
+// src/interfaces/cli.ts
+var import_fs = require("fs");
 
 // src/interfaces/formatter.ts
 var ICON = {
@@ -570,8 +664,18 @@ function formatTask(task, context) {
     `\u7C7B\u578B: ${task.type}`,
     `\u4F9D\u8D56: ${task.deps.length ? task.deps.join(", ") : "\u65E0"}`
   ];
+  if (task.description) {
+    lines.push(`\u63CF\u8FF0: ${task.description}`);
+  }
   if (context) {
     lines.push("", "--- \u4E0A\u4E0B\u6587 ---", context);
+  }
+  return lines.join("\n");
+}
+function formatBatch(items) {
+  const lines = [`=== \u5E76\u884C\u4EFB\u52A1\u6279\u6B21 (${items.length}\u4E2A) ===`, ""];
+  for (const { task, context } of items) {
+    lines.push(formatTask(task, context), "");
   }
   return lines.join("\n");
 }
@@ -611,15 +715,21 @@ var CLI = class {
     const s = this.service;
     switch (cmd) {
       case "init": {
+        const force = rest.includes("--force");
         const md = await readStdinIfPiped();
         if (md.trim()) {
-          const data = await s.init(md);
+          const data = await s.init(md, force);
           return `\u5DF2\u521D\u59CB\u5316\u5DE5\u4F5C\u6D41: ${data.name} (${data.tasks.length} \u4E2A\u4EFB\u52A1)
 \u534F\u8BAE\u5DF2\u751F\u6210: .workflow/protocol.md`;
         }
         return await s.setup();
       }
       case "next": {
+        if (rest.includes("--batch")) {
+          const items = await s.nextBatch();
+          if (!items.length) return "\u5168\u90E8\u5B8C\u6210";
+          return formatBatch(items);
+        }
         const result = await s.next();
         if (!result) return "\u5168\u90E8\u5B8C\u6210";
         return formatTask(result.task, result.context);
@@ -627,8 +737,21 @@ var CLI = class {
       case "checkpoint": {
         const id = rest[0];
         if (!id) throw new Error("\u9700\u8981\u4EFB\u52A1ID");
-        const detail = rest.length > 1 ? rest.slice(1).join(" ") : await readStdinIfPiped();
+        const fileIdx = rest.indexOf("--file");
+        let detail;
+        if (fileIdx >= 0 && rest[fileIdx + 1]) {
+          detail = (0, import_fs.readFileSync)(rest[fileIdx + 1], "utf-8");
+        } else if (rest.length > 1 && fileIdx < 0) {
+          detail = rest.slice(1).join(" ");
+        } else {
+          detail = await readStdinIfPiped();
+        }
         return await s.checkpoint(id, detail.trim());
+      }
+      case "skip": {
+        const id = rest[0];
+        if (!id) throw new Error("\u9700\u8981\u4EFB\u52A1ID");
+        return await s.skip(id);
       }
       case "status": {
         const data = await s.status();
@@ -651,14 +774,15 @@ var CLI = class {
     }
   }
 };
-var USAGE = `\u7528\u6CD5: flow <command>
-  init             \u521D\u59CB\u5316\u5DE5\u4F5C\u6D41 (stdin\u4F20\u5165\u4EFB\u52A1markdown)
-  next             \u83B7\u53D6\u4E0B\u4E00\u4E2A\u5F85\u6267\u884C\u4EFB\u52A1
-  checkpoint <id>  \u8BB0\u5F55\u4EFB\u52A1\u5B8C\u6210 (stdin\u4F20\u5165\u8BE6\u7EC6\u5185\u5BB9)
-  finish           \u667A\u80FD\u6536\u5C3E (\u9A8C\u8BC1+\u603B\u7ED3+\u56DE\u5230\u5F85\u547D)
-  status           \u67E5\u770B\u5168\u5C40\u8FDB\u5EA6
-  resume           \u4E2D\u65AD\u6062\u590D
-  add <\u63CF\u8FF0>       \u8FFD\u52A0\u4EFB\u52A1 [--type frontend|backend|general]`;
+var USAGE = `\u7528\u6CD5: node flow.js <command>
+  init [--force]       \u521D\u59CB\u5316\u5DE5\u4F5C\u6D41 (stdin\u4F20\u5165\u4EFB\u52A1markdown\uFF0C\u65E0stdin\u5219\u63A5\u7BA1\u9879\u76EE)
+  next [--batch]       \u83B7\u53D6\u4E0B\u4E00\u4E2A\u5F85\u6267\u884C\u4EFB\u52A1 (--batch \u8FD4\u56DE\u6240\u6709\u53EF\u5E76\u884C\u4EFB\u52A1)
+  checkpoint <id>      \u8BB0\u5F55\u4EFB\u52A1\u5B8C\u6210 [--file <path> | stdin | \u5185\u8054\u6587\u672C]
+  skip <id>            \u624B\u52A8\u8DF3\u8FC7\u4EFB\u52A1
+  finish               \u667A\u80FD\u6536\u5C3E (\u9A8C\u8BC1+\u603B\u7ED3+\u56DE\u5230\u5F85\u547D)
+  status               \u67E5\u770B\u5168\u5C40\u8FDB\u5EA6
+  resume               \u4E2D\u65AD\u6062\u590D
+  add <\u63CF\u8FF0>           \u8FFD\u52A0\u4EFB\u52A1 [--type frontend|backend|general]`;
 
 // src/main.ts
 var repo = new FsWorkflowRepository(process.cwd());

@@ -3,8 +3,9 @@
  * @description CLI 命令路由
  */
 
+import { readFileSync } from 'fs';
 import type { WorkflowService } from '../application/workflow-service';
-import { formatStatus, formatTask } from './formatter';
+import { formatStatus, formatTask, formatBatch } from './formatter';
 import { readStdinIfPiped } from './stdin';
 
 export class CLI {
@@ -27,16 +28,21 @@ export class CLI {
 
     switch (cmd) {
       case 'init': {
+        const force = rest.includes('--force');
         const md = await readStdinIfPiped();
         if (md.trim()) {
-          const data = await s.init(md);
+          const data = await s.init(md, force);
           return `已初始化工作流: ${data.name} (${data.tasks.length} 个任务)\n协议已生成: .workflow/protocol.md`;
         }
-        // 无stdin → 项目接管模式
         return await s.setup();
       }
 
       case 'next': {
+        if (rest.includes('--batch')) {
+          const items = await s.nextBatch();
+          if (!items.length) return '全部完成';
+          return formatBatch(items);
+        }
         const result = await s.next();
         if (!result) return '全部完成';
         return formatTask(result.task, result.context);
@@ -45,10 +51,22 @@ export class CLI {
       case 'checkpoint': {
         const id = rest[0];
         if (!id) throw new Error('需要任务ID');
-        const detail = rest.length > 1
-          ? rest.slice(1).join(' ')
-          : await readStdinIfPiped();
+        const fileIdx = rest.indexOf('--file');
+        let detail: string;
+        if (fileIdx >= 0 && rest[fileIdx + 1]) {
+          detail = readFileSync(rest[fileIdx + 1], 'utf-8');
+        } else if (rest.length > 1 && fileIdx < 0) {
+          detail = rest.slice(1).join(' ');
+        } else {
+          detail = await readStdinIfPiped();
+        }
         return await s.checkpoint(id, detail.trim());
+      }
+
+      case 'skip': {
+        const id = rest[0];
+        if (!id) throw new Error('需要任务ID');
+        return await s.skip(id);
       }
 
       case 'status': {
@@ -77,11 +95,12 @@ export class CLI {
   }
 }
 
-const USAGE = `用法: flow <command>
-  init             初始化工作流 (stdin传入任务markdown)
-  next             获取下一个待执行任务
-  checkpoint <id>  记录任务完成 (stdin传入详细内容)
-  finish           智能收尾 (验证+总结+回到待命)
-  status           查看全局进度
-  resume           中断恢复
-  add <描述>       追加任务 [--type frontend|backend|general]`;
+const USAGE = `用法: node flow.js <command>
+  init [--force]       初始化工作流 (stdin传入任务markdown，无stdin则接管项目)
+  next [--batch]       获取下一个待执行任务 (--batch 返回所有可并行任务)
+  checkpoint <id>      记录任务完成 [--file <path> | stdin | 内联文本]
+  skip <id>            手动跳过任务
+  finish               智能收尾 (验证+总结+回到待命)
+  status               查看全局进度
+  resume               中断恢复
+  add <描述>           追加任务 [--type frontend|backend|general]`;

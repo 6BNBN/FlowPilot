@@ -17,6 +17,7 @@ export interface TaskEntry {
   /** 三位数编号如 "001" */
   id: string;
   title: string;
+  description: string;
   type: TaskType;
   status: TaskStatus;
   /** 依赖的前置任务ID列表 */

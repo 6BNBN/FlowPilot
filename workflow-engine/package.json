@@ -1,14 +1,14 @@
 {
-  "name": "workflow-engine",
+  "name": "flowpilot",
   "version": "0.1.0",
-  "type": "module",
   "bin": {
-    "flow": "./dist/main.js"
+    "flow": "./dist/flow.js"
   },
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/main.ts",
-    "test": "vitest"
+    "test": "vitest",
+    "setup": "npm run build && npm link"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

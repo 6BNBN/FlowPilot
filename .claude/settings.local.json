@@ -9,7 +9,8 @@
       "Bash(./node_modules/.bin/tsc:*)",
       "Bash(npm run build)",
       "Bash(node:*)",
-      "Bash(printf:*)"
+      "Bash(printf:*)",
+      "Bash(dir:*)"
     ]
   }
 }

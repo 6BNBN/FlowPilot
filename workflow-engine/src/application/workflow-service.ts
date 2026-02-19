@@ -6,7 +6,7 @@
 import type { ProgressData, TaskEntry } from '../domain/types';
 import type { WorkflowDefinition } from '../domain/workflow';
 import type { WorkflowRepository } from '../infrastructure/repository';
-import { makeTaskId, findNextTask, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
+import { makeTaskId, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
 import { generateProtocol } from './protocol-generator';
 import { autoCommit } from '../infrastructure/git';
 import { runVerify } from '../infrastructure/verify';
@@ -18,11 +18,16 @@ export class WorkflowService {
   ) {}
 
   /** init: 解析任务markdown → 生成progress/tasks/protocol */
-  async init(tasksMd: string): Promise<ProgressData> {
+  async init(tasksMd: string, force = false): Promise<ProgressData> {
+    const existing = await this.repo.loadProgress();
+    if (existing && existing.status === 'running' && !force) {
+      throw new Error(`已有进行中的工作流: ${existing.name}，使用 --force 覆盖`);
+    }
     const def = this.parse(tasksMd);
     const tasks: TaskEntry[] = def.tasks.map((t, i) => ({
       id: makeTaskId(i + 1),
       title: t.title,
+      description: t.description,
       type: t.type,
       status: 'pending',
       deps: t.deps,
@@ -67,6 +72,33 @@ export class WorkflowService {
     return { task, context: parts.join('\n\n---\n\n') };
   }
 
+  /** nextBatch: 获取所有可并行执行的任务 */
+  async nextBatch(): Promise<{ task: TaskEntry; context: string }[]> {
+    const data = await this.requireProgress();
+    if (isAllDone(data.tasks)) return [];
+
+    const tasks = findParallelTasks(data.tasks);
+    if (!tasks.length) return [];
+
+    for (const t of tasks) t.status = 'active';
+    data.current = tasks[0].id;
+    await this.repo.saveProgress(data);
+
+    const summary = await this.repo.loadSummary();
+    const results: { task: TaskEntry; context: string }[] = [];
+
+    for (const task of tasks) {
+      const parts: string[] = [];
+      if (summary) parts.push(summary);
+      for (const depId of task.deps) {
+        const ctx = await this.repo.loadTaskContext(depId);
+        if (ctx) parts.push(ctx);
+      }
+      results.push({ task, context: parts.join('\n\n---\n\n') });
+    }
+    return results;
+  }
+
   /** checkpoint: 记录任务完成 */
   async checkpoint(id: string, detail: string): Promise<string> {
     const data = await this.requireProgress();
@@ -92,7 +124,7 @@ export class WorkflowService {
 
     const doneCount = data.tasks.filter(t => t.status === 'done').length;
     const msg = `任务 ${id} 完成 (${doneCount}/${data.tasks.length}) [已自动提交]`;
-    return isAllDone(data.tasks) ? msg + '\n全部任务已完成，请执行 flow finish 进行收尾' : msg;
+    return isAllDone(data.tasks) ? msg + '\n全部任务已完成，请执行 node flow.js finish 进行收尾' : msg;
   }
 
   /** resume: 中断恢复 */
@@ -101,7 +133,7 @@ export class WorkflowService {
     if (!data) return '无活跃工作流，等待需求输入';
     if (data.status === 'idle') return '工作流待命中，等待需求输入';
     if (data.status === 'completed') return '工作流已全部完成';
-    if (data.status === 'finishing') return `恢复工作流: ${data.name}\n正在收尾阶段，请执行 flow finish`;
+    if (data.status === 'finishing') return `恢复工作流: ${data.name}\n正在收尾阶段，请执行 node flow.js finish`;
 
     const resetId = resumeProgress(data);
     await this.repo.saveProgress(data);
@@ -120,11 +152,24 @@ export class WorkflowService {
     const data = await this.requireProgress();
     const id = makeTaskId(data.tasks.length + 1);
     data.tasks.push({
-      id, title, type, status: 'pending',
+      id, title, description: '', type, status: 'pending',
       deps: [], summary: '', retries: 0,
     });
     await this.repo.saveProgress(data);
     return `已追加任务 ${id}: ${title} [${type}]`;
+  }
+
+  /** skip: 手动跳过任务 */
+  async skip(id: string): Promise<string> {
+    const data = await this.requireProgress();
+    const task = data.tasks.find(t => t.id === id);
+    if (!task) throw new Error(`任务 ${id} 不存在`);
+    if (task.status === 'done') return `任务 ${id} 已完成，无需跳过`;
+    task.status = 'skipped';
+    task.summary = '手动跳过';
+    data.current = null;
+    await this.repo.saveProgress(data);
+    return `已跳过任务 ${id}: ${task.title}`;
   }
 
   /** setup: 项目接管模式 - 生成协议+写入CLAUDE.md */
@@ -139,9 +184,9 @@ export class WorkflowService {
       lines.push(`检测到进行中的工作流: ${existing.name}`);
       lines.push(`进度: ${done}/${existing.tasks.length}`);
       if (existing.status === 'finishing') {
-        lines.push('状态: 收尾阶段，执行 flow finish 继续');
+        lines.push('状态: 收尾阶段，执行 node flow.js finish 继续');
       } else {
-        lines.push('执行 flow resume 继续');
+        lines.push('执行 node flow.js resume 继续');
       }
     } else {
       lines.push('项目已接管，工作流工具就绪');
@@ -167,7 +212,7 @@ export class WorkflowService {
     // 自动检测并执行验证脚本
     const result = runVerify(process.cwd());
     if (!result.passed) {
-      return `验证失败: ${result.error}\n请修复后重新执行 flow finish`;
+      return `验证失败: ${result.error}\n请修复后重新执行 node flow.js finish`;
     }
 
     // 生成变更总结
@@ -211,7 +256,7 @@ export class WorkflowService {
 
   private async requireProgress(): Promise<ProgressData> {
     const data = await this.repo.loadProgress();
-    if (!data) throw new Error('无活跃工作流，请先 flow init');
+    if (!data) throw new Error('无活跃工作流，请先 node flow.js init');
     return data;
   }
 }
