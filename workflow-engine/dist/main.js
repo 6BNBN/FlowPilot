@@ -105,6 +105,19 @@ var FsWorkflowRepository = class {
       return null;
     }
   }
+  async ensureClaudeMd() {
+    const base = join(this.root, "..");
+    const path = join(base, "CLAUDE.md");
+    const ref = "\u9075\u5FAA .workflow/protocol.md \u5DE5\u4F5C\u6D41\u8C03\u5EA6\u534F\u8BAE";
+    try {
+      const content = await readFile(path, "utf-8");
+      if (content.includes(ref)) return false;
+      await writeFile(path, content.trimEnd() + "\n\n" + ref + "\n", "utf-8");
+    } catch {
+      await writeFile(path, "# Project\n\n" + ref + "\n", "utf-8");
+    }
+    return true;
+  }
 };
 
 // src/infrastructure/markdown-parser.ts
@@ -241,6 +254,19 @@ function generateProtocol(projectName) {
 `;
 }
 
+// src/infrastructure/git.ts
+import { execSync } from "child_process";
+function autoCommit(taskId, title, summary) {
+  try {
+    execSync("git add -A", { stdio: "pipe" });
+    const msg = `task-${taskId}: ${title}
+
+${summary}`;
+    execSync(`git commit -m ${JSON.stringify(msg)} --allow-empty`, { stdio: "pipe" });
+  } catch {
+  }
+}
+
 // src/application/workflow-service.ts
 var WorkflowService = class {
   constructor(repo2, parse) {
@@ -310,8 +336,9 @@ ${def.description}
 
 ${detail}
 `);
+    autoCommit(id, task.title, summaryLine);
     const doneCount = data.tasks.filter((t) => t.status === "done").length;
-    return `\u4EFB\u52A1 ${id} \u5B8C\u6210 (${doneCount}/${data.tasks.length})`;
+    return `\u4EFB\u52A1 ${id} \u5B8C\u6210 (${doneCount}/${data.tasks.length}) [\u5DF2\u81EA\u52A8\u63D0\u4EA4]`;
   }
   /** resume: 中断恢复 */
   async resume() {
@@ -346,6 +373,28 @@ ${detail}
     });
     await this.repo.saveProgress(data);
     return `\u5DF2\u8FFD\u52A0\u4EFB\u52A1 ${id}: ${title} [${type}]`;
+  }
+  /** setup: 项目接管模式 - 生成协议+写入CLAUDE.md */
+  async setup() {
+    const existing = await this.repo.loadProgress();
+    await this.repo.saveProtocol(generateProtocol("project"));
+    const wrote = await this.repo.ensureClaudeMd();
+    const lines = [];
+    if (existing && existing.status === "running") {
+      const done = existing.tasks.filter((t) => t.status === "done").length;
+      lines.push(`\u68C0\u6D4B\u5230\u8FDB\u884C\u4E2D\u7684\u5DE5\u4F5C\u6D41: ${existing.name}`);
+      lines.push(`\u8FDB\u5EA6: ${done}/${existing.tasks.length}`);
+      lines.push("\u6267\u884C flow resume \u7EE7\u7EED");
+    } else {
+      lines.push("\u9879\u76EE\u5DF2\u63A5\u7BA1\uFF0C\u5DE5\u4F5C\u6D41\u5DE5\u5177\u5C31\u7EEA");
+      lines.push("\u7B49\u5F85\u9700\u6C42\u8F93\u5165\uFF08\u6587\u6863\u6216\u5BF9\u8BDD\u63CF\u8FF0\uFF09");
+    }
+    lines.push("");
+    lines.push("\u534F\u8BAE\u5DF2\u751F\u6210: .workflow/protocol.md");
+    if (wrote) lines.push("CLAUDE.md \u5DF2\u66F4\u65B0: \u6DFB\u52A0\u4E86\u534F\u8BAE\u5F15\u7528");
+    lines.push("");
+    lines.push('\u7528\u6237\u8BF4"\u5F00\u59CB"\u5373\u53EF\u542F\u52A8\u5168\u81EA\u52A8\u5F00\u53D1');
+    return lines.join("\n");
   }
   /** status: 全局进度 */
   async status() {
@@ -391,8 +440,12 @@ function formatTask(task, context) {
   return lines.join("\n");
 }
 
-// src/interfaces/cli.ts
-function readStdin() {
+// src/interfaces/stdin.ts
+function isTTY() {
+  return process.stdin.isTTY === true;
+}
+function readStdinIfPiped() {
+  if (isTTY()) return Promise.resolve("");
   return new Promise((resolve, reject) => {
     const chunks = [];
     process.stdin.on("data", (c) => chunks.push(c));
@@ -400,6 +453,8 @@ function readStdin() {
     process.stdin.on("error", reject);
   });
 }
+
+// src/interfaces/cli.ts
 var CLI = class {
   constructor(service2) {
     this.service = service2;
@@ -420,11 +475,13 @@ var CLI = class {
     const s = this.service;
     switch (cmd) {
       case "init": {
-        const md = await readStdin();
-        if (!md.trim()) throw new Error("\u9700\u8981\u901A\u8FC7stdin\u4F20\u5165\u4EFB\u52A1markdown");
-        const data = await s.init(md);
-        return `\u5DF2\u521D\u59CB\u5316\u5DE5\u4F5C\u6D41: ${data.name} (${data.tasks.length} \u4E2A\u4EFB\u52A1)
+        const md = await readStdinIfPiped();
+        if (md.trim()) {
+          const data = await s.init(md);
+          return `\u5DF2\u521D\u59CB\u5316\u5DE5\u4F5C\u6D41: ${data.name} (${data.tasks.length} \u4E2A\u4EFB\u52A1)
 \u534F\u8BAE\u5DF2\u751F\u6210: .workflow/protocol.md`;
+        }
+        return await s.setup();
       }
       case "next": {
         const result = await s.next();
@@ -434,7 +491,7 @@ var CLI = class {
       case "checkpoint": {
         const id = rest[0];
         if (!id) throw new Error("\u9700\u8981\u4EFB\u52A1ID");
-        const detail = rest.length > 1 ? rest.slice(1).join(" ") : await readStdin();
+        const detail = rest.length > 1 ? rest.slice(1).join(" ") : await readStdinIfPiped();
         return await s.checkpoint(id, detail.trim());
       }
       case "status": {

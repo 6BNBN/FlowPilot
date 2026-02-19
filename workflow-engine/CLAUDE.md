@@ -47,3 +47,5 @@ flow add <描述>       # 追加任务 [--type frontend|backend|general]
 - 工作流状态只能通过 flow CLI 变更
 - progress.md 是记忆本体，compact/重启后读它恢复
 - 如有 .workflow/protocol.md，遵循其中的调度协议
+
+遵循 .workflow/protocol.md 工作流调度协议

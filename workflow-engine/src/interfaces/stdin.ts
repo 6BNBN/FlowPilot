@@ -1,0 +1,20 @@
+/**
+ * @module interfaces/stdin
+ * @description stdin 工具
+ */
+
+/** 检测是否为交互式终端 */
+export function isTTY(): boolean {
+  return process.stdin.isTTY === true;
+}
+
+/** 非TTY时读取stdin，TTY时返回空 */
+export function readStdinIfPiped(): Promise<string> {
+  if (isTTY()) return Promise.resolve('');
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    process.stdin.on('data', c => chunks.push(c));
+    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+    process.stdin.on('error', reject);
+  });
+}

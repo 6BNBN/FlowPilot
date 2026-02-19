@@ -128,4 +128,18 @@ export class FsWorkflowRepository implements WorkflowRepository {
       return null;
     }
   }
+
+  async ensureClaudeMd(): Promise<boolean> {
+    const base = join(this.root, '..');
+    const path = join(base, 'CLAUDE.md');
+    const ref = '遵循 .workflow/protocol.md 工作流调度协议';
+    try {
+      const content = await readFile(path, 'utf-8');
+      if (content.includes(ref)) return false;
+      await writeFile(path, content.trimEnd() + '\n\n' + ref + '\n', 'utf-8');
+    } catch {
+      await writeFile(path, '# Project\n\n' + ref + '\n', 'utf-8');
+    }
+    return true;
+  }
 }

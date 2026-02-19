@@ -8,6 +8,7 @@ import type { WorkflowDefinition } from '../domain/workflow';
 import type { WorkflowRepository } from '../infrastructure/repository';
 import { makeTaskId, findNextTask, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
 import { generateProtocol } from './protocol-generator';
+import { autoCommit } from '../infrastructure/git';
 
 export class WorkflowService {
   constructor(
@@ -86,9 +87,10 @@ export class WorkflowService {
     if (isAllDone(data.tasks)) data.status = 'completed';
     await this.repo.saveProgress(data);
     await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
+    autoCommit(id, task.title, summaryLine);
 
     const doneCount = data.tasks.filter(t => t.status === 'done').length;
-    return `任务 ${id} 完成 (${doneCount}/${data.tasks.length})`;
+    return `任务 ${id} 完成 (${doneCount}/${data.tasks.length}) [已自动提交]`;
   }
 
   /** resume: 中断恢复 */
@@ -119,6 +121,31 @@ export class WorkflowService {
     });
     await this.repo.saveProgress(data);
     return `已追加任务 ${id}: ${title} [${type}]`;
+  }
+
+  /** setup: 项目接管模式 - 生成协议+写入CLAUDE.md */
+  async setup(): Promise<string> {
+    const existing = await this.repo.loadProgress();
+    await this.repo.saveProtocol(generateProtocol('project'));
+    const wrote = await this.repo.ensureClaudeMd();
+    const lines: string[] = [];
+
+    if (existing && existing.status === 'running') {
+      const done = existing.tasks.filter(t => t.status === 'done').length;
+      lines.push(`检测到进行中的工作流: ${existing.name}`);
+      lines.push(`进度: ${done}/${existing.tasks.length}`);
+      lines.push('执行 flow resume 继续');
+    } else {
+      lines.push('项目已接管，工作流工具就绪');
+      lines.push('等待需求输入（文档或对话描述）');
+    }
+
+    lines.push('');
+    lines.push('协议已生成: .workflow/protocol.md');
+    if (wrote) lines.push('CLAUDE.md 已更新: 添加了协议引用');
+    lines.push('');
+    lines.push('用户说"开始"即可启动全自动开发');
+    return lines.join('\n');
   }
 
   /** status: 全局进度 */

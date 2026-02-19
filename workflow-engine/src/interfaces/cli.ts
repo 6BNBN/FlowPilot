@@ -5,15 +5,7 @@
 
 import type { WorkflowService } from '../application/workflow-service';
 import { formatStatus, formatTask } from './formatter';
-
-function readStdin(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    process.stdin.on('data', c => chunks.push(c));
-    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-    process.stdin.on('error', reject);
-  });
-}
+import { readStdinIfPiped } from './stdin';
 
 export class CLI {
   constructor(private readonly service: WorkflowService) {}
@@ -35,10 +27,13 @@ export class CLI {
 
     switch (cmd) {
       case 'init': {
-        const md = await readStdin();
-        if (!md.trim()) throw new Error('需要通过stdin传入任务markdown');
-        const data = await s.init(md);
-        return `已初始化工作流: ${data.name} (${data.tasks.length} 个任务)\n协议已生成: .workflow/protocol.md`;
+        const md = await readStdinIfPiped();
+        if (md.trim()) {
+          const data = await s.init(md);
+          return `已初始化工作流: ${data.name} (${data.tasks.length} 个任务)\n协议已生成: .workflow/protocol.md`;
+        }
+        // 无stdin → 项目接管模式
+        return await s.setup();
       }
 
       case 'next': {
@@ -52,7 +47,7 @@ export class CLI {
         if (!id) throw new Error('需要任务ID');
         const detail = rest.length > 1
           ? rest.slice(1).join(' ')
-          : await readStdin();
+          : await readStdinIfPiped();
         return await s.checkpoint(id, detail.trim());
       }
 

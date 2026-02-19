@@ -23,4 +23,6 @@ export interface WorkflowRepository {
   /** 保存任务树定义 */
   saveTasks(content: string): Promise<void>;
   loadTasks(): Promise<string | null>;
+  /** 确保CLAUDE.md引用了protocol */
+  ensureClaudeMd(): Promise<boolean>;
 }
