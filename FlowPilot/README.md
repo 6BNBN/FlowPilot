@@ -1,10 +1,10 @@
 # FlowPilot - 全自动工作流引擎
 
-CC (Claude Code) 环境下的全自动开发调度工具。单文件 30KB，复制即用，让 AI 自动拆解需求、分配任务、写代码、跑测试、提交代码。
+CC (Claude Code) Agent Teams 环境下的全自动开发调度引擎。单文件 30KB，复制即用，让 AI 自动拆解需求、分配任务、写代码、跑测试、提交代码。
 
 ## 核心特性
 
-- **单文件部署** — 复制 `flow.js` 到任意项目，`node flow.js init` 即可接管
+- **单文件部署** — 复制 `dist/flow.js` 到任意项目，`node flow.js init` 即可接管
 - **无限上下文** — 三层记忆架构，主Agent上下文永远 < 100 行
 - **跨会话恢复** — 关窗口/compact/崩溃后，新窗口说"开始"从断点继续
 - **并行派发** — 无依赖任务同时派多个子Agent执行
@@ -14,8 +14,11 @@ CC (Claude Code) 环境下的全自动开发调度工具。单文件 30KB，复�
 ## 快速开始
 
 ```bash
+# 构建单文件
+cd FlowPilot && npm install && npm run build
+
 # 复制到任意项目
-cp flow.js /your/project/
+cp dist/flow.js /your/project/
 cd /your/project
 
 # 初始化（生成协议 + 写入CLAUDE.md）
@@ -103,7 +106,7 @@ node flow.js init
 ## 开发
 
 ```bash
-cd workflow-engine
+cd FlowPilot
 npm install
 npm run build        # 构建 → dist/flow.js
 npm run dev          # 开发模式
@@ -120,7 +123,7 @@ src/
 │   ├── task-store.ts                # 任务状态管理（纯函数）
 │   └── workflow.ts                  # WorkflowDefinition 定义
 ├── application/
-│   ├── workflow-service.ts          # 6个核心用例
+│   ├── workflow-service.ts          # 核心用例（8个命令）
 │   └── protocol-generator.ts        # 生成 protocol.md
 ├── infrastructure/
 │   ├── repository.ts                # 仓储接口
