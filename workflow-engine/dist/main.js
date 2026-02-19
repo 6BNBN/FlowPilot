@@ -286,31 +286,63 @@ ${summary}`;
 
 // src/infrastructure/verify.ts
 import { execSync as execSync2 } from "child_process";
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join as join2 } from "path";
 function runVerify(cwd) {
-  const scripts = detectScripts(cwd);
-  if (!scripts.length) return { passed: true, scripts: [] };
-  for (const s of scripts) {
+  const cmds = detectCommands(cwd);
+  if (!cmds.length) return { passed: true, scripts: [] };
+  for (const cmd of cmds) {
     try {
-      execSync2(`npm run ${s}`, { cwd, stdio: "pipe", timeout: 12e4 });
+      execSync2(cmd, { cwd, stdio: "pipe", timeout: 3e5 });
     } catch (e) {
       const out = (e.stderr || e.stdout || "").toString();
       if (out.includes("No test files found")) continue;
-      return { passed: false, scripts, error: `npm run ${s} \u5931\u8D25:
+      if (out.includes("no test files")) continue;
+      return { passed: false, scripts: cmds, error: `${cmd} \u5931\u8D25:
 ${out.slice(0, 500)}` };
     }
   }
-  return { passed: true, scripts };
+  return { passed: true, scripts: cmds };
 }
-function detectScripts(cwd) {
-  try {
-    const pkg = JSON.parse(readFileSync(join2(cwd, "package.json"), "utf-8"));
-    const s = pkg.scripts || {};
-    return ["build", "test", "lint"].filter((k) => k in s);
-  } catch {
-    return [];
+function detectCommands(cwd) {
+  const has = (f) => existsSync(join2(cwd, f));
+  if (has("package.json")) {
+    try {
+      const s = JSON.parse(readFileSync(join2(cwd, "package.json"), "utf-8")).scripts || {};
+      return ["build", "test", "lint"].filter((k) => k in s).map((k) => `npm run ${k}`);
+    } catch {
+    }
   }
+  if (has("Cargo.toml")) return ["cargo build", "cargo test"];
+  if (has("go.mod")) return ["go build ./...", "go test ./..."];
+  if (has("pyproject.toml") || has("setup.py") || has("requirements.txt")) {
+    const cmds = [];
+    if (has("pyproject.toml")) {
+      try {
+        const txt = readFileSync(join2(cwd, "pyproject.toml"), "utf-8");
+        if (txt.includes("ruff")) cmds.push("ruff check .");
+        if (txt.includes("mypy")) cmds.push("mypy .");
+      } catch {
+      }
+    }
+    cmds.push("python -m pytest --tb=short -q");
+    return cmds;
+  }
+  if (has("pom.xml")) return ["mvn compile -q", "mvn test -q"];
+  if (has("build.gradle") || has("build.gradle.kts")) return ["gradle build"];
+  if (has("CMakeLists.txt")) return ["cmake --build build", "ctest --test-dir build"];
+  if (has("Makefile")) {
+    try {
+      const mk = readFileSync(join2(cwd, "Makefile"), "utf-8");
+      const targets = [];
+      if (/^build\s*:/m.test(mk)) targets.push("make build");
+      if (/^test\s*:/m.test(mk)) targets.push("make test");
+      if (/^lint\s*:/m.test(mk)) targets.push("make lint");
+      if (targets.length) return targets;
+    } catch {
+    }
+  }
+  return [];
 }
 
 // src/application/workflow-service.ts
