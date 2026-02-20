@@ -71,8 +71,11 @@ Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, i
 - Auth: secrets from env vars, bcrypt passwords, token expiry.
 - Input: validate at entry points. Never log passwords. Never commit .env.
 
-### Finalization
-Dispatch a sub-agent to run /code-review:code-review. Fix issues if any, then \`node flow.js finish\`.
+### Finalization (MANDATORY — skipping = protocol failure)
+1. Dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
+2. Run \`node flow.js review\` to unlock finish.
+3. Run \`node flow.js finish\`.
+**finish will REFUSE if review has not been executed.**
 
 <!-- flowpilot:end -->`;
 }

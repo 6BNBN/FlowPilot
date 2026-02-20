@@ -90,6 +90,9 @@ export class CLI {
         return formatStatus(data);
       }
 
+      case 'review':
+        return await s.review();
+
       case 'finish':
         return await s.finish();
 
@@ -117,7 +120,8 @@ const USAGE = `用法: node flow.js <command>
   next [--batch]       获取下一个待执行任务 (--batch 返回所有可并行任务)
   checkpoint <id>      记录任务完成 [--file <path> | stdin | 内联文本] [--files f1 f2 ...]
   skip <id>            手动跳过任务
-  finish               智能收尾 (验证+总结+回到待命)
+  review               标记code-review已完成 (finish前必须执行)
+  finish               智能收尾 (验证+总结+回到待命，需先review)
   status               查看全局进度
   resume               中断恢复
   add <描述>           追加任务 [--type frontend|backend|general]`;
