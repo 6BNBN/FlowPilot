@@ -5,7 +5,7 @@
 
 import type { ProgressData, TaskEntry } from '../domain/types';
 import type { WorkflowDefinition } from '../domain/workflow';
-import type { WorkflowRepository } from '../infrastructure/repository';
+import type { WorkflowRepository } from '../domain/repository';
 import { makeTaskId, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
 import { autoCommit, gitCleanup } from '../infrastructure/git';
 import { runVerify } from '../infrastructure/verify';
@@ -132,8 +132,8 @@ export class WorkflowService {
       const data = await this.requireProgress();
       const task = data.tasks.find(t => t.id === id);
       if (!task) throw new Error(`任务 ${id} 不存在`);
-      if (task.status !== 'active' && task.status !== 'pending') {
-        throw new Error(`任务 ${id} 状态为 ${task.status}，无法checkpoint`);
+      if (task.status !== 'active') {
+        throw new Error(`任务 ${id} 状态为 ${task.status}，只有 active 状态可以 checkpoint`);
       }
 
       if (detail === 'FAILED') {
@@ -190,28 +190,39 @@ export class WorkflowService {
 
   /** add: 追加任务 */
   async add(title: string, type: TaskEntry['type']): Promise<string> {
-    const data = await this.requireProgress();
-    const maxNum = data.tasks.reduce((m, t) => Math.max(m, parseInt(t.id, 10)), 0);
-    const id = makeTaskId(maxNum + 1);
-    data.tasks.push({
-      id, title, description: '', type, status: 'pending',
-      deps: [], summary: '', retries: 0,
-    });
-    await this.repo.saveProgress(data);
-    return `已追加任务 ${id}: ${title} [${type}]`;
+    await this.repo.lock();
+    try {
+      const data = await this.requireProgress();
+      const maxNum = data.tasks.reduce((m, t) => Math.max(m, parseInt(t.id, 10)), 0);
+      const id = makeTaskId(maxNum + 1);
+      data.tasks.push({
+        id, title, description: '', type, status: 'pending',
+        deps: [], summary: '', retries: 0,
+      });
+      await this.repo.saveProgress(data);
+      return `已追加任务 ${id}: ${title} [${type}]`;
+    } finally {
+      await this.repo.unlock();
+    }
   }
 
   /** skip: 手动跳过任务 */
   async skip(id: string): Promise<string> {
-    const data = await this.requireProgress();
-    const task = data.tasks.find(t => t.id === id);
-    if (!task) throw new Error(`任务 ${id} 不存在`);
-    if (task.status === 'done') return `任务 ${id} 已完成，无需跳过`;
-    task.status = 'skipped';
-    task.summary = '手动跳过';
-    data.current = null;
-    await this.repo.saveProgress(data);
-    return `已跳过任务 ${id}: ${task.title}`;
+    await this.repo.lock();
+    try {
+      const data = await this.requireProgress();
+      const task = data.tasks.find(t => t.id === id);
+      if (!task) throw new Error(`任务 ${id} 不存在`);
+      if (task.status === 'done') return `任务 ${id} 已完成，无需跳过`;
+      const warn = task.status === 'active' ? '（警告: 该任务为 active 状态，子Agent可能仍在运行）' : '';
+      task.status = 'skipped';
+      task.summary = '手动跳过';
+      data.current = null;
+      await this.repo.saveProgress(data);
+      return `已跳过任务 ${id}: ${task.title}${warn}`;
+    } finally {
+      await this.repo.unlock();
+    }
   }
 
   /** setup: 项目接管模式 - 写入CLAUDE.md */
@@ -274,9 +285,11 @@ export class WorkflowService {
     const failed = data.tasks.filter(t => t.status === 'failed');
     const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : '', failed.length ? `${failed.length} failed` : ''].filter(Boolean).join(', ');
 
-    await this.repo.clearAll();
     const titles = done.map(t => `- ${t.id}: ${t.title}`).join('\n');
     const commitErr = autoCommit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`);
+    if (!commitErr) {
+      await this.repo.clearAll();
+    }
 
     const scripts = result.scripts.length ? result.scripts.join(', ') : '无验证脚本';
     if (commitErr) {

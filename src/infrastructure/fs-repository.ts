@@ -3,11 +3,11 @@
  * @description 文件系统仓储 - 基于 .workflow/ 目录的分层记忆存储
  */
 
-import { mkdir, readFile, writeFile, unlink, rm } from 'fs/promises';
+import { mkdir, readFile, writeFile, unlink, rm, rename } from 'fs/promises';
 import { join } from 'path';
 import { openSync, closeSync, existsSync } from 'fs';
 import type { ProgressData, TaskEntry } from '../domain/types';
-import type { WorkflowRepository } from './repository';
+import type { WorkflowRepository } from '../domain/repository';
 
 /** Generate the CLAUDE.md rule block */
 function generateClaudeMdBlock(): string {
@@ -53,6 +53,10 @@ Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, i
    - **Do NOT call \`node flow.js next\` until zero active tasks remain** (the command will error anyway).
 4. Loop back to step 1.
 5. When \`next\` returns "全部完成", enter **Finalization**.
+
+### Mid-Workflow Commands
+- \`node flow.js skip <id>\` — skip a stuck/unnecessary task (avoid skipping active tasks with running sub-agents)
+- \`node flow.js add <描述> [--type frontend|backend|general]\` — inject a new task mid-workflow
 
 ### Sub-Agent Prompt Template
 Each sub-agent prompt MUST contain these sections in order:
@@ -116,8 +120,15 @@ export class FsWorkflowRepository implements WorkflowRepository {
         await new Promise(r => setTimeout(r, 50));
       }
     }
-    // 超时强制清除死锁
+    // 超时强制清除死锁，再尝试一次
     try { await unlink(lockPath); } catch {}
+    try {
+      const fd = openSync(lockPath, 'wx');
+      closeSync(fd);
+      return;
+    } catch {
+      throw new Error('无法获取文件锁');
+    }
   }
 
   async unlock(): Promise<void> {
@@ -142,7 +153,9 @@ export class FsWorkflowRepository implements WorkflowRepository {
       const esc = (s: string) => (s || '-').replace(/\|/g, '∣').replace(/\n/g, ' ');
       lines.push(`| ${t.id} | ${esc(t.title)} | ${t.type} | ${deps} | ${t.status} | ${t.retries} | ${esc(t.summary)} | ${esc(t.description)} |`);
     }
-    await writeFile(join(this.root, 'progress.md'), lines.join('\n') + '\n', 'utf-8');
+    const p = join(this.root, 'progress.md');
+    await writeFile(p + '.tmp', lines.join('\n') + '\n', 'utf-8');
+    await rename(p + '.tmp', p);
   }
 
   async loadProgress(): Promise<ProgressData | null> {
@@ -155,6 +168,8 @@ export class FsWorkflowRepository implements WorkflowRepository {
   }
 
   private parseProgress(raw: string): ProgressData {
+    const validWfStatus = new Set(['idle', 'running', 'finishing', 'completed', 'aborted']);
+    const validTaskStatus = new Set(['pending', 'active', 'done', 'skipped', 'failed']);
     const lines = raw.split('\n');
     const name = (lines[0] ?? '').replace(/^#\s*/, '').trim();
     let status = 'idle' as ProgressData['status'];
@@ -162,17 +177,20 @@ export class FsWorkflowRepository implements WorkflowRepository {
     const tasks: TaskEntry[] = [];
 
     for (const line of lines) {
-      if (line.startsWith('状态: ')) status = line.slice(4).trim() as ProgressData['status'];
+      if (line.startsWith('状态: ')) {
+        const s = line.slice(4).trim();
+        status = (validWfStatus.has(s) ? s : 'idle') as ProgressData['status'];
+      }
       if (line.startsWith('当前: ')) current = line.slice(4).trim();
       if (current === '无') current = null;
 
-      const m = line.match(/^\|\s*(\d{3})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
+      const m = line.match(/^\|\s*(\d{3,})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
       if (m) {
         const depsRaw = m[4].trim();
         tasks.push({
           id: m[1], title: m[2], type: m[3] as TaskEntry['type'],
           deps: depsRaw === '-' ? [] : depsRaw.split(',').map(d => d.trim()),
-          status: m[5] as TaskEntry['status'],
+          status: (validTaskStatus.has(m[5]) ? m[5] : 'pending') as TaskEntry['status'],
           retries: parseInt(m[6], 10),
           summary: m[7] === '-' ? '' : m[7],
           description: m[8] === '-' ? '' : m[8],
@@ -196,7 +214,9 @@ export class FsWorkflowRepository implements WorkflowRepository {
 
   async saveTaskContext(taskId: string, content: string): Promise<void> {
     await this.ensure(this.ctxDir);
-    await writeFile(join(this.ctxDir, `task-${taskId}.md`), content, 'utf-8');
+    const p = join(this.ctxDir, `task-${taskId}.md`);
+    await writeFile(p + '.tmp', content, 'utf-8');
+    await rename(p + '.tmp', p);
   }
 
   async loadTaskContext(taskId: string): Promise<string | null> {
@@ -211,7 +231,9 @@ export class FsWorkflowRepository implements WorkflowRepository {
 
   async saveSummary(content: string): Promise<void> {
     await this.ensure(this.ctxDir);
-    await writeFile(join(this.ctxDir, 'summary.md'), content, 'utf-8');
+    const p = join(this.ctxDir, 'summary.md');
+    await writeFile(p + '.tmp', content, 'utf-8');
+    await rename(p + '.tmp', p);
   }
 
   async loadSummary(): Promise<string> {
@@ -255,14 +277,18 @@ export class FsWorkflowRepository implements WorkflowRepository {
   async ensureHooks(): Promise<boolean> {
     const dir = join(this.base, '.claude');
     const path = join(dir, 'settings.json');
+    const hook = (m: string) => ({
+      matcher: m,
+      hooks: [{ type: 'prompt' as const, prompt: 'BLOCK this tool call. FlowPilot requires using node flow.js commands instead of native task tools.' }]
+    });
     const required = {
-      PreToolUse: [{
-        matcher: 'TaskCreate|TaskUpdate|TaskList',
-        hooks: [{ type: 'prompt' as const, prompt: 'BLOCK this tool call. FlowPilot requires using node flow.js commands instead of native task tools.' }]
-      }]
+      PreToolUse: [hook('TaskCreate'), hook('TaskUpdate'), hook('TaskList')]
     };
     let settings: Record<string, unknown> = {};
-    try { settings = JSON.parse(await readFile(path, 'utf-8')); } catch {}
+    try {
+      const parsed = JSON.parse(await readFile(path, 'utf-8'));
+      if (parsed && typeof parsed === 'object' && !('__proto__' in parsed) && !('constructor' in parsed)) settings = parsed;
+    } catch {}
     const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
     // 幂等：已有 FlowPilot 的 matcher 则跳过
     const existing = hooks.PreToolUse as Array<{ matcher?: string }> | undefined;

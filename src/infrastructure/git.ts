@@ -3,14 +3,14 @@
  * @description Git 自动提交 - 支持子模块的细粒度提交
  */
 
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 
-/** 获取所有子模块路径 */
+/** 获取所有子模块路径，无 .gitmodules 时返回空数组，有但命令失败时抛出 */
 function getSubmodules(): string[] {
-  try {
-    const out = execSync('git submodule --quiet foreach "echo $sm_path"', { stdio: 'pipe', encoding: 'utf-8' });
-    return out.split('\n').filter(Boolean);
-  } catch { return []; }
+  if (!existsSync('.gitmodules')) return [];
+  const out = execSync('git submodule --quiet foreach "echo $sm_path"', { stdio: 'pipe', encoding: 'utf-8' });
+  return out.split('\n').filter(Boolean);
 }
 
 /** 按子模块分组文件，返回 { 子模块路径: 相对文件列表 }，空字符串键=父仓库 */
@@ -32,13 +32,13 @@ function commitIn(cwd: string, files: string[] | null, msg: string): string | nu
   const opts = { stdio: 'pipe' as const, cwd, encoding: 'utf-8' as const };
   try {
     if (files) {
-      for (const f of files) execSync(`git add ${JSON.stringify(f)}`, opts);
+      for (const f of files) execFileSync('git', ['add', f], opts);
     } else {
-      execSync('git add -A', opts);
+      execFileSync('git', ['add', '-A'], opts);
     }
     const status = execSync('git diff --cached --quiet || echo HAS_CHANGES', opts).trim();
     if (status === 'HAS_CHANGES') {
-      execSync('git commit -F -', { ...opts, input: msg });
+      execFileSync('git', ['commit', '-F', '-'], { ...opts, input: msg });
     }
     return null;
   } catch (e: any) {
@@ -50,7 +50,6 @@ function commitIn(cwd: string, files: string[] | null, msg: string): string | nu
 export function gitCleanup(): void {
   try {
     execSync('git checkout .', { stdio: 'pipe' });
-    execSync('git clean -fd', { stdio: 'pipe' });
   } catch {}
 }
 
@@ -77,11 +76,11 @@ export function autoCommit(taskId: string, title: string, summary: string, files
     try {
       const parentFiles = groups.get('') ?? [];
       const touchedSubs = [...groups.keys()].filter(k => k !== '');
-      for (const s of touchedSubs) execSync(`git add ${JSON.stringify(s)}`, { stdio: 'pipe' });
-      for (const f of parentFiles) execSync(`git add ${JSON.stringify(f)}`, { stdio: 'pipe' });
+      for (const s of touchedSubs) execFileSync('git', ['add', s], { stdio: 'pipe' });
+      for (const f of parentFiles) execFileSync('git', ['add', f], { stdio: 'pipe' });
       const status = execSync('git diff --cached --quiet || echo HAS_CHANGES', { stdio: 'pipe', encoding: 'utf-8' }).trim();
       if (status === 'HAS_CHANGES') {
-        execSync('git commit -F -', { stdio: 'pipe', input: msg });
+        execFileSync('git', ['commit', '-F', '-'], { stdio: 'pipe', input: msg });
       }
     } catch (e: any) {
       errors.push(`parent: ${e.stderr?.toString?.() || e.message}`);

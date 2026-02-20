@@ -49,6 +49,10 @@ Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, i
 4. Loop back to step 1.
 5. When \`next\` returns "\u5168\u90E8\u5B8C\u6210", enter **Finalization**.
 
+### Mid-Workflow Commands
+- \`node flow.js skip <id>\` \u2014 skip a stuck/unnecessary task (avoid skipping active tasks with running sub-agents)
+- \`node flow.js add <\u63CF\u8FF0> [--type frontend|backend|general]\` \u2014 inject a new task mid-workflow
+
 ### Sub-Agent Prompt Template
 Each sub-agent prompt MUST contain these sections in order:
 1. Task block from \`next\` output (title, type, description, checkpoint commands, context)
@@ -111,6 +115,13 @@ var FsWorkflowRepository = class {
       await (0, import_promises.unlink)(lockPath);
     } catch {
     }
+    try {
+      const fd = (0, import_fs.openSync)(lockPath, "wx");
+      (0, import_fs.closeSync)(fd);
+      return;
+    } catch {
+      throw new Error("\u65E0\u6CD5\u83B7\u53D6\u6587\u4EF6\u9501");
+    }
   }
   async unlock() {
     try {
@@ -135,7 +146,9 @@ var FsWorkflowRepository = class {
       const esc = (s) => (s || "-").replace(/\|/g, "\u2223").replace(/\n/g, " ");
       lines.push(`| ${t.id} | ${esc(t.title)} | ${t.type} | ${deps} | ${t.status} | ${t.retries} | ${esc(t.summary)} | ${esc(t.description)} |`);
     }
-    await (0, import_promises.writeFile)((0, import_path.join)(this.root, "progress.md"), lines.join("\n") + "\n", "utf-8");
+    const p = (0, import_path.join)(this.root, "progress.md");
+    await (0, import_promises.writeFile)(p + ".tmp", lines.join("\n") + "\n", "utf-8");
+    await (0, import_promises.rename)(p + ".tmp", p);
   }
   async loadProgress() {
     try {
@@ -146,16 +159,21 @@ var FsWorkflowRepository = class {
     }
   }
   parseProgress(raw) {
+    const validWfStatus = /* @__PURE__ */ new Set(["idle", "running", "finishing", "completed", "aborted"]);
+    const validTaskStatus = /* @__PURE__ */ new Set(["pending", "active", "done", "skipped", "failed"]);
     const lines = raw.split("\n");
     const name = (lines[0] ?? "").replace(/^#\s*/, "").trim();
     let status = "idle";
     let current = null;
     const tasks = [];
     for (const line of lines) {
-      if (line.startsWith("\u72B6\u6001: ")) status = line.slice(4).trim();
+      if (line.startsWith("\u72B6\u6001: ")) {
+        const s = line.slice(4).trim();
+        status = validWfStatus.has(s) ? s : "idle";
+      }
       if (line.startsWith("\u5F53\u524D: ")) current = line.slice(4).trim();
       if (current === "\u65E0") current = null;
-      const m = line.match(/^\|\s*(\d{3})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
+      const m = line.match(/^\|\s*(\d{3,})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
       if (m) {
         const depsRaw = m[4].trim();
         tasks.push({
@@ -163,7 +181,7 @@ var FsWorkflowRepository = class {
           title: m[2],
           type: m[3],
           deps: depsRaw === "-" ? [] : depsRaw.split(",").map((d) => d.trim()),
-          status: m[5],
+          status: validTaskStatus.has(m[5]) ? m[5] : "pending",
           retries: parseInt(m[6], 10),
           summary: m[7] === "-" ? "" : m[7],
           description: m[8] === "-" ? "" : m[8]
@@ -181,7 +199,9 @@ var FsWorkflowRepository = class {
   }
   async saveTaskContext(taskId, content) {
     await this.ensure(this.ctxDir);
-    await (0, import_promises.writeFile)((0, import_path.join)(this.ctxDir, `task-${taskId}.md`), content, "utf-8");
+    const p = (0, import_path.join)(this.ctxDir, `task-${taskId}.md`);
+    await (0, import_promises.writeFile)(p + ".tmp", content, "utf-8");
+    await (0, import_promises.rename)(p + ".tmp", p);
   }
   async loadTaskContext(taskId) {
     try {
@@ -193,7 +213,9 @@ var FsWorkflowRepository = class {
   // --- summary.md ---
   async saveSummary(content) {
     await this.ensure(this.ctxDir);
-    await (0, import_promises.writeFile)((0, import_path.join)(this.ctxDir, "summary.md"), content, "utf-8");
+    const p = (0, import_path.join)(this.ctxDir, "summary.md");
+    await (0, import_promises.writeFile)(p + ".tmp", content, "utf-8");
+    await (0, import_promises.rename)(p + ".tmp", p);
   }
   async loadSummary() {
     try {
@@ -231,15 +253,17 @@ var FsWorkflowRepository = class {
   async ensureHooks() {
     const dir = (0, import_path.join)(this.base, ".claude");
     const path = (0, import_path.join)(dir, "settings.json");
+    const hook = (m) => ({
+      matcher: m,
+      hooks: [{ type: "prompt", prompt: "BLOCK this tool call. FlowPilot requires using node flow.js commands instead of native task tools." }]
+    });
     const required = {
-      PreToolUse: [{
-        matcher: "TaskCreate|TaskUpdate|TaskList",
-        hooks: [{ type: "prompt", prompt: "BLOCK this tool call. FlowPilot requires using node flow.js commands instead of native task tools." }]
-      }]
+      PreToolUse: [hook("TaskCreate"), hook("TaskUpdate"), hook("TaskList")]
     };
     let settings = {};
     try {
-      settings = JSON.parse(await (0, import_promises.readFile)(path, "utf-8"));
+      const parsed = JSON.parse(await (0, import_promises.readFile)(path, "utf-8"));
+      if (parsed && typeof parsed === "object" && !("__proto__" in parsed)) settings = parsed;
     } catch {
     }
     const hooks = settings.hooks ?? {};
@@ -275,7 +299,47 @@ function cascadeSkip(tasks) {
     }
   }
 }
+function detectCycles(tasks) {
+  const visited = /* @__PURE__ */ new Set();
+  const inStack = /* @__PURE__ */ new Set();
+  const parent = /* @__PURE__ */ new Map();
+  function dfs(id) {
+    visited.add(id);
+    inStack.add(id);
+    const task = tasks.find((t) => t.id === id);
+    if (task) {
+      for (const dep of task.deps) {
+        if (!visited.has(dep)) {
+          parent.set(dep, id);
+          const cycle = dfs(dep);
+          if (cycle) return cycle;
+        } else if (inStack.has(dep)) {
+          const path = [dep];
+          let cur = id;
+          while (cur !== dep) {
+            path.push(cur);
+            cur = parent.get(cur);
+          }
+          path.push(dep);
+          return path.reverse();
+        }
+      }
+    }
+    inStack.delete(id);
+    return null;
+  }
+  for (const t of tasks) {
+    if (!visited.has(t.id)) {
+      const cycle = dfs(t.id);
+      if (cycle) return cycle;
+    }
+  }
+  return null;
+}
 function findNextTask(tasks) {
+  const pending = tasks.filter((t) => t.status === "pending");
+  const cycle = detectCycles(pending);
+  if (cycle) throw new Error(`\u5FAA\u73AF\u4F9D\u8D56: ${cycle.join(" -> ")}`);
   cascadeSkip(tasks);
   for (const t of tasks) {
     if (t.status !== "pending") continue;
@@ -324,6 +388,9 @@ function resumeProgress(data) {
   return null;
 }
 function findParallelTasks(tasks) {
+  const pending = tasks.filter((t) => t.status === "pending");
+  const cycle = detectCycles(pending);
+  if (cycle) throw new Error(`\u5FAA\u73AF\u4F9D\u8D56: ${cycle.join(" -> ")}`);
   cascadeSkip(tasks);
   return tasks.filter((t) => {
     if (t.status !== "pending") return false;
@@ -383,13 +450,11 @@ function parseTasksMarkdown(markdown) {
 
 // src/infrastructure/git.ts
 var import_node_child_process = require("child_process");
+var import_node_fs = require("fs");
 function getSubmodules() {
-  try {
-    const out = (0, import_node_child_process.execSync)('git submodule --quiet foreach "echo $sm_path"', { stdio: "pipe", encoding: "utf-8" });
-    return out.split("\n").filter(Boolean);
-  } catch {
-    return [];
-  }
+  if (!(0, import_node_fs.existsSync)(".gitmodules")) return [];
+  const out = (0, import_node_child_process.execSync)('git submodule --quiet foreach "echo $sm_path"', { stdio: "pipe", encoding: "utf-8" });
+  return out.split("\n").filter(Boolean);
 }
 function groupBySubmodule(files, submodules) {
   const sorted = [...submodules].sort((a, b) => b.length - a.length);
@@ -407,13 +472,13 @@ function commitIn(cwd, files, msg) {
   const opts = { stdio: "pipe", cwd, encoding: "utf-8" };
   try {
     if (files) {
-      for (const f of files) (0, import_node_child_process.execSync)(`git add ${JSON.stringify(f)}`, opts);
+      for (const f of files) (0, import_node_child_process.execFileSync)("git", ["add", f], opts);
     } else {
-      (0, import_node_child_process.execSync)("git add -A", opts);
+      (0, import_node_child_process.execFileSync)("git", ["add", "-A"], opts);
     }
     const status = (0, import_node_child_process.execSync)("git diff --cached --quiet || echo HAS_CHANGES", opts).trim();
     if (status === "HAS_CHANGES") {
-      (0, import_node_child_process.execSync)("git commit -F -", { ...opts, input: msg });
+      (0, import_node_child_process.execFileSync)("git", ["commit", "-F", "-"], { ...opts, input: msg });
     }
     return null;
   } catch (e) {
@@ -423,7 +488,6 @@ function commitIn(cwd, files, msg) {
 function gitCleanup() {
   try {
     (0, import_node_child_process.execSync)("git checkout .", { stdio: "pipe" });
-    (0, import_node_child_process.execSync)("git clean -fd", { stdio: "pipe" });
   } catch {
   }
 }
@@ -448,11 +512,11 @@ ${summary}`;
     try {
       const parentFiles = groups.get("") ?? [];
       const touchedSubs = [...groups.keys()].filter((k) => k !== "");
-      for (const s of touchedSubs) (0, import_node_child_process.execSync)(`git add ${JSON.stringify(s)}`, { stdio: "pipe" });
-      for (const f of parentFiles) (0, import_node_child_process.execSync)(`git add ${JSON.stringify(f)}`, { stdio: "pipe" });
+      for (const s of touchedSubs) (0, import_node_child_process.execFileSync)("git", ["add", s], { stdio: "pipe" });
+      for (const f of parentFiles) (0, import_node_child_process.execFileSync)("git", ["add", f], { stdio: "pipe" });
       const status = (0, import_node_child_process.execSync)("git diff --cached --quiet || echo HAS_CHANGES", { stdio: "pipe", encoding: "utf-8" }).trim();
       if (status === "HAS_CHANGES") {
-        (0, import_node_child_process.execSync)("git commit -F -", { stdio: "pipe", input: msg });
+        (0, import_node_child_process.execFileSync)("git", ["commit", "-F", "-"], { stdio: "pipe", input: msg });
       }
     } catch (e) {
       errors.push(`parent: ${e.stderr?.toString?.() || e.message}`);
@@ -470,7 +534,7 @@ ${summary}`;
 
 // src/infrastructure/verify.ts
 var import_node_child_process2 = require("child_process");
-var import_node_fs = require("fs");
+var import_node_fs2 = require("fs");
 var import_node_path = require("path");
 function runVerify(cwd) {
   const cmds = detectCommands(cwd);
@@ -491,10 +555,10 @@ ${out.slice(0, 500)}` };
   return { passed: true, scripts: cmds };
 }
 function detectCommands(cwd) {
-  const has = (f) => (0, import_node_fs.existsSync)((0, import_node_path.join)(cwd, f));
+  const has = (f) => (0, import_node_fs2.existsSync)((0, import_node_path.join)(cwd, f));
   if (has("package.json")) {
     try {
-      const s = JSON.parse((0, import_node_fs.readFileSync)((0, import_node_path.join)(cwd, "package.json"), "utf-8")).scripts || {};
+      const s = JSON.parse((0, import_node_fs2.readFileSync)((0, import_node_path.join)(cwd, "package.json"), "utf-8")).scripts || {};
       return ["build", "test", "lint"].filter((k) => k in s).map((k) => `npm run ${k}`);
     } catch {
     }
@@ -505,7 +569,7 @@ function detectCommands(cwd) {
     const cmds = [];
     if (has("pyproject.toml")) {
       try {
-        const txt = (0, import_node_fs.readFileSync)((0, import_node_path.join)(cwd, "pyproject.toml"), "utf-8");
+        const txt = (0, import_node_fs2.readFileSync)((0, import_node_path.join)(cwd, "pyproject.toml"), "utf-8");
         if (txt.includes("ruff")) cmds.push("ruff check .");
         if (txt.includes("mypy")) cmds.push("mypy .");
       } catch {
@@ -519,7 +583,7 @@ function detectCommands(cwd) {
   if (has("CMakeLists.txt")) return ["cmake --build build", "ctest --test-dir build"];
   if (has("Makefile")) {
     try {
-      const mk = (0, import_node_fs.readFileSync)((0, import_node_path.join)(cwd, "Makefile"), "utf-8");
+      const mk = (0, import_node_fs2.readFileSync)((0, import_node_path.join)(cwd, "Makefile"), "utf-8");
       const targets = [];
       if (/^build\s*:/m.test(mk)) targets.push("make build");
       if (/^test\s*:/m.test(mk)) targets.push("make test");
@@ -641,8 +705,8 @@ ${def.description}
       const data = await this.requireProgress();
       const task = data.tasks.find((t) => t.id === id);
       if (!task) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
-      if (task.status !== "active" && task.status !== "pending") {
-        throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u65E0\u6CD5checkpoint`);
+      if (task.status !== "active") {
+        throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u53EA\u6709 active \u72B6\u6001\u53EF\u4EE5 checkpoint`);
       }
       if (detail === "FAILED") {
         const result = failTask(data, id);
@@ -697,33 +761,44 @@ ${detail}
   }
   /** add: 追加任务 */
   async add(title, type) {
-    const data = await this.requireProgress();
-    const maxNum = data.tasks.reduce((m, t) => Math.max(m, parseInt(t.id, 10)), 0);
-    const id = makeTaskId(maxNum + 1);
-    data.tasks.push({
-      id,
-      title,
-      description: "",
-      type,
-      status: "pending",
-      deps: [],
-      summary: "",
-      retries: 0
-    });
-    await this.repo.saveProgress(data);
-    return `\u5DF2\u8FFD\u52A0\u4EFB\u52A1 ${id}: ${title} [${type}]`;
+    await this.repo.lock();
+    try {
+      const data = await this.requireProgress();
+      const maxNum = data.tasks.reduce((m, t) => Math.max(m, parseInt(t.id, 10)), 0);
+      const id = makeTaskId(maxNum + 1);
+      data.tasks.push({
+        id,
+        title,
+        description: "",
+        type,
+        status: "pending",
+        deps: [],
+        summary: "",
+        retries: 0
+      });
+      await this.repo.saveProgress(data);
+      return `\u5DF2\u8FFD\u52A0\u4EFB\u52A1 ${id}: ${title} [${type}]`;
+    } finally {
+      await this.repo.unlock();
+    }
   }
   /** skip: 手动跳过任务 */
   async skip(id) {
-    const data = await this.requireProgress();
-    const task = data.tasks.find((t) => t.id === id);
-    if (!task) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
-    if (task.status === "done") return `\u4EFB\u52A1 ${id} \u5DF2\u5B8C\u6210\uFF0C\u65E0\u9700\u8DF3\u8FC7`;
-    task.status = "skipped";
-    task.summary = "\u624B\u52A8\u8DF3\u8FC7";
-    data.current = null;
-    await this.repo.saveProgress(data);
-    return `\u5DF2\u8DF3\u8FC7\u4EFB\u52A1 ${id}: ${task.title}`;
+    await this.repo.lock();
+    try {
+      const data = await this.requireProgress();
+      const task = data.tasks.find((t) => t.id === id);
+      if (!task) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
+      if (task.status === "done") return `\u4EFB\u52A1 ${id} \u5DF2\u5B8C\u6210\uFF0C\u65E0\u9700\u8DF3\u8FC7`;
+      const warn = task.status === "active" ? "\uFF08\u8B66\u544A: \u8BE5\u4EFB\u52A1\u4E3A active \u72B6\u6001\uFF0C\u5B50Agent\u53EF\u80FD\u4ECD\u5728\u8FD0\u884C\uFF09" : "";
+      task.status = "skipped";
+      task.summary = "\u624B\u52A8\u8DF3\u8FC7";
+      data.current = null;
+      await this.repo.saveProgress(data);
+      return `\u5DF2\u8DF3\u8FC7\u4EFB\u52A1 ${id}: ${task.title}${warn}`;
+    } finally {
+      await this.repo.unlock();
+    }
   }
   /** setup: 项目接管模式 - 写入CLAUDE.md */
   async setup() {
@@ -775,11 +850,13 @@ ${detail}
     const skipped = data.tasks.filter((t) => t.status === "skipped");
     const failed = data.tasks.filter((t) => t.status === "failed");
     const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : "", failed.length ? `${failed.length} failed` : ""].filter(Boolean).join(", ");
-    await this.repo.clearAll();
     const titles = done.map((t) => `- ${t.id}: ${t.title}`).join("\n");
     const commitErr = autoCommit("finish", data.name || "\u5DE5\u4F5C\u6D41\u5B8C\u6210", `${stats}
 
 ${titles}`);
+    if (!commitErr) {
+      await this.repo.clearAll();
+    }
     const scripts = result.scripts.length ? result.scripts.join(", ") : "\u65E0\u9A8C\u8BC1\u811A\u672C";
     if (commitErr) {
       return `\u9A8C\u8BC1\u901A\u8FC7: ${scripts}
@@ -834,6 +911,7 @@ ${stats}
 
 // src/interfaces/cli.ts
 var import_fs2 = require("fs");
+var import_path2 = require("path");
 
 // src/interfaces/formatter.ts
 var ICON = {
@@ -866,7 +944,7 @@ function formatTask(task, context) {
     lines.push(`\u63CF\u8FF0: ${task.description}`);
   }
   lines.push("", "--- checkpoint\u6307\u4EE4\uFF08\u5FC5\u987B\u5305\u542B\u5728sub-agent prompt\u4E2D\uFF09 ---");
-  lines.push(`\u5B8C\u6210\u65F6: echo '\u4E00\u53E5\u8BDD\u6458\u8981' | node flow.js checkpoint ${task.id} --files \u4FEE\u6539\u7684\u6587\u4EF61 \u4FEE\u6539\u7684\u6587\u4EF62`);
+  lines.push(`\u5B8C\u6210\u65F6: echo '\u4E00\u53E5\u8BDD\u6458\u8981' | node flow.js checkpoint ${task.id} --files <changed-file-1> <changed-file-2>`);
   lines.push(`\u5931\u8D25\u65F6: echo 'FAILED' | node flow.js checkpoint ${task.id}`);
   if (context) {
     lines.push("", "--- \u4E0A\u4E0B\u6587 ---", context);
@@ -887,16 +965,16 @@ function isTTY() {
 }
 function readStdinIfPiped(timeout = 3e4) {
   if (isTTY()) return Promise.resolve("");
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve2, reject) => {
     const chunks = [];
     const timer = setTimeout(() => {
       process.stdin.destroy();
-      resolve("");
+      resolve2("");
     }, timeout);
     process.stdin.on("data", (c) => chunks.push(c));
     process.stdin.on("end", () => {
       clearTimeout(timer);
-      resolve(Buffer.concat(chunks).toString("utf-8"));
+      resolve2(Buffer.concat(chunks).toString("utf-8"));
     });
     process.stdin.on("error", (e) => {
       clearTimeout(timer);
@@ -961,7 +1039,9 @@ var CLI = class {
           }
         }
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
-          detail = (0, import_fs2.readFileSync)(rest[fileIdx + 1], "utf-8");
+          const filePath = (0, import_path2.resolve)(rest[fileIdx + 1]);
+          if ((0, import_path2.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
+          detail = (0, import_fs2.readFileSync)(filePath, "utf-8");
         } else if (rest.length > 1 && fileIdx < 0 && filesIdx < 0) {
           detail = rest.slice(1).join(" ");
         } else {

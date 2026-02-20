@@ -1,9 +1,9 @@
 /**
- * @module infrastructure/repository
+ * @module domain/repository
  * @description 仓储接口 - 持久化契约
  */
 
-import type { ProgressData } from '../domain/types';
+import type { ProgressData } from './types';
 
 /** 仓储接口 */
 export interface WorkflowRepository {
