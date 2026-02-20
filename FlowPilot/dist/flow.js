@@ -211,6 +211,29 @@ var FsWorkflowRepository = class {
     }
     return true;
   }
+  async ensureHooks() {
+    const dir = (0, import_path.join)(this.base, ".claude");
+    const path = (0, import_path.join)(dir, "settings.json");
+    const required = {
+      PreToolUse: [{
+        matcher: "TaskCreate|TaskUpdate|TaskList",
+        hooks: [{ type: "prompt", prompt: "BLOCK this tool call. FlowPilot requires using node flow.js commands instead of native task tools." }]
+      }]
+    };
+    let settings = {};
+    try {
+      settings = JSON.parse(await (0, import_promises.readFile)(path, "utf-8"));
+    } catch {
+    }
+    const hooks = settings.hooks ?? {};
+    const existing = hooks.PreToolUse;
+    if (existing?.some((h) => h.matcher === required.PreToolUse[0].matcher)) return false;
+    hooks.PreToolUse = [...existing ?? [], ...required.PreToolUse];
+    settings.hooks = hooks;
+    await (0, import_promises.mkdir)(dir, { recursive: true });
+    await (0, import_promises.writeFile)(path, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+    return true;
+  }
 };
 
 // src/domain/task-store.ts
@@ -454,6 +477,7 @@ var WorkflowService = class {
 ${def.description}
 `);
     await this.repo.ensureClaudeMd();
+    await this.repo.ensureHooks();
     return data;
   }
   /** next: 获取下一个可执行任务（含依赖上下文） */
@@ -599,6 +623,7 @@ ${detail}
   async setup() {
     const existing = await this.repo.loadProgress();
     const wrote = await this.repo.ensureClaudeMd();
+    await this.repo.ensureHooks();
     const lines = [];
     if (existing && (existing.status === "running" || existing.status === "finishing")) {
       const done = existing.tasks.filter((t) => t.status === "done").length;
