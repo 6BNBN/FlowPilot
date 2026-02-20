@@ -18,7 +18,9 @@ function generateClaudeMdBlock(): string {
 
 ### On Session Start
 Run \`node flow.js resume\`:
-- If unfinished workflow → enter **Execution Loop**
+- If unfinished workflow → check user request:
+  - User says "开始" / "继续" / describes next requirement → enter **Execution Loop**
+  - User asks an unrelated question or ad-hoc task → handle via **Ad-hoc Dispatch** first, then remind user the workflow is paused
 - If no workflow → **Smart Routing** based on user request:
 
 ### Smart Routing (no active workflow)
