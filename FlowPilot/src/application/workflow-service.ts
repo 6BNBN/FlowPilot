@@ -142,7 +142,7 @@ export class WorkflowService {
       await this.repo.saveProgress(data);
       await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
       await this.updateSummary(data);
-      autoCommit(id, task.title, summaryLine);
+      autoCommit(id, task.title, summaryLine, files);
 
       const doneCount = data.tasks.filter(t => t.status === 'done').length;
       const msg = `任务 ${id} 完成 (${doneCount}/${data.tasks.length}) [已自动提交]`;
