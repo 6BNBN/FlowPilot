@@ -46,25 +46,28 @@ EOF
 Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, indented lines = description.
 
 ### Execution Loop
-1. Run \`node flow.js next --batch\`.
-2. For **EVERY** task in batch, dispatch a sub-agent via Task tool. **ALL Task calls in one message.** Include in each prompt:
-   - The "context" section from flow next output
-   - Task description and type
-   - Checkpoint instructions (copy verbatim):
-     > On success: \`echo 'one-line summary' | node flow.js checkpoint <id> --files file1 file2 ...\`
-     > On failure: \`node flow.js checkpoint <id> FAILED\`
-     > \`--files\` MUST list every file you created or modified. This ensures parallel tasks get isolated git commits.
-3. **After ALL sub-agents return, verify checkpoints**: run \`node flow.js status\`. If any batch task is still \`active\` (sub-agent failed to checkpoint), run checkpoint as fallback:
-   \`echo 'summary extracted from sub-agent result' | node flow.js checkpoint <id>\`
-   **NEVER proceed to next batch with active tasks.**
+1. Run \`node flow.js next --batch\`. **NOTE: this command will REFUSE to return tasks if any previous task is still \`active\`. You must checkpoint or resume first.**
+2. The output already contains checkpoint commands per task. For **EVERY** task in batch, dispatch a sub-agent via Task tool. **ALL Task calls in one message.** Copy the ENTIRE task block (including checkpoint commands) into each sub-agent prompt verbatim.
+3. **After ALL sub-agents return**: run \`node flow.js status\`.
+   - If any task is still \`active\` → sub-agent failed to checkpoint. Run fallback: \`echo 'summary from sub-agent output' | node flow.js checkpoint <id> --files file1 file2\`
+   - **Do NOT call \`node flow.js next\` until zero active tasks remain** (the command will error anyway).
 4. Loop back to step 1.
-5. When no tasks remain, run \`node flow.js finish\`.
+5. When \`next\` returns "全部完成", enter **Finalization**.
 
-### Sub-Agent Rules
-- **MUST run checkpoint with --files as final action** (Iron Rule #4). Sequence: do work → \`echo 'summary' | node flow.js checkpoint <id> --files file1 file2 ...\` → reply "Task <id> done."
-- Search for matching Skills or MCP tools first. If found, MUST use them.
-- type=frontend → /frontend-design, type=backend → /feature-dev, type=general → match or execute directly
-- Unfamiliar APIs → query context7 MCP first. Never guess.
+### Sub-Agent Prompt Template
+Each sub-agent prompt MUST contain these sections in order:
+1. Task block from \`next\` output (title, type, description, checkpoint commands, context)
+2. Search for matching Skills or MCP tools first. If found, MUST use them. Skill routing: type=frontend → /frontend-design, type=backend → /feature-dev, type=general → match or execute directly
+3. Unfamiliar APIs → query context7 MCP first. Never guess.
+
+### Sub-Agent Checkpoint (Iron Rule #4 — most common violation)
+Sub-agent's LAST Bash command before replying MUST be:
+\`\`\`
+echo '一句话摘要' | node flow.js checkpoint <id> --files file1 file2 ...
+\`\`\`
+- \`--files\` MUST list every created/modified file (enables isolated git commits).
+- If task failed: \`echo 'FAILED' | node flow.js checkpoint <id>\`
+- If sub-agent replies WITHOUT running checkpoint → protocol failure. Main agent MUST run fallback checkpoint in step 3.
 
 ### Security Rules (sub-agents MUST follow)
 - SQL: parameterized queries only. XSS: no unsanitized v-html/innerHTML.
@@ -72,10 +75,11 @@ Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, i
 - Input: validate at entry points. Never log passwords. Never commit .env.
 
 ### Finalization (MANDATORY — skipping = protocol failure)
-1. Dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
-2. Run \`node flow.js review\` to unlock finish.
-3. Run \`node flow.js finish\`.
-**finish will REFUSE if review has not been executed.**
+1. Run \`node flow.js finish\` — runs verify (build/test/lint). If fail → dispatch sub-agent to fix → retry finish.
+2. When finish returns "验证通过，请派子Agent执行 code-review" → dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
+3. Run \`node flow.js review\` to mark code-review done.
+4. Run \`node flow.js finish\` again — verify passes + review done → final commit → idle.
+**Loop: finish(verify) → review(code-review) → fix → finish again. Both gates must pass.**
 
 <!-- flowpilot:end -->`;
 }

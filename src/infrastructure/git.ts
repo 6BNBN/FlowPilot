@@ -45,6 +45,14 @@ function commitIn(cwd: string, files: string[] | null, msg: string): void {
   }
 }
 
+/** 清理未提交的变更（resume时调用） */
+export function gitCleanup(): void {
+  try {
+    execSync('git checkout .', { stdio: 'pipe' });
+    execSync('git clean -fd', { stdio: 'pipe' });
+  } catch {}
+}
+
 /** 自动 git add + commit，files 指定只提交特定文件 */
 export function autoCommit(taskId: string, title: string, summary: string, files?: string[]): void {
   try {

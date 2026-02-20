@@ -34,6 +34,9 @@ export function formatTask(task: TaskEntry, context: string): string {
   if (task.description) {
     lines.push(`描述: ${task.description}`);
   }
+  lines.push('', '--- checkpoint指令（必须包含在sub-agent prompt中） ---');
+  lines.push(`完成时: echo '一句话摘要' | node flow.js checkpoint ${task.id} --files 修改的文件1 修改的文件2`);
+  lines.push(`失败时: echo 'FAILED' | node flow.js checkpoint ${task.id}`);
   if (context) {
     lines.push('', '--- 上下文 ---', context);
   }

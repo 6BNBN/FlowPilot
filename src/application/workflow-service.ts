@@ -7,7 +7,7 @@ import type { ProgressData, TaskEntry } from '../domain/types';
 import type { WorkflowDefinition } from '../domain/workflow';
 import type { WorkflowRepository } from '../infrastructure/repository';
 import { makeTaskId, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
-import { autoCommit } from '../infrastructure/git';
+import { autoCommit, gitCleanup } from '../infrastructure/git';
 import { runVerify } from '../infrastructure/verify';
 
 export class WorkflowService {
@@ -54,6 +54,11 @@ export class WorkflowService {
       const data = await this.requireProgress();
       if (isAllDone(data.tasks)) return null;
 
+      const active = data.tasks.filter(t => t.status === 'active');
+      if (active.length) {
+        throw new Error(`有 ${active.length} 个任务仍为 active 状态（${active.map(t => t.id).join(',')}），请先执行 node flow.js status 检查并补 checkpoint，或 node flow.js resume 重置`);
+      }
+
       const task = findNextTask(data.tasks);
       if (!task) {
         await this.repo.saveProgress(data); // persist cascadeSkip changes
@@ -86,6 +91,11 @@ export class WorkflowService {
     try {
       const data = await this.requireProgress();
       if (isAllDone(data.tasks)) return [];
+
+      const active = data.tasks.filter(t => t.status === 'active');
+      if (active.length) {
+        throw new Error(`有 ${active.length} 个任务仍为 active 状态（${active.map(t => t.id).join(',')}），请先执行 node flow.js status 检查并补 checkpoint，或 node flow.js resume 重置`);
+      }
 
       const tasks = findParallelTasks(data.tasks);
       if (!tasks.length) {
@@ -162,6 +172,7 @@ export class WorkflowService {
 
     const resetId = resumeProgress(data);
     await this.repo.saveProgress(data);
+    if (resetId) gitCleanup();
 
     const doneCount = data.tasks.filter(t => t.status === 'done').length;
     const total = data.tasks.length;
@@ -235,26 +246,29 @@ export class WorkflowService {
     return '代码审查已通过，请执行 node flow.js finish 完成收尾';
   }
 
-  /** finish: 智能收尾 - 验证+总结+回到待命 */
+  /** finish: 智能收尾 - 先verify，review后置 */
   async finish(): Promise<string> {
     const data = await this.requireProgress();
     if (data.status === 'idle' || data.status === 'completed') return '工作流已完成，无需重复finish';
-    if (data.status !== 'finishing') throw new Error('请先执行 node flow.js review 完成代码审查');
     if (!isAllDone(data.tasks)) throw new Error('还有未完成的任务，请先完成所有任务');
 
-    // 自动检测并执行验证脚本
+    // 1. 先验证（廉价操作）
     const result = runVerify(this.repo.projectRoot());
     if (!result.passed) {
       return `验证失败: ${result.error}\n请修复后重新执行 node flow.js finish`;
     }
 
-    // 统计
+    // 2. 验证通过，检查review是否已完成
+    if (data.status !== 'finishing') {
+      return '验证通过，请派子Agent执行 code-review，完成后执行 node flow.js review，再执行 node flow.js finish';
+    }
+
+    // 3. verify + review 都通过 → 最终提交
     const done = data.tasks.filter(t => t.status === 'done');
     const skipped = data.tasks.filter(t => t.status === 'skipped');
     const failed = data.tasks.filter(t => t.status === 'failed');
     const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : '', failed.length ? `${failed.length} failed` : ''].filter(Boolean).join(', ');
 
-    // 清理 .workflow/ 然后最终提交（包含清理）
     await this.repo.clearAll();
     const titles = done.map(t => `- ${t.id}: ${t.title}`).join('\n');
     autoCommit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`);

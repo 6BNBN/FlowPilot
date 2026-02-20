@@ -41,25 +41,28 @@ EOF
 Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, indented lines = description.
 
 ### Execution Loop
-1. Run \`node flow.js next --batch\`.
-2. For **EVERY** task in batch, dispatch a sub-agent via Task tool. **ALL Task calls in one message.** Include in each prompt:
-   - The "context" section from flow next output
-   - Task description and type
-   - Checkpoint instructions (copy verbatim):
-     > On success: \`echo 'one-line summary' | node flow.js checkpoint <id> --files file1 file2 ...\`
-     > On failure: \`node flow.js checkpoint <id> FAILED\`
-     > \`--files\` MUST list every file you created or modified. This ensures parallel tasks get isolated git commits.
-3. **After ALL sub-agents return, verify checkpoints**: run \`node flow.js status\`. If any batch task is still \`active\` (sub-agent failed to checkpoint), run checkpoint as fallback:
-   \`echo 'summary extracted from sub-agent result' | node flow.js checkpoint <id>\`
-   **NEVER proceed to next batch with active tasks.**
+1. Run \`node flow.js next --batch\`. **NOTE: this command will REFUSE to return tasks if any previous task is still \`active\`. You must checkpoint or resume first.**
+2. The output already contains checkpoint commands per task. For **EVERY** task in batch, dispatch a sub-agent via Task tool. **ALL Task calls in one message.** Copy the ENTIRE task block (including checkpoint commands) into each sub-agent prompt verbatim.
+3. **After ALL sub-agents return**: run \`node flow.js status\`.
+   - If any task is still \`active\` \u2192 sub-agent failed to checkpoint. Run fallback: \`echo 'summary from sub-agent output' | node flow.js checkpoint <id> --files file1 file2\`
+   - **Do NOT call \`node flow.js next\` until zero active tasks remain** (the command will error anyway).
 4. Loop back to step 1.
-5. When no tasks remain, run \`node flow.js finish\`.
+5. When \`next\` returns "\u5168\u90E8\u5B8C\u6210", enter **Finalization**.
 
-### Sub-Agent Rules
-- **MUST run checkpoint with --files as final action** (Iron Rule #4). Sequence: do work \u2192 \`echo 'summary' | node flow.js checkpoint <id> --files file1 file2 ...\` \u2192 reply "Task <id> done."
-- Search for matching Skills or MCP tools first. If found, MUST use them.
-- type=frontend \u2192 /frontend-design, type=backend \u2192 /feature-dev, type=general \u2192 match or execute directly
-- Unfamiliar APIs \u2192 query context7 MCP first. Never guess.
+### Sub-Agent Prompt Template
+Each sub-agent prompt MUST contain these sections in order:
+1. Task block from \`next\` output (title, type, description, checkpoint commands, context)
+2. Search for matching Skills or MCP tools first. If found, MUST use them. Skill routing: type=frontend \u2192 /frontend-design, type=backend \u2192 /feature-dev, type=general \u2192 match or execute directly
+3. Unfamiliar APIs \u2192 query context7 MCP first. Never guess.
+
+### Sub-Agent Checkpoint (Iron Rule #4 \u2014 most common violation)
+Sub-agent's LAST Bash command before replying MUST be:
+\`\`\`
+echo '\u4E00\u53E5\u8BDD\u6458\u8981' | node flow.js checkpoint <id> --files file1 file2 ...
+\`\`\`
+- \`--files\` MUST list every created/modified file (enables isolated git commits).
+- If task failed: \`echo 'FAILED' | node flow.js checkpoint <id>\`
+- If sub-agent replies WITHOUT running checkpoint \u2192 protocol failure. Main agent MUST run fallback checkpoint in step 3.
 
 ### Security Rules (sub-agents MUST follow)
 - SQL: parameterized queries only. XSS: no unsanitized v-html/innerHTML.
@@ -67,10 +70,11 @@ Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, i
 - Input: validate at entry points. Never log passwords. Never commit .env.
 
 ### Finalization (MANDATORY \u2014 skipping = protocol failure)
-1. Dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
-2. Run \`node flow.js review\` to unlock finish.
-3. Run \`node flow.js finish\`.
-**finish will REFUSE if review has not been executed.**
+1. Run \`node flow.js finish\` \u2014 runs verify (build/test/lint). If fail \u2192 dispatch sub-agent to fix \u2192 retry finish.
+2. When finish returns "\u9A8C\u8BC1\u901A\u8FC7\uFF0C\u8BF7\u6D3E\u5B50Agent\u6267\u884C code-review" \u2192 dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
+3. Run \`node flow.js review\` to mark code-review done.
+4. Run \`node flow.js finish\` again \u2014 verify passes + review done \u2192 final commit \u2192 idle.
+**Loop: finish(verify) \u2192 review(code-review) \u2192 fix \u2192 finish again. Both gates must pass.**
 
 <!-- flowpilot:end -->`;
 }
@@ -415,6 +419,13 @@ function commitIn(cwd, files, msg) {
     console.error(`[FlowPilot] git commit \u5931\u8D25 (${cwd}): ${e.stderr || e.message}`);
   }
 }
+function gitCleanup() {
+  try {
+    (0, import_node_child_process.execSync)("git checkout .", { stdio: "pipe" });
+    (0, import_node_child_process.execSync)("git clean -fd", { stdio: "pipe" });
+  } catch {
+  }
+}
 function autoCommit(taskId, title, summary, files) {
   try {
     const msg = `task-${taskId}: ${title}
@@ -555,6 +566,10 @@ ${def.description}
     try {
       const data = await this.requireProgress();
       if (isAllDone(data.tasks)) return null;
+      const active = data.tasks.filter((t) => t.status === "active");
+      if (active.length) {
+        throw new Error(`\u6709 ${active.length} \u4E2A\u4EFB\u52A1\u4ECD\u4E3A active \u72B6\u6001\uFF08${active.map((t) => t.id).join(",")}\uFF09\uFF0C\u8BF7\u5148\u6267\u884C node flow.js status \u68C0\u67E5\u5E76\u8865 checkpoint\uFF0C\u6216 node flow.js resume \u91CD\u7F6E`);
+      }
       const task = findNextTask(data.tasks);
       if (!task) {
         await this.repo.saveProgress(data);
@@ -581,6 +596,10 @@ ${def.description}
     try {
       const data = await this.requireProgress();
       if (isAllDone(data.tasks)) return [];
+      const active = data.tasks.filter((t) => t.status === "active");
+      if (active.length) {
+        throw new Error(`\u6709 ${active.length} \u4E2A\u4EFB\u52A1\u4ECD\u4E3A active \u72B6\u6001\uFF08${active.map((t) => t.id).join(",")}\uFF09\uFF0C\u8BF7\u5148\u6267\u884C node flow.js status \u68C0\u67E5\u5E76\u8865 checkpoint\uFF0C\u6216 node flow.js resume \u91CD\u7F6E`);
+      }
       const tasks = findParallelTasks(data.tasks);
       if (!tasks.length) {
         await this.repo.saveProgress(data);
@@ -647,6 +666,7 @@ ${detail}
 \u6B63\u5728\u6536\u5C3E\u9636\u6BB5\uFF0C\u8BF7\u6267\u884C node flow.js finish`;
     const resetId = resumeProgress(data);
     await this.repo.saveProgress(data);
+    if (resetId) gitCleanup();
     const doneCount = data.tasks.filter((t) => t.status === "done").length;
     const total = data.tasks.length;
     if (resetId) {
@@ -721,16 +741,18 @@ ${detail}
     await this.repo.saveProgress(data);
     return "\u4EE3\u7801\u5BA1\u67E5\u5DF2\u901A\u8FC7\uFF0C\u8BF7\u6267\u884C node flow.js finish \u5B8C\u6210\u6536\u5C3E";
   }
-  /** finish: 智能收尾 - 验证+总结+回到待命 */
+  /** finish: 智能收尾 - 先verify，review后置 */
   async finish() {
     const data = await this.requireProgress();
     if (data.status === "idle" || data.status === "completed") return "\u5DE5\u4F5C\u6D41\u5DF2\u5B8C\u6210\uFF0C\u65E0\u9700\u91CD\u590Dfinish";
-    if (data.status !== "finishing") throw new Error("\u8BF7\u5148\u6267\u884C node flow.js review \u5B8C\u6210\u4EE3\u7801\u5BA1\u67E5");
     if (!isAllDone(data.tasks)) throw new Error("\u8FD8\u6709\u672A\u5B8C\u6210\u7684\u4EFB\u52A1\uFF0C\u8BF7\u5148\u5B8C\u6210\u6240\u6709\u4EFB\u52A1");
     const result = runVerify(this.repo.projectRoot());
     if (!result.passed) {
       return `\u9A8C\u8BC1\u5931\u8D25: ${result.error}
 \u8BF7\u4FEE\u590D\u540E\u91CD\u65B0\u6267\u884C node flow.js finish`;
+    }
+    if (data.status !== "finishing") {
+      return "\u9A8C\u8BC1\u901A\u8FC7\uFF0C\u8BF7\u6D3E\u5B50Agent\u6267\u884C code-review\uFF0C\u5B8C\u6210\u540E\u6267\u884C node flow.js review\uFF0C\u518D\u6267\u884C node flow.js finish";
     }
     const done = data.tasks.filter((t) => t.status === "done");
     const skipped = data.tasks.filter((t) => t.status === "skipped");
@@ -820,6 +842,9 @@ function formatTask(task, context) {
   if (task.description) {
     lines.push(`\u63CF\u8FF0: ${task.description}`);
   }
+  lines.push("", "--- checkpoint\u6307\u4EE4\uFF08\u5FC5\u987B\u5305\u542B\u5728sub-agent prompt\u4E2D\uFF09 ---");
+  lines.push(`\u5B8C\u6210\u65F6: echo '\u4E00\u53E5\u8BDD\u6458\u8981' | node flow.js checkpoint ${task.id} --files \u4FEE\u6539\u7684\u6587\u4EF61 \u4FEE\u6539\u7684\u6587\u4EF62`);
+  lines.push(`\u5931\u8D25\u65F6: echo 'FAILED' | node flow.js checkpoint ${task.id}`);
   if (context) {
     lines.push("", "--- \u4E0A\u4E0B\u6587 ---", context);
   }
