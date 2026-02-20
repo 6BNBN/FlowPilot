@@ -259,7 +259,7 @@ export class WorkflowService {
     data.current = null;
     await this.repo.saveProgress(data);
     autoCommit('finish', data.name, stats);
-    await this.repo.clearContext();
+    await this.repo.clearAll();
 
     const scripts = result.scripts.length ? result.scripts.join(', ') : '无验证脚本';
     return `验证通过: ${scripts}\n${stats}\n已提交最终commit，工作流回到待命状态\n等待下一个需求...`;
