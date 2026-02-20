@@ -21,7 +21,7 @@ Run \`node flow.js resume\`:
 1. **NEVER use TaskCreate / TaskUpdate / TaskList** \u2014 use ONLY \`node flow.js xxx\`.
 2. **Main agent can ONLY use Bash, Task, and Skill** \u2014 Edit, Write, Read, Glob, Grep, Explore are ALL FORBIDDEN. To read any file (including docs), dispatch a sub-agent.
 3. **ALWAYS dispatch via Task tool** \u2014 one Task call per task. N tasks = N Task calls **in a single message** for parallel execution.
-4. **Sub-agents MUST run checkpoint before replying** \u2014 \`echo 'summary' | node flow.js checkpoint <id>\` is the LAST command before reply. Skipping checkpoint = protocol failure. This triggers per-task git commit; without it, parallel tasks collapse into one commit.
+4. **Sub-agents MUST run checkpoint with --files before replying** \u2014 \`echo 'summary' | node flow.js checkpoint <id> --files file1 file2\` is the LAST command before reply. MUST list all created/modified files. Skipping = protocol failure.
 
 ### Requirement Decomposition
 1. Dispatch a sub-agent to read requirement docs and return a summary.
@@ -44,9 +44,9 @@ Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, i
    - The "context" section from flow next output
    - Task description and type
    - Checkpoint instructions (copy verbatim):
-     > On success: \`echo 'one-line summary' | node flow.js checkpoint <id>\`
+     > On success: \`echo 'one-line summary' | node flow.js checkpoint <id> --files file1 file2 ...\`
      > On failure: \`node flow.js checkpoint <id> FAILED\`
-     > Then reply ONLY "Task <id> done."
+     > \`--files\` MUST list every file you created or modified. This ensures parallel tasks get isolated git commits.
 3. **After ALL sub-agents return, run checkpoint for each task** (if sub-agent didn't):
    \`echo 'summary extracted from sub-agent result' | node flow.js checkpoint <id>\`
    This ensures context is recorded and git commit is made per-task. **NEVER skip to next batch without checkpointing.**
@@ -54,7 +54,7 @@ Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, i
 5. When no tasks remain, run \`node flow.js finish\`.
 
 ### Sub-Agent Rules
-- **MUST run checkpoint as final action** (Iron Rule #4). Sequence: do work \u2192 \`echo 'summary' | node flow.js checkpoint <id>\` \u2192 reply "Task <id> done." Nothing else after checkpoint.
+- **MUST run checkpoint with --files as final action** (Iron Rule #4). Sequence: do work \u2192 \`echo 'summary' | node flow.js checkpoint <id> --files file1 file2 ...\` \u2192 reply "Task <id> done."
 - Search for matching Skills or MCP tools first. If found, MUST use them.
 - type=frontend \u2192 /frontend-design, type=backend \u2192 /feature-dev, type=general \u2192 match or execute directly
 - Unfamiliar APIs \u2192 query context7 MCP first. Never guess.
@@ -373,9 +373,13 @@ function parseTasksMarkdown(markdown) {
 
 // src/infrastructure/git.ts
 var import_node_child_process = require("child_process");
-function autoCommit(taskId, title, summary) {
+function autoCommit(taskId, title, summary, files) {
   try {
-    (0, import_node_child_process.execSync)("git add -A", { stdio: "pipe" });
+    if (files?.length) {
+      for (const f of files) (0, import_node_child_process.execSync)(`git add ${JSON.stringify(f)}`, { stdio: "pipe" });
+    } else {
+      (0, import_node_child_process.execSync)("git add -A", { stdio: "pipe" });
+    }
     const msg = `task-${taskId}: ${title}
 
 ${summary}`;
@@ -543,7 +547,7 @@ ${def.description}
     }
   }
   /** checkpoint: 记录任务完成 */
-  async checkpoint(id, detail) {
+  async checkpoint(id, detail, files) {
     await this.repo.lock();
     try {
       const data = await this.requireProgress();
@@ -566,7 +570,7 @@ ${def.description}
 ${detail}
 `);
       await this.updateSummary(data);
-      autoCommit(id, task.title, summaryLine);
+      autoCommit(id, task.title, summaryLine, files);
       const doneCount = data.tasks.filter((t) => t.status === "done").length;
       const msg = `\u4EFB\u52A1 ${id} \u5B8C\u6210 (${doneCount}/${data.tasks.length}) [\u5DF2\u81EA\u52A8\u63D0\u4EA4]`;
       return isAllDone(data.tasks) ? msg + "\n\u5168\u90E8\u4EFB\u52A1\u5DF2\u5B8C\u6210\uFF0C\u8BF7\u6267\u884C node flow.js finish \u8FDB\u884C\u6536\u5C3E" : msg;
@@ -843,16 +847,24 @@ var CLI = class {
       case "checkpoint": {
         const id = rest[0];
         if (!id) throw new Error("\u9700\u8981\u4EFB\u52A1ID");
+        const filesIdx = rest.indexOf("--files");
         const fileIdx = rest.indexOf("--file");
         let detail;
+        let files;
+        if (filesIdx >= 0) {
+          files = [];
+          for (let i = filesIdx + 1; i < rest.length && !rest[i].startsWith("--"); i++) {
+            files.push(rest[i]);
+          }
+        }
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
           detail = (0, import_fs2.readFileSync)(rest[fileIdx + 1], "utf-8");
-        } else if (rest.length > 1 && fileIdx < 0) {
+        } else if (rest.length > 1 && fileIdx < 0 && filesIdx < 0) {
           detail = rest.slice(1).join(" ");
         } else {
           detail = await readStdinIfPiped();
         }
-        return await s.checkpoint(id, detail.trim());
+        return await s.checkpoint(id, detail.trim(), files);
       }
       case "skip": {
         const id = rest[0];
@@ -885,7 +897,7 @@ var CLI = class {
 var USAGE = `\u7528\u6CD5: node flow.js <command>
   init [--force]       \u521D\u59CB\u5316\u5DE5\u4F5C\u6D41 (stdin\u4F20\u5165\u4EFB\u52A1markdown\uFF0C\u65E0stdin\u5219\u63A5\u7BA1\u9879\u76EE)
   next [--batch]       \u83B7\u53D6\u4E0B\u4E00\u4E2A\u5F85\u6267\u884C\u4EFB\u52A1 (--batch \u8FD4\u56DE\u6240\u6709\u53EF\u5E76\u884C\u4EFB\u52A1)
-  checkpoint <id>      \u8BB0\u5F55\u4EFB\u52A1\u5B8C\u6210 [--file <path> | stdin | \u5185\u8054\u6587\u672C]
+  checkpoint <id>      \u8BB0\u5F55\u4EFB\u52A1\u5B8C\u6210 [--file <path> | stdin | \u5185\u8054\u6587\u672C] [--files f1 f2 ...]
   skip <id>            \u624B\u52A8\u8DF3\u8FC7\u4EFB\u52A1
   finish               \u667A\u80FD\u6536\u5C3E (\u9A8C\u8BC1+\u603B\u7ED3+\u56DE\u5230\u5F85\u547D)
   status               \u67E5\u770B\u5168\u5C40\u8FDB\u5EA6

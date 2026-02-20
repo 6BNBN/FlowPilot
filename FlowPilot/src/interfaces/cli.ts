@@ -115,7 +115,7 @@ export class CLI {
 const USAGE = `用法: node flow.js <command>
   init [--force]       初始化工作流 (stdin传入任务markdown，无stdin则接管项目)
   next [--batch]       获取下一个待执行任务 (--batch 返回所有可并行任务)
-  checkpoint <id>      记录任务完成 [--file <path> | stdin | 内联文本]
+  checkpoint <id>      记录任务完成 [--file <path> | stdin | 内联文本] [--files f1 f2 ...]
   skip <id>            手动跳过任务
   finish               智能收尾 (验证+总结+回到待命)
   status               查看全局进度
