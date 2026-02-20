@@ -4,15 +4,46 @@
 // src/infrastructure/fs-repository.ts
 var import_promises = require("fs/promises");
 var import_path = require("path");
+var import_fs = require("fs");
 var FsWorkflowRepository = class {
   root;
   ctxDir;
+  base;
   constructor(basePath) {
+    this.base = basePath;
     this.root = (0, import_path.join)(basePath, ".workflow");
     this.ctxDir = (0, import_path.join)(this.root, "context");
   }
+  projectRoot() {
+    return this.base;
+  }
   async ensure(dir) {
     await (0, import_promises.mkdir)(dir, { recursive: true });
+  }
+  /** 文件锁：用 O_EXCL 创建 lockfile，防止并发读写 */
+  async lock(maxWait = 5e3) {
+    await this.ensure(this.root);
+    const lockPath = (0, import_path.join)(this.root, ".lock");
+    const start = Date.now();
+    while (Date.now() - start < maxWait) {
+      try {
+        const fd = (0, import_fs.openSync)(lockPath, "wx");
+        (0, import_fs.closeSync)(fd);
+        return;
+      } catch {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    }
+    try {
+      await (0, import_promises.unlink)(lockPath);
+    } catch {
+    }
+  }
+  async unlock() {
+    try {
+      await (0, import_promises.unlink)((0, import_path.join)(this.root, ".lock"));
+    } catch {
+    }
   }
   // --- progress.md 读写 ---
   async saveProgress(data) {
@@ -127,7 +158,7 @@ var FsWorkflowRepository = class {
 function makeTaskId(n) {
   return String(n).padStart(3, "0");
 }
-function findNextTask(tasks) {
+function cascadeSkip(tasks) {
   let changed = true;
   while (changed) {
     changed = false;
@@ -144,6 +175,9 @@ function findNextTask(tasks) {
       }
     }
   }
+}
+function findNextTask(tasks) {
+  cascadeSkip(tasks);
   for (const t of tasks) {
     if (t.status !== "pending") continue;
     const depsOk = t.deps.every((d) => {
@@ -191,22 +225,7 @@ function resumeProgress(data) {
   return null;
 }
 function findParallelTasks(tasks) {
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const t of tasks) {
-      if (t.status !== "pending") continue;
-      const blocked = t.deps.some((d) => {
-        const dep = tasks.find((x) => x.id === d);
-        return dep && (dep.status === "failed" || dep.status === "skipped");
-      });
-      if (blocked) {
-        t.status = "skipped";
-        t.summary = "\u4F9D\u8D56\u4EFB\u52A1\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7";
-        changed = true;
-      }
-    }
-  }
+  cascadeSkip(tasks);
   return tasks.filter((t) => {
     if (t.status !== "pending") return false;
     return t.deps.every((d) => {
@@ -495,69 +514,85 @@ ${def.description}
   }
   /** next: 获取下一个可执行任务（含依赖上下文） */
   async next() {
-    const data = await this.requireProgress();
-    if (isAllDone(data.tasks)) return null;
-    const task = findNextTask(data.tasks);
-    if (!task) return null;
-    task.status = "active";
-    data.current = task.id;
-    await this.repo.saveProgress(data);
-    const parts = [];
-    const summary = await this.repo.loadSummary();
-    if (summary) parts.push(summary);
-    for (const depId of task.deps) {
-      const ctx = await this.repo.loadTaskContext(depId);
-      if (ctx) parts.push(ctx);
-    }
-    return { task, context: parts.join("\n\n---\n\n") };
-  }
-  /** nextBatch: 获取所有可并行执行的任务 */
-  async nextBatch() {
-    const data = await this.requireProgress();
-    if (isAllDone(data.tasks)) return [];
-    const tasks = findParallelTasks(data.tasks);
-    if (!tasks.length) return [];
-    for (const t of tasks) t.status = "active";
-    data.current = tasks[0].id;
-    await this.repo.saveProgress(data);
-    const summary = await this.repo.loadSummary();
-    const results = [];
-    for (const task of tasks) {
+    await this.repo.lock();
+    try {
+      const data = await this.requireProgress();
+      if (isAllDone(data.tasks)) return null;
+      const task = findNextTask(data.tasks);
+      if (!task) return null;
+      task.status = "active";
+      data.current = task.id;
+      await this.repo.saveProgress(data);
       const parts = [];
+      const summary = await this.repo.loadSummary();
       if (summary) parts.push(summary);
       for (const depId of task.deps) {
         const ctx = await this.repo.loadTaskContext(depId);
         if (ctx) parts.push(ctx);
       }
-      results.push({ task, context: parts.join("\n\n---\n\n") });
+      return { task, context: parts.join("\n\n---\n\n") };
+    } finally {
+      await this.repo.unlock();
     }
-    return results;
+  }
+  /** nextBatch: 获取所有可并行执行的任务 */
+  async nextBatch() {
+    await this.repo.lock();
+    try {
+      const data = await this.requireProgress();
+      if (isAllDone(data.tasks)) return [];
+      const tasks = findParallelTasks(data.tasks);
+      if (!tasks.length) return [];
+      for (const t of tasks) t.status = "active";
+      data.current = tasks[0].id;
+      await this.repo.saveProgress(data);
+      const summary = await this.repo.loadSummary();
+      const results = [];
+      for (const task of tasks) {
+        const parts = [];
+        if (summary) parts.push(summary);
+        for (const depId of task.deps) {
+          const ctx = await this.repo.loadTaskContext(depId);
+          if (ctx) parts.push(ctx);
+        }
+        results.push({ task, context: parts.join("\n\n---\n\n") });
+      }
+      return results;
+    } finally {
+      await this.repo.unlock();
+    }
   }
   /** checkpoint: 记录任务完成 */
   async checkpoint(id, detail) {
-    const data = await this.requireProgress();
-    const task = data.tasks.find((t) => t.id === id);
-    if (!task) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
-    if (task.status !== "active" && task.status !== "pending") {
-      throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u65E0\u6CD5checkpoint`);
-    }
-    if (detail === "FAILED") {
-      const result = failTask(data, id);
+    await this.repo.lock();
+    try {
+      const data = await this.requireProgress();
+      const task = data.tasks.find((t) => t.id === id);
+      if (!task) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
+      if (task.status !== "active" && task.status !== "pending") {
+        throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u65E0\u6CD5checkpoint`);
+      }
+      if (detail === "FAILED") {
+        const result = failTask(data, id);
+        await this.repo.saveProgress(data);
+        return result === "retry" ? `\u4EFB\u52A1 ${id} \u5931\u8D25(\u7B2C${task.retries}\u6B21)\uFF0C\u5C06\u91CD\u8BD5` : `\u4EFB\u52A1 ${id} \u8FDE\u7EED\u5931\u8D253\u6B21\uFF0C\u5DF2\u8DF3\u8FC7`;
+      }
+      if (!detail.trim()) throw new Error(`\u4EFB\u52A1 ${id} checkpoint\u5185\u5BB9\u4E0D\u80FD\u4E3A\u7A7A`);
+      const summaryLine = detail.split("\n")[0].slice(0, 80);
+      completeTask(data, id, summaryLine);
       await this.repo.saveProgress(data);
-      return result === "retry" ? `\u4EFB\u52A1 ${id} \u5931\u8D25(\u7B2C${task.retries}\u6B21)\uFF0C\u5C06\u91CD\u8BD5` : `\u4EFB\u52A1 ${id} \u8FDE\u7EED\u5931\u8D253\u6B21\uFF0C\u5DF2\u8DF3\u8FC7`;
-    }
-    const summaryLine = detail.split("\n")[0].slice(0, 80);
-    completeTask(data, id, summaryLine);
-    await this.repo.saveProgress(data);
-    await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}
+      await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}
 
 ${detail}
 `);
-    await this.updateSummary(data);
-    autoCommit(id, task.title, summaryLine);
-    const doneCount = data.tasks.filter((t) => t.status === "done").length;
-    const msg = `\u4EFB\u52A1 ${id} \u5B8C\u6210 (${doneCount}/${data.tasks.length}) [\u5DF2\u81EA\u52A8\u63D0\u4EA4]`;
-    return isAllDone(data.tasks) ? msg + "\n\u5168\u90E8\u4EFB\u52A1\u5DF2\u5B8C\u6210\uFF0C\u8BF7\u6267\u884C node flow.js finish \u8FDB\u884C\u6536\u5C3E" : msg;
+      await this.updateSummary(data);
+      autoCommit(id, task.title, summaryLine);
+      const doneCount = data.tasks.filter((t) => t.status === "done").length;
+      const msg = `\u4EFB\u52A1 ${id} \u5B8C\u6210 (${doneCount}/${data.tasks.length}) [\u5DF2\u81EA\u52A8\u63D0\u4EA4]`;
+      return isAllDone(data.tasks) ? msg + "\n\u5168\u90E8\u4EFB\u52A1\u5DF2\u5B8C\u6210\uFF0C\u8BF7\u6267\u884C node flow.js finish \u8FDB\u884C\u6536\u5C3E" : msg;
+    } finally {
+      await this.repo.unlock();
+    }
   }
   /** resume: 中断恢复 */
   async resume() {
@@ -643,7 +678,7 @@ ${detail}
     if (!isAllDone(data.tasks)) throw new Error("\u8FD8\u6709\u672A\u5B8C\u6210\u7684\u4EFB\u52A1\uFF0C\u8BF7\u5148\u5B8C\u6210\u6240\u6709\u4EFB\u52A1");
     data.status = "finishing";
     await this.repo.saveProgress(data);
-    const result = runVerify(process.cwd());
+    const result = runVerify(this.repo.projectRoot());
     if (!result.passed) {
       return `\u9A8C\u8BC1\u5931\u8D25: ${result.error}
 \u8BF7\u4FEE\u590D\u540E\u91CD\u65B0\u6267\u884C node flow.js finish`;
@@ -715,7 +750,7 @@ ${changeSummary}
 };
 
 // src/interfaces/cli.ts
-var import_fs = require("fs");
+var import_fs2 = require("fs");
 
 // src/interfaces/formatter.ts
 var ICON = {
@@ -764,13 +799,23 @@ function formatBatch(items) {
 function isTTY() {
   return process.stdin.isTTY === true;
 }
-function readStdinIfPiped() {
+function readStdinIfPiped(timeout = 3e4) {
   if (isTTY()) return Promise.resolve("");
   return new Promise((resolve, reject) => {
     const chunks = [];
+    const timer = setTimeout(() => {
+      process.stdin.destroy();
+      resolve("");
+    }, timeout);
     process.stdin.on("data", (c) => chunks.push(c));
-    process.stdin.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    process.stdin.on("error", reject);
+    process.stdin.on("end", () => {
+      clearTimeout(timer);
+      resolve(Buffer.concat(chunks).toString("utf-8"));
+    });
+    process.stdin.on("error", (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
   });
 }
 
@@ -820,7 +865,7 @@ var CLI = class {
         const fileIdx = rest.indexOf("--file");
         let detail;
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
-          detail = (0, import_fs.readFileSync)(rest[fileIdx + 1], "utf-8");
+          detail = (0, import_fs2.readFileSync)(rest[fileIdx + 1], "utf-8");
         } else if (rest.length > 1 && fileIdx < 0) {
           detail = rest.slice(1).join(" ");
         } else {

@@ -3,8 +3,9 @@
  * @description 文件系统仓储 - 基于 .workflow/ 目录的分层记忆存储
  */
 
-import { mkdir, readFile, writeFile } from 'fs/promises';
+import { mkdir, readFile, writeFile, unlink } from 'fs/promises';
 import { join } from 'path';
+import { openSync, closeSync, existsSync } from 'fs';
 import type { ProgressData, TaskEntry } from '../domain/types';
 import type { WorkflowRepository } from './repository';
 
@@ -12,13 +13,40 @@ export class FsWorkflowRepository implements WorkflowRepository {
   private readonly root: string;
   private readonly ctxDir: string;
 
+  private readonly base: string;
+
   constructor(basePath: string) {
+    this.base = basePath;
     this.root = join(basePath, '.workflow');
     this.ctxDir = join(this.root, 'context');
   }
 
+  projectRoot(): string { return this.base; }
+
   private async ensure(dir: string): Promise<void> {
     await mkdir(dir, { recursive: true });
+  }
+
+  /** 文件锁：用 O_EXCL 创建 lockfile，防止并发读写 */
+  async lock(maxWait = 5000): Promise<void> {
+    await this.ensure(this.root);
+    const lockPath = join(this.root, '.lock');
+    const start = Date.now();
+    while (Date.now() - start < maxWait) {
+      try {
+        const fd = openSync(lockPath, 'wx');
+        closeSync(fd);
+        return;
+      } catch {
+        await new Promise(r => setTimeout(r, 50));
+      }
+    }
+    // 超时强制清除死锁
+    try { await unlink(lockPath); } catch {}
+  }
+
+  async unlock(): Promise<void> {
+    try { await unlink(join(this.root, '.lock')); } catch {}
   }
 
   // --- progress.md 读写 ---

@@ -25,4 +25,9 @@ export interface WorkflowRepository {
   loadTasks(): Promise<string | null>;
   /** 确保CLAUDE.md引用了protocol */
   ensureClaudeMd(): Promise<boolean>;
+  /** 项目根目录 */
+  projectRoot(): string;
+  /** 文件锁 */
+  lock(maxWait?: number): Promise<void>;
+  unlock(): Promise<void>;
 }

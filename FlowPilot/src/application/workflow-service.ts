@@ -49,85 +49,101 @@ export class WorkflowService {
 
   /** next: 获取下一个可执行任务（含依赖上下文） */
   async next(): Promise<{ task: TaskEntry; context: string } | null> {
-    const data = await this.requireProgress();
-    if (isAllDone(data.tasks)) return null;
+    await this.repo.lock();
+    try {
+      const data = await this.requireProgress();
+      if (isAllDone(data.tasks)) return null;
 
-    const task = findNextTask(data.tasks);
-    if (!task) return null;
+      const task = findNextTask(data.tasks);
+      if (!task) return null;
 
-    task.status = 'active';
-    data.current = task.id;
-    await this.repo.saveProgress(data);
+      task.status = 'active';
+      data.current = task.id;
+      await this.repo.saveProgress(data);
 
-    // 拼装上下文：summary + 依赖任务产出
-    const parts: string[] = [];
-    const summary = await this.repo.loadSummary();
-    if (summary) parts.push(summary);
-
-    for (const depId of task.deps) {
-      const ctx = await this.repo.loadTaskContext(depId);
-      if (ctx) parts.push(ctx);
-    }
-
-    return { task, context: parts.join('\n\n---\n\n') };
-  }
-
-  /** nextBatch: 获取所有可并行执行的任务 */
-  async nextBatch(): Promise<{ task: TaskEntry; context: string }[]> {
-    const data = await this.requireProgress();
-    if (isAllDone(data.tasks)) return [];
-
-    const tasks = findParallelTasks(data.tasks);
-    if (!tasks.length) return [];
-
-    for (const t of tasks) t.status = 'active';
-    data.current = tasks[0].id;
-    await this.repo.saveProgress(data);
-
-    const summary = await this.repo.loadSummary();
-    const results: { task: TaskEntry; context: string }[] = [];
-
-    for (const task of tasks) {
+      // 拼装上下文：summary + 依赖任务产出
       const parts: string[] = [];
+      const summary = await this.repo.loadSummary();
       if (summary) parts.push(summary);
+
       for (const depId of task.deps) {
         const ctx = await this.repo.loadTaskContext(depId);
         if (ctx) parts.push(ctx);
       }
-      results.push({ task, context: parts.join('\n\n---\n\n') });
+
+      return { task, context: parts.join('\n\n---\n\n') };
+    } finally {
+      await this.repo.unlock();
     }
-    return results;
+  }
+
+  /** nextBatch: 获取所有可并行执行的任务 */
+  async nextBatch(): Promise<{ task: TaskEntry; context: string }[]> {
+    await this.repo.lock();
+    try {
+      const data = await this.requireProgress();
+      if (isAllDone(data.tasks)) return [];
+
+      const tasks = findParallelTasks(data.tasks);
+      if (!tasks.length) return [];
+
+      for (const t of tasks) t.status = 'active';
+      data.current = tasks[0].id;
+      await this.repo.saveProgress(data);
+
+      const summary = await this.repo.loadSummary();
+      const results: { task: TaskEntry; context: string }[] = [];
+
+      for (const task of tasks) {
+        const parts: string[] = [];
+        if (summary) parts.push(summary);
+        for (const depId of task.deps) {
+          const ctx = await this.repo.loadTaskContext(depId);
+          if (ctx) parts.push(ctx);
+        }
+        results.push({ task, context: parts.join('\n\n---\n\n') });
+      }
+      return results;
+    } finally {
+      await this.repo.unlock();
+    }
   }
 
   /** checkpoint: 记录任务完成 */
   async checkpoint(id: string, detail: string): Promise<string> {
-    const data = await this.requireProgress();
-    const task = data.tasks.find(t => t.id === id);
-    if (!task) throw new Error(`任务 ${id} 不存在`);
-    if (task.status !== 'active' && task.status !== 'pending') {
-      throw new Error(`任务 ${id} 状态为 ${task.status}，无法checkpoint`);
-    }
+    await this.repo.lock();
+    try {
+      const data = await this.requireProgress();
+      const task = data.tasks.find(t => t.id === id);
+      if (!task) throw new Error(`任务 ${id} 不存在`);
+      if (task.status !== 'active' && task.status !== 'pending') {
+        throw new Error(`任务 ${id} 状态为 ${task.status}，无法checkpoint`);
+      }
 
-    if (detail === 'FAILED') {
-      const result = failTask(data, id);
+      if (detail === 'FAILED') {
+        const result = failTask(data, id);
+        await this.repo.saveProgress(data);
+        return result === 'retry'
+          ? `任务 ${id} 失败(第${task.retries}次)，将重试`
+          : `任务 ${id} 连续失败3次，已跳过`;
+      }
+
+      if (!detail.trim()) throw new Error(`任务 ${id} checkpoint内容不能为空`);
+
+      const summaryLine = detail.split('\n')[0].slice(0, 80);
+      completeTask(data, id, summaryLine);
+
       await this.repo.saveProgress(data);
-      return result === 'retry'
-        ? `任务 ${id} 失败(第${task.retries}次)，将重试`
-        : `任务 ${id} 连续失败3次，已跳过`;
+      await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
+      await this.updateSummary(data);
+      autoCommit(id, task.title, summaryLine);
+
+      const doneCount = data.tasks.filter(t => t.status === 'done').length;
+      const msg = `任务 ${id} 完成 (${doneCount}/${data.tasks.length}) [已自动提交]`;
+      return isAllDone(data.tasks) ? msg + '\n全部任务已完成，请执行 node flow.js finish 进行收尾' : msg;
+    } finally {
+      await this.repo.unlock();
     }
-
-    // 提取摘要（第一行）
-    const summaryLine = detail.split('\n')[0].slice(0, 80);
-    completeTask(data, id, summaryLine);
-
-    await this.repo.saveProgress(data);
-    await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
-    await this.updateSummary(data);
-    autoCommit(id, task.title, summaryLine);
-
-    const doneCount = data.tasks.filter(t => t.status === 'done').length;
-    const msg = `任务 ${id} 完成 (${doneCount}/${data.tasks.length}) [已自动提交]`;
-    return isAllDone(data.tasks) ? msg + '\n全部任务已完成，请执行 node flow.js finish 进行收尾' : msg;
   }
 
   /** resume: 中断恢复 */
@@ -215,7 +231,7 @@ export class WorkflowService {
     await this.repo.saveProgress(data);
 
     // 自动检测并执行验证脚本
-    const result = runVerify(process.cwd());
+    const result = runVerify(this.repo.projectRoot());
     if (!result.passed) {
       return `验证失败: ${result.error}\n请修复后重新执行 node flow.js finish`;
     }
