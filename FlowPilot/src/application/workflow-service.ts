@@ -43,6 +43,7 @@ export class WorkflowService {
     await this.repo.saveTasks(tasksMd);
     await this.repo.saveSummary(`# ${def.name}\n\n${def.description}\n`);
     await this.repo.ensureClaudeMd();
+    await this.repo.ensureHooks();
     return data;
   }
 
