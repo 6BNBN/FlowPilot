@@ -166,6 +166,123 @@ flow finish → 自动跑 build/test/lint → 汇报完成/跳过/失败项 → 
 回到待命，等待下一个需求
 ```
 
+## Agent Teams 并行开发详解
+
+这是 FlowPilot 最强大的能力。理解并行机制能让你的开发效率翻倍。
+
+### 并行是怎么工作的
+
+```
+主Agent（调度器）
+  │
+  ├── flow next --batch
+  │   返回所有依赖已满足的任务（比如3个）
+  │
+  ├── 同时派发3个子Agent（一条消息，3个Task工具调用）
+  │   ├── 子Agent-A → 执行任务001 → 自行checkpoint
+  │   ├── 子Agent-B → 执行任务002 → 自行checkpoint
+  │   └── 子Agent-C → 执行任务003 → 自行checkpoint
+  │
+  └── 3个子Agent全部返回后
+      主Agent执行 flow status 确认 → 继续下一轮
+```
+
+关键点：
+- 主Agent 用 `flow next --batch` 一次性获取所有可并行任务
+- 在**同一条消息**中用多个 Task 工具调用并行派发
+- 每个子Agent**独立工作、独立checkpoint、独立git提交**
+- 主Agent上下文不会因为子Agent的产出而膨胀（子Agent自行记录）
+
+### 如何设计任务依赖以最大化并行
+
+核心原则：**没有依赖关系的任务会被自动并行执行**。
+
+差的设计（全串行，一个接一个）：
+```markdown
+1. [backend] 数据库设计
+2. [backend] 用户API (deps: 1)
+3. [backend] 文章API (deps: 2)      ← 其实不依赖用户API
+4. [frontend] 用户页面 (deps: 3)     ← 其实只依赖用户API
+5. [frontend] 文章页面 (deps: 4)     ← 其实只依赖文章API
+```
+
+好的设计（充分并行）：
+```markdown
+1. [backend] 数据库设计
+2. [backend] 用户API (deps: 1)
+3. [backend] 文章API (deps: 1)       ← 只依赖数据库，和2并行
+4. [frontend] 用户页面 (deps: 2)     ← 只依赖用户API
+5. [frontend] 文章页面 (deps: 3)     ← 只依赖文章API，和4并行
+6. [general] 集成测试 (deps: 4,5)
+```
+
+执行时间线对比：
+```
+差的设计: 1 → 2 → 3 → 4 → 5          （5轮）
+好的设计: 1 → [2,3] → [4,5] → 6      （4轮，任务2和3并行，4和5并行）
+```
+
+### 实战示例：电商系统
+
+```markdown
+# 电商平台
+
+全栈电商应用
+
+1. [backend] 数据库设计
+   PostgreSQL: users, products, orders, payments, cart
+2. [backend] 认证模块 (deps: 1)
+   JWT + bcrypt，注册/登录/刷新token
+3. [backend] 商品API (deps: 1)
+   CRUD + 分页搜索 + 图片上传
+4. [backend] 订单API (deps: 1)
+   下单/支付/退款流程
+5. [frontend] 公共组件库
+   Header/Footer/Card/Modal/Form组件
+6. [frontend] 商品列表页 (deps: 3,5)
+   商品卡片、筛选、分页
+7. [frontend] 购物车页 (deps: 3,5)
+   增删改查、数量调整
+8. [frontend] 登录注册页 (deps: 2,5)
+   表单验证、错误提示
+9. [frontend] 订单页 (deps: 4,8)
+   下单流程、订单历史
+10. [general] E2E测试 (deps: 6,7,8,9)
+    Playwright 核心流程测试
+```
+
+执行时间线：
+```
+第1轮: [1, 5]           ← 数据库和前端组件库并行
+第2轮: [2, 3, 4]        ← 三个API模块并行
+第3轮: [6, 7, 8]        ← 三个前端页面并行
+第4轮: [9]              ← 订单页（依赖登录和订单API）
+第5轮: [10]             ← E2E测试
+```
+
+10个任务只需5轮，如果串行需要10轮。
+
+### 并行中断与恢复
+
+并行执行中如果中断（CC崩溃、compact、关窗口），所有正在执行的子Agent任务都会停留在 `active` 状态。
+
+恢复流程：
+```
+新窗口 → 说"开始" → flow resume
+  ↓
+检测到3个active任务 → 全部重置为pending
+  ↓
+flow next --batch → 重新并行派发这3个任务
+```
+
+`flow resume` 会把**所有** active 任务重置为 pending，不管有几个。这意味着并行中断后恢复时，那一批任务会被完整重做。已经 checkpoint 的任务不受影响。
+
+### 并行开发注意事项
+
+1. **文件冲突**：并行的子Agent可能修改同一个文件。设计任务时尽量让并行任务操作不同的文件
+2. **依赖宁多勿少**：如果不确定两个任务是否有依赖，加上依赖更安全。错误的并行比串行更危险
+3. **粒度适中**：任务太大并行收益低，太小则调度开销大。建议每个任务对应一个独立模块或功能点
+
 ## 支持的项目类型
 
 收尾阶段 `flow finish` 会自动检测并执行验证：
