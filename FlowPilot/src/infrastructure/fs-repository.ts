@@ -32,7 +32,7 @@ Judge the task and pick ONE path:
 **Rule: when in doubt, prefer Ad-hoc Dispatch over Reply directly. Prefer Requirement Decomposition over Ad-hoc Dispatch if task involves 2+ files to create/modify.**
 
 ### Ad-hoc Dispatch (one-off tasks, no workflow init)
-Dispatch sub-agent(s) via Task tool. Iron Rule #2 still applies — main agent NEVER uses Read/Edit/Explore directly. No init/checkpoint/finish needed.
+Dispatch sub-agent(s) via Task tool. No init/checkpoint/finish needed. Iron Rule #4 does NOT apply (no task ID exists). Main agent MAY use Read/Glob/Grep directly for trivial lookups (e.g. reading a single file) — Iron Rule #2 is relaxed in Ad-hoc mode only.
 
 ### Iron Rules (violating ANY = protocol failure)
 1. **NEVER use TaskCreate / TaskUpdate / TaskList** — use ONLY \`node flow.js xxx\`.
