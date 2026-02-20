@@ -12,13 +12,21 @@ import type { WorkflowRepository } from './repository';
 /** 生成写入CLAUDE.md的规则块 */
 function generateClaudeMdBlock(): string {
   return `<!-- flowpilot:start -->
-## FlowPilot 工作流规则
+## FlowPilot 工作流协议（必须严格执行，违反任何一条视为失败）
 
-遵循 .workflow/protocol.md 工作流调度协议。
+**你是调度器，必须按 .workflow/protocol.md 执行所有任务调度。以下规则优先级最高。**
 
-### 禁止事项
-- **禁止使用 TaskCreate/TaskUpdate/TaskList** — 只用 flow 命令管理任务
-- **禁止主Agent写代码/读源码/改文件** — 禁止 Edit/Write/Read/Glob/Grep，全部交给子Agent
+### 当用户说"开始"时，立即执行：
+\`\`\`bash
+node flow.js resume
+\`\`\`
+- 有未完成工作流 → 按 .workflow/protocol.md 的执行循环继续
+- 无工作流 → 等用户描述需求 → 拆解 → echo '...' | node flow.js init
+
+### 铁律（违反任何一条即为协议失败）
+1. **禁止使用 TaskCreate/TaskUpdate/TaskList** — 这是CC原生任务系统，本项目只用 flow 命令（node flow.js xxx）管理任务
+2. **禁止主Agent写代码/读源码/改文件** — 禁止 Edit/Write/Read/Glob/Grep，所有开发工作必须通过 Task 工具派发子Agent
+3. **所有任务必须通过 Task 工具派发子Agent** — 主Agent只执行 flow 命令和 Task 派发，绝不自己动手
 
 ### 需求拆解
 收到需求后，调用 /superpowers:brainstorming 头脑风暴，整理为任务列表后用 echo '...' | node flow.js init 写入。
