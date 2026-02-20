@@ -9,7 +9,6 @@ import type { WorkflowRepository } from '../infrastructure/repository';
 import { makeTaskId, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
 import { autoCommit } from '../infrastructure/git';
 import { runVerify } from '../infrastructure/verify';
-import { checkEnvironment } from '../infrastructure/env-check';
 
 export class WorkflowService {
   constructor(

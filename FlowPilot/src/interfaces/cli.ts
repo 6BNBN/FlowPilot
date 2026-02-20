@@ -7,6 +7,7 @@ import { readFileSync } from 'fs';
 import type { WorkflowService } from '../application/workflow-service';
 import { formatStatus, formatTask, formatBatch } from './formatter';
 import { readStdinIfPiped } from './stdin';
+import { checkEnvironment } from '../infrastructure/env-check';
 
 export class CLI {
   constructor(private readonly service: WorkflowService) {}
@@ -30,11 +31,16 @@ export class CLI {
       case 'init': {
         const force = rest.includes('--force');
         const md = await readStdinIfPiped();
+        let out: string;
         if (md.trim()) {
           const data = await s.init(md, force);
-          return `已初始化工作流: ${data.name} (${data.tasks.length} 个任务)`;
+          out = `已初始化工作流: ${data.name} (${data.tasks.length} 个任务)`;
+        } else {
+          out = await s.setup();
         }
-        return await s.setup();
+        const warnings = checkEnvironment();
+        if (warnings.length) out += '\n\n' + warnings.map(w => `⚠ ${w}`).join('\n');
+        return out;
       }
 
       case 'next': {
