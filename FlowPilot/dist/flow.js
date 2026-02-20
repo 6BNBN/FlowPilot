@@ -13,7 +13,9 @@ function generateClaudeMdBlock() {
 
 ### On Session Start
 Run \`node flow.js resume\`:
-- If unfinished workflow \u2192 enter **Execution Loop**
+- If unfinished workflow \u2192 check user request:
+  - User says "\u5F00\u59CB" / "\u7EE7\u7EED" / describes next requirement \u2192 enter **Execution Loop**
+  - User asks an unrelated question or ad-hoc task \u2192 handle via **Ad-hoc Dispatch** first, then remind user the workflow is paused
 - If no workflow \u2192 **Smart Routing** based on user request:
 
 ### Smart Routing (no active workflow)
@@ -27,7 +29,7 @@ Judge the task and pick ONE path:
 **Rule: when in doubt, prefer Ad-hoc Dispatch over Reply directly. Prefer Requirement Decomposition over Ad-hoc Dispatch if task involves 2+ files to create/modify.**
 
 ### Ad-hoc Dispatch (one-off tasks, no workflow init)
-Dispatch sub-agent(s) via Task tool. Iron Rule #2 still applies \u2014 main agent NEVER uses Read/Edit/Explore directly. No init/checkpoint/finish needed.
+Dispatch sub-agent(s) via Task tool. No init/checkpoint/finish needed. Iron Rule #4 does NOT apply (no task ID exists). Main agent MAY use Read/Glob/Grep directly for trivial lookups (e.g. reading a single file) \u2014 Iron Rule #2 is relaxed in Ad-hoc mode only.
 
 ### Iron Rules (violating ANY = protocol failure)
 1. **NEVER use TaskCreate / TaskUpdate / TaskList** \u2014 use ONLY \`node flow.js xxx\`.
@@ -59,9 +61,9 @@ Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, i
      > On success: \`echo 'one-line summary' | node flow.js checkpoint <id> --files file1 file2 ...\`
      > On failure: \`node flow.js checkpoint <id> FAILED\`
      > \`--files\` MUST list every file you created or modified. This ensures parallel tasks get isolated git commits.
-3. **After ALL sub-agents return, run checkpoint for each task** (if sub-agent didn't):
+3. **After ALL sub-agents return, verify checkpoints**: run \`node flow.js status\`. If any batch task is still \`active\` (sub-agent failed to checkpoint), run checkpoint as fallback:
    \`echo 'summary extracted from sub-agent result' | node flow.js checkpoint <id>\`
-   This ensures context is recorded and git commit is made per-task. **NEVER skip to next batch without checkpointing.**
+   **NEVER proceed to next batch with active tasks.**
 4. Loop back to step 1.
 5. When no tasks remain, run \`node flow.js finish\`.
 
