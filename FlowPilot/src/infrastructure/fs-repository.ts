@@ -36,8 +36,8 @@ export class FsWorkflowRepository implements WorkflowRepository {
     ];
     for (const t of data.tasks) {
       const deps = t.deps.length ? t.deps.join(',') : '-';
-      const desc = (t.description || '-').slice(0, 80).replace(/\|/g, '/').replace(/\n/g, ' ');
-      lines.push(`| ${t.id} | ${t.title} | ${t.type} | ${deps} | ${t.status} | ${t.retries} | ${t.summary || '-'} | ${desc} |`);
+      const esc = (s: string) => (s || '-').replace(/\|/g, '∣').replace(/\n/g, ' ');
+      lines.push(`| ${t.id} | ${esc(t.title)} | ${t.type} | ${deps} | ${t.status} | ${t.retries} | ${esc(t.summary)} | ${esc(t.description)} |`);
     }
     await writeFile(join(this.root, 'progress.md'), lines.join('\n') + '\n', 'utf-8');
   }

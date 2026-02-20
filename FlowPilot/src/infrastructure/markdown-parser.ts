@@ -22,6 +22,7 @@ export function parseTasksMarkdown(markdown: string): WorkflowDefinition {
   let name = '';
   let description = '';
   const tasks: TaskDefinition[] = [];
+  const numToId = new Map<string, string>(); // 用户编号 → 系统ID
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -36,17 +37,30 @@ export function parseTasksMarkdown(markdown: string): WorkflowDefinition {
 
     const m = line.match(TASK_RE);
     if (m) {
-      const type = m[2].toLowerCase() as TaskType;
+      const userNum = m[1];
+      const sysId = makeTaskId(tasks.length + 1);
+      numToId.set(userNum.padStart(3, '0'), sysId);
+      numToId.set(userNum, sysId);
+
+      const validTypes = new Set(['frontend', 'backend', 'general']);
+      const rawType = m[2].toLowerCase();
+      const type = (validTypes.has(rawType) ? rawType : 'general') as TaskType;
       const title = m[3].trim();
-      const deps = m[4] ? m[4].split(',').map(d => d.trim().padStart(3, '0')).filter(Boolean) : [];
+      const rawDeps = m[4] ? m[4].split(',').map(d => d.trim()).filter(Boolean) : [];
       // 收集缩进描述行
       let desc = '';
       while (i + 1 < lines.length && DESC_RE.test(lines[i + 1])) {
         i++;
         desc += (desc ? '\n' : '') + lines[i].trim();
       }
-      tasks.push({ title, type, deps, description: desc });
+      tasks.push({ title, type, deps: rawDeps, description: desc });
     }
   }
+
+  // 第二遍：将用户编号映射为系统ID
+  for (const t of tasks) {
+    t.deps = t.deps.map(d => numToId.get(d.padStart(3, '0')) || numToId.get(d) || makeTaskId(parseInt(d, 10))).filter(Boolean);
+  }
+
   return { name, description, tasks };
 }

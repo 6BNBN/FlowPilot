@@ -104,6 +104,9 @@ export class WorkflowService {
     const data = await this.requireProgress();
     const task = data.tasks.find(t => t.id === id);
     if (!task) throw new Error(`任务 ${id} 不存在`);
+    if (task.status !== 'active' && task.status !== 'pending') {
+      throw new Error(`任务 ${id} 状态为 ${task.status}，无法checkpoint`);
+    }
 
     if (detail === 'FAILED') {
       const result = failTask(data, id);
@@ -150,7 +153,8 @@ export class WorkflowService {
   /** add: 追加任务 */
   async add(title: string, type: TaskEntry['type']): Promise<string> {
     const data = await this.requireProgress();
-    const id = makeTaskId(data.tasks.length + 1);
+    const maxNum = data.tasks.reduce((m, t) => Math.max(m, parseInt(t.id, 10)), 0);
+    const id = makeTaskId(maxNum + 1);
     data.tasks.push({
       id, title, description: '', type, status: 'pending',
       deps: [], summary: '', retries: 0,
@@ -204,6 +208,7 @@ export class WorkflowService {
   /** finish: 智能收尾 - 验证+总结+回到待命 */
   async finish(): Promise<string> {
     const data = await this.requireProgress();
+    if (data.status === 'idle' || data.status === 'completed') return '工作流已完成，无需重复finish';
     if (!isAllDone(data.tasks)) throw new Error('还有未完成的任务，请先完成所有任务');
 
     data.status = 'finishing';

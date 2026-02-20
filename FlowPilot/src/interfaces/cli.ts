@@ -83,7 +83,9 @@ export class CLI {
 
       case 'add': {
         const typeIdx = rest.indexOf('--type');
-        const type = (typeIdx >= 0 && rest[typeIdx + 1]) || 'general';
+        const rawType = (typeIdx >= 0 && rest[typeIdx + 1]) || 'general';
+        const validTypes = new Set(['frontend', 'backend', 'general']);
+        const type = validTypes.has(rawType) ? rawType : 'general';
         const title = rest.filter((_, i) => i !== typeIdx && i !== typeIdx + 1).join(' ');
         if (!title) throw new Error('需要任务描述');
         return await s.add(title, type as any);

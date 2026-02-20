@@ -22,7 +22,9 @@ export function runVerify(cwd: string): VerifyResult {
     try {
       execSync(cmd, { cwd, stdio: 'pipe', timeout: 300_000 });
     } catch (e: any) {
-      const out = (e.stderr || e.stdout || '').toString();
+      const stderr = e.stderr?.length ? e.stderr.toString() : '';
+      const stdout = e.stdout?.length ? e.stdout.toString() : '';
+      const out = stderr || stdout || '';
       if (out.includes('No test files found')) continue;
       if (out.includes('no test files')) continue;
       return { passed: false, scripts: cmds, error: `${cmd} 失败:\n${out.slice(0, 500)}` };

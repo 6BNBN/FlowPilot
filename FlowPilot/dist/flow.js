@@ -28,8 +28,8 @@ var FsWorkflowRepository = class {
     ];
     for (const t of data.tasks) {
       const deps = t.deps.length ? t.deps.join(",") : "-";
-      const desc = (t.description || "-").slice(0, 80).replace(/\|/g, "/").replace(/\n/g, " ");
-      lines.push(`| ${t.id} | ${t.title} | ${t.type} | ${deps} | ${t.status} | ${t.retries} | ${t.summary || "-"} | ${desc} |`);
+      const esc = (s) => (s || "-").replace(/\|/g, "\u2223").replace(/\n/g, " ");
+      lines.push(`| ${t.id} | ${esc(t.title)} | ${t.type} | ${deps} | ${t.status} | ${t.retries} | ${esc(t.summary)} | ${esc(t.description)} |`);
     }
     await (0, import_promises.writeFile)((0, import_path.join)(this.root, "progress.md"), lines.join("\n") + "\n", "utf-8");
   }
@@ -122,40 +122,6 @@ var FsWorkflowRepository = class {
     return true;
   }
 };
-
-// src/infrastructure/markdown-parser.ts
-var TASK_RE = /^(\d+)\.\s+\[\s*(\w+)\s*\]\s+(.+?)(?:\s*\((?:deps?|依赖)\s*:\s*([^)]*)\))?\s*$/i;
-var DESC_RE = /^\s{2,}(.+)$/;
-function parseTasksMarkdown(markdown) {
-  const lines = markdown.split("\n");
-  let name = "";
-  let description = "";
-  const tasks = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!name && line.startsWith("# ")) {
-      name = line.slice(2).trim();
-      continue;
-    }
-    if (name && !description && !line.startsWith("#") && line.trim() && !TASK_RE.test(line)) {
-      description = line.trim();
-      continue;
-    }
-    const m = line.match(TASK_RE);
-    if (m) {
-      const type = m[2].toLowerCase();
-      const title = m[3].trim();
-      const deps = m[4] ? m[4].split(",").map((d) => d.trim().padStart(3, "0")).filter(Boolean) : [];
-      let desc = "";
-      while (i + 1 < lines.length && DESC_RE.test(lines[i + 1])) {
-        i++;
-        desc += (desc ? "\n" : "") + lines[i].trim();
-      }
-      tasks.push({ title, type, deps, description: desc });
-    }
-  }
-  return { name, description, tasks };
-}
 
 // src/domain/task-store.ts
 function makeTaskId(n) {
@@ -251,6 +217,50 @@ function findParallelTasks(tasks) {
 }
 function isAllDone(tasks) {
   return tasks.every((t) => t.status === "done" || t.status === "skipped" || t.status === "failed");
+}
+
+// src/infrastructure/markdown-parser.ts
+var TASK_RE = /^(\d+)\.\s+\[\s*(\w+)\s*\]\s+(.+?)(?:\s*\((?:deps?|依赖)\s*:\s*([^)]*)\))?\s*$/i;
+var DESC_RE = /^\s{2,}(.+)$/;
+function parseTasksMarkdown(markdown) {
+  const lines = markdown.split("\n");
+  let name = "";
+  let description = "";
+  const tasks = [];
+  const numToId = /* @__PURE__ */ new Map();
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!name && line.startsWith("# ")) {
+      name = line.slice(2).trim();
+      continue;
+    }
+    if (name && !description && !line.startsWith("#") && line.trim() && !TASK_RE.test(line)) {
+      description = line.trim();
+      continue;
+    }
+    const m = line.match(TASK_RE);
+    if (m) {
+      const userNum = m[1];
+      const sysId = makeTaskId(tasks.length + 1);
+      numToId.set(userNum.padStart(3, "0"), sysId);
+      numToId.set(userNum, sysId);
+      const validTypes = /* @__PURE__ */ new Set(["frontend", "backend", "general"]);
+      const rawType = m[2].toLowerCase();
+      const type = validTypes.has(rawType) ? rawType : "general";
+      const title = m[3].trim();
+      const rawDeps = m[4] ? m[4].split(",").map((d) => d.trim()).filter(Boolean) : [];
+      let desc = "";
+      while (i + 1 < lines.length && DESC_RE.test(lines[i + 1])) {
+        i++;
+        desc += (desc ? "\n" : "") + lines[i].trim();
+      }
+      tasks.push({ title, type, deps: rawDeps, description: desc });
+    }
+  }
+  for (const t of tasks) {
+    t.deps = t.deps.map((d) => numToId.get(d.padStart(3, "0")) || numToId.get(d) || makeTaskId(parseInt(d, 10))).filter(Boolean);
+  }
+  return { name, description, tasks };
 }
 
 // src/application/protocol-generator.ts
@@ -372,7 +382,8 @@ function generateProtocol(projectName) {
 var import_node_child_process = require("child_process");
 function autoCommit(taskId, title, summary) {
   try {
-    (0, import_node_child_process.execSync)("git add .", { stdio: "pipe" });
+    (0, import_node_child_process.execSync)("git add -u", { stdio: "pipe" });
+    (0, import_node_child_process.execSync)("git add .workflow/", { stdio: "pipe" });
     const msg = `task-${taskId}: ${title}
 
 ${summary}`;
@@ -392,7 +403,9 @@ function runVerify(cwd) {
     try {
       (0, import_node_child_process2.execSync)(cmd, { cwd, stdio: "pipe", timeout: 3e5 });
     } catch (e) {
-      const out = (e.stderr || e.stdout || "").toString();
+      const stderr = e.stderr?.length ? e.stderr.toString() : "";
+      const stdout = e.stdout?.length ? e.stdout.toString() : "";
+      const out = stderr || stdout || "";
       if (out.includes("No test files found")) continue;
       if (out.includes("no test files")) continue;
       return { passed: false, scripts: cmds, error: `${cmd} \u5931\u8D25:
@@ -525,6 +538,9 @@ ${def.description}
     const data = await this.requireProgress();
     const task = data.tasks.find((t) => t.id === id);
     if (!task) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
+    if (task.status !== "active" && task.status !== "pending") {
+      throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u65E0\u6CD5checkpoint`);
+    }
     if (detail === "FAILED") {
       const result = failTask(data, id);
       await this.repo.saveProgress(data);
@@ -567,7 +583,8 @@ ${detail}
   /** add: 追加任务 */
   async add(title, type) {
     const data = await this.requireProgress();
-    const id = makeTaskId(data.tasks.length + 1);
+    const maxNum = data.tasks.reduce((m, t) => Math.max(m, parseInt(t.id, 10)), 0);
+    const id = makeTaskId(maxNum + 1);
     data.tasks.push({
       id,
       title,
@@ -622,6 +639,7 @@ ${detail}
   /** finish: 智能收尾 - 验证+总结+回到待命 */
   async finish() {
     const data = await this.requireProgress();
+    if (data.status === "idle" || data.status === "completed") return "\u5DE5\u4F5C\u6D41\u5DF2\u5B8C\u6210\uFF0C\u65E0\u9700\u91CD\u590Dfinish";
     if (!isAllDone(data.tasks)) throw new Error("\u8FD8\u6709\u672A\u5B8C\u6210\u7684\u4EFB\u52A1\uFF0C\u8BF7\u5148\u5B8C\u6210\u6240\u6709\u4EFB\u52A1");
     data.status = "finishing";
     await this.repo.saveProgress(data);
@@ -826,7 +844,9 @@ var CLI = class {
         return await s.resume();
       case "add": {
         const typeIdx = rest.indexOf("--type");
-        const type = typeIdx >= 0 && rest[typeIdx + 1] || "general";
+        const rawType = typeIdx >= 0 && rest[typeIdx + 1] || "general";
+        const validTypes = /* @__PURE__ */ new Set(["frontend", "backend", "general"]);
+        const type = validTypes.has(rawType) ? rawType : "general";
         const title = rest.filter((_, i) => i !== typeIdx && i !== typeIdx + 1).join(" ");
         if (!title) throw new Error("\u9700\u8981\u4EFB\u52A1\u63CF\u8FF0");
         return await s.add(title, type);
