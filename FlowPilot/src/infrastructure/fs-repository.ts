@@ -59,7 +59,7 @@ Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, i
 5. When no tasks remain, run \`node flow.js finish\`.
 
 ### Sub-Agent Rules
-- **MUST run checkpoint as final action** (Iron Rule #4). Sequence: do work → \`echo 'summary' | node flow.js checkpoint <id>\` → reply "Task <id> done." Nothing else after checkpoint.
+- **MUST run checkpoint with --files as final action** (Iron Rule #4). Sequence: do work → \`echo 'summary' | node flow.js checkpoint <id> --files file1 file2 ...\` → reply "Task <id> done."
 - Search for matching Skills or MCP tools first. If found, MUST use them.
 - type=frontend → /frontend-design, type=backend → /feature-dev, type=general → match or execute directly
 - Unfamiliar APIs → query context7 MCP first. Never guess.
