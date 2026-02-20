@@ -225,14 +225,22 @@ export class WorkflowService {
     return lines.join('\n');
   }
 
+  /** review: 标记已通过code-review，解锁finish */
+  async review(): Promise<string> {
+    const data = await this.requireProgress();
+    if (!isAllDone(data.tasks)) throw new Error('还有未完成的任务，请先完成所有任务');
+    if (data.status === 'finishing') return '已处于review通过状态，可以执行 node flow.js finish';
+    data.status = 'finishing';
+    await this.repo.saveProgress(data);
+    return '代码审查已通过，请执行 node flow.js finish 完成收尾';
+  }
+
   /** finish: 智能收尾 - 验证+总结+回到待命 */
   async finish(): Promise<string> {
     const data = await this.requireProgress();
     if (data.status === 'idle' || data.status === 'completed') return '工作流已完成，无需重复finish';
+    if (data.status !== 'finishing') throw new Error('请先执行 node flow.js review 完成代码审查');
     if (!isAllDone(data.tasks)) throw new Error('还有未完成的任务，请先完成所有任务');
-
-    data.status = 'finishing';
-    await this.repo.saveProgress(data);
 
     // 自动检测并执行验证脚本
     const result = runVerify(this.repo.projectRoot());
