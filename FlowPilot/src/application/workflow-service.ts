@@ -248,27 +248,17 @@ export class WorkflowService {
       return `验证失败: ${result.error}\n请修复后重新执行 node flow.js finish`;
     }
 
-    // 生成变更总结
+    // 统计
     const done = data.tasks.filter(t => t.status === 'done');
     const skipped = data.tasks.filter(t => t.status === 'skipped');
     const failed = data.tasks.filter(t => t.status === 'failed');
-    const parts = [`完成 ${done.length} 个任务:`];
-    for (const t of done) parts.push(`- ${t.title}: ${t.summary}`);
-    if (skipped.length) {
-      parts.push(`\n跳过 ${skipped.length} 个任务:`);
-      for (const t of skipped) parts.push(`- ${t.title}: ${t.summary || '已跳过'}`);
-    }
-    if (failed.length) {
-      parts.push(`\n失败 ${failed.length} 个任务:`);
-      for (const t of failed) parts.push(`- ${t.title} (重试${t.retries}次)`);
-    }
-    const changeSummary = parts.join('\n');
+    const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : '', failed.length ? `${failed.length} failed` : ''].filter(Boolean).join(', ');
 
     // 最终提交 + 状态回到 idle
     data.status = 'idle';
     data.current = null;
     await this.repo.saveProgress(data);
-    autoCommit('finish', data.name, changeSummary);
+    autoCommit('finish', data.name, stats);
     await this.repo.clearContext();
 
     const scripts = result.scripts.length ? result.scripts.join(', ') : '无验证脚本';
