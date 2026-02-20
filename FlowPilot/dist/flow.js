@@ -66,8 +66,11 @@ Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, i
 - Auth: secrets from env vars, bcrypt passwords, token expiry.
 - Input: validate at entry points. Never log passwords. Never commit .env.
 
-### Finalization
-Dispatch a sub-agent to run /code-review:code-review. Fix issues if any, then \`node flow.js finish\`.
+### Finalization (MANDATORY \u2014 skipping = protocol failure)
+1. Dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
+2. Run \`node flow.js review\` to unlock finish.
+3. Run \`node flow.js finish\`.
+**finish will REFUSE if review has not been executed.**
 
 <!-- flowpilot:end -->`;
 }
@@ -168,6 +171,9 @@ var FsWorkflowRepository = class {
   // --- context/ 任务详细产出 ---
   async clearContext() {
     await (0, import_promises.rm)(this.ctxDir, { recursive: true, force: true });
+  }
+  async clearAll() {
+    await (0, import_promises.rm)(this.root, { recursive: true, force: true });
   }
   async saveTaskContext(taskId, content) {
     await this.ensure(this.ctxDir);
@@ -373,17 +379,62 @@ function parseTasksMarkdown(markdown) {
 
 // src/infrastructure/git.ts
 var import_node_child_process = require("child_process");
+function getSubmodules() {
+  try {
+    const out = (0, import_node_child_process.execSync)('git submodule --quiet foreach "echo $sm_path"', { stdio: "pipe", encoding: "utf-8" });
+    return out.split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+function groupBySubmodule(files, submodules) {
+  const sorted = [...submodules].sort((a, b) => b.length - a.length);
+  const groups = /* @__PURE__ */ new Map();
+  for (const f of files) {
+    const norm = f.replace(/\\/g, "/");
+    const sub = sorted.find((s) => norm.startsWith(s + "/"));
+    const key = sub ?? "";
+    const rel = sub ? norm.slice(sub.length + 1) : norm;
+    groups.set(key, [...groups.get(key) ?? [], rel]);
+  }
+  return groups;
+}
+function commitIn(cwd, files, msg) {
+  const opts = { stdio: "pipe", cwd };
+  try {
+    if (files) {
+      for (const f of files) (0, import_node_child_process.execSync)(`git add ${JSON.stringify(f)}`, opts);
+    } else {
+      (0, import_node_child_process.execSync)("git add -A", opts);
+    }
+    (0, import_node_child_process.execSync)(`git commit -m ${JSON.stringify(msg)} --allow-empty`, opts);
+  } catch {
+  }
+}
 function autoCommit(taskId, title, summary, files) {
   try {
-    if (files?.length) {
-      for (const f of files) (0, import_node_child_process.execSync)(`git add ${JSON.stringify(f)}`, { stdio: "pipe" });
-    } else {
-      (0, import_node_child_process.execSync)("git add -A", { stdio: "pipe" });
-    }
     const msg = `task-${taskId}: ${title}
 
 ${summary}`;
-    (0, import_node_child_process.execSync)(`git commit -m ${JSON.stringify(msg)} --allow-empty`, { stdio: "pipe" });
+    const submodules = getSubmodules();
+    if (!submodules.length) {
+      commitIn(process.cwd(), files?.length ? files : null, msg);
+      return;
+    }
+    if (files?.length) {
+      const groups = groupBySubmodule(files, submodules);
+      for (const [sub, subFiles] of groups) {
+        if (sub) commitIn(sub, subFiles, msg);
+      }
+      const parentFiles = groups.get("") ?? [];
+      const touchedSubs = [...groups.keys()].filter((k) => k !== "");
+      for (const s of touchedSubs) (0, import_node_child_process.execSync)(`git add ${JSON.stringify(s)}`, { stdio: "pipe" });
+      for (const f of parentFiles) (0, import_node_child_process.execSync)(`git add ${JSON.stringify(f)}`, { stdio: "pipe" });
+      (0, import_node_child_process.execSync)(`git commit -m ${JSON.stringify(msg)} --allow-empty`, { stdio: "pipe" });
+    } else {
+      for (const sub of submodules) commitIn(sub, null, msg);
+      commitIn(process.cwd(), null, msg);
+    }
   } catch {
   }
 }
@@ -653,13 +704,21 @@ ${detail}
     lines.push('\u7528\u6237\u8BF4"\u5F00\u59CB"\u5373\u53EF\u542F\u52A8\u5168\u81EA\u52A8\u5F00\u53D1');
     return lines.join("\n");
   }
+  /** review: 标记已通过code-review，解锁finish */
+  async review() {
+    const data = await this.requireProgress();
+    if (!isAllDone(data.tasks)) throw new Error("\u8FD8\u6709\u672A\u5B8C\u6210\u7684\u4EFB\u52A1\uFF0C\u8BF7\u5148\u5B8C\u6210\u6240\u6709\u4EFB\u52A1");
+    if (data.status === "finishing") return "\u5DF2\u5904\u4E8Ereview\u901A\u8FC7\u72B6\u6001\uFF0C\u53EF\u4EE5\u6267\u884C node flow.js finish";
+    data.status = "finishing";
+    await this.repo.saveProgress(data);
+    return "\u4EE3\u7801\u5BA1\u67E5\u5DF2\u901A\u8FC7\uFF0C\u8BF7\u6267\u884C node flow.js finish \u5B8C\u6210\u6536\u5C3E";
+  }
   /** finish: 智能收尾 - 验证+总结+回到待命 */
   async finish() {
     const data = await this.requireProgress();
     if (data.status === "idle" || data.status === "completed") return "\u5DE5\u4F5C\u6D41\u5DF2\u5B8C\u6210\uFF0C\u65E0\u9700\u91CD\u590Dfinish";
+    if (data.status !== "finishing") throw new Error("\u8BF7\u5148\u6267\u884C node flow.js review \u5B8C\u6210\u4EE3\u7801\u5BA1\u67E5");
     if (!isAllDone(data.tasks)) throw new Error("\u8FD8\u6709\u672A\u5B8C\u6210\u7684\u4EFB\u52A1\uFF0C\u8BF7\u5148\u5B8C\u6210\u6240\u6709\u4EFB\u52A1");
-    data.status = "finishing";
-    await this.repo.saveProgress(data);
     const result = runVerify(this.repo.projectRoot());
     if (!result.passed) {
       return `\u9A8C\u8BC1\u5931\u8D25: ${result.error}
@@ -668,27 +727,12 @@ ${detail}
     const done = data.tasks.filter((t) => t.status === "done");
     const skipped = data.tasks.filter((t) => t.status === "skipped");
     const failed = data.tasks.filter((t) => t.status === "failed");
-    const parts = [`\u5B8C\u6210 ${done.length} \u4E2A\u4EFB\u52A1:`];
-    for (const t of done) parts.push(`- ${t.title}: ${t.summary}`);
-    if (skipped.length) {
-      parts.push(`
-\u8DF3\u8FC7 ${skipped.length} \u4E2A\u4EFB\u52A1:`);
-      for (const t of skipped) parts.push(`- ${t.title}: ${t.summary || "\u5DF2\u8DF3\u8FC7"}`);
-    }
-    if (failed.length) {
-      parts.push(`
-\u5931\u8D25 ${failed.length} \u4E2A\u4EFB\u52A1:`);
-      for (const t of failed) parts.push(`- ${t.title} (\u91CD\u8BD5${t.retries}\u6B21)`);
-    }
-    const changeSummary = parts.join("\n");
-    data.status = "idle";
-    data.current = null;
-    await this.repo.saveProgress(data);
-    autoCommit("finish", data.name, changeSummary);
-    await this.repo.clearContext();
+    const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : "", failed.length ? `${failed.length} failed` : ""].filter(Boolean).join(", ");
+    await this.repo.clearAll();
+    autoCommit("finish", data.name, stats);
     const scripts = result.scripts.length ? result.scripts.join(", ") : "\u65E0\u9A8C\u8BC1\u811A\u672C";
     return `\u9A8C\u8BC1\u901A\u8FC7: ${scripts}
-${changeSummary}
+${stats}
 \u5DF2\u63D0\u4EA4\u6700\u7EC8commit\uFF0C\u5DE5\u4F5C\u6D41\u56DE\u5230\u5F85\u547D\u72B6\u6001
 \u7B49\u5F85\u4E0B\u4E00\u4E2A\u9700\u6C42...`;
   }
@@ -876,6 +920,8 @@ var CLI = class {
         if (!data) return "\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41";
         return formatStatus(data);
       }
+      case "review":
+        return await s.review();
       case "finish":
         return await s.finish();
       case "resume":
@@ -899,7 +945,8 @@ var USAGE = `\u7528\u6CD5: node flow.js <command>
   next [--batch]       \u83B7\u53D6\u4E0B\u4E00\u4E2A\u5F85\u6267\u884C\u4EFB\u52A1 (--batch \u8FD4\u56DE\u6240\u6709\u53EF\u5E76\u884C\u4EFB\u52A1)
   checkpoint <id>      \u8BB0\u5F55\u4EFB\u52A1\u5B8C\u6210 [--file <path> | stdin | \u5185\u8054\u6587\u672C] [--files f1 f2 ...]
   skip <id>            \u624B\u52A8\u8DF3\u8FC7\u4EFB\u52A1
-  finish               \u667A\u80FD\u6536\u5C3E (\u9A8C\u8BC1+\u603B\u7ED3+\u56DE\u5230\u5F85\u547D)
+  review               \u6807\u8BB0code-review\u5DF2\u5B8C\u6210 (finish\u524D\u5FC5\u987B\u6267\u884C)
+  finish               \u667A\u80FD\u6536\u5C3E (\u9A8C\u8BC1+\u603B\u7ED3+\u56DE\u5230\u5F85\u547D\uFF0C\u9700\u5148review)
   status               \u67E5\u770B\u5168\u5C40\u8FDB\u5EA6
   resume               \u4E2D\u65AD\u6062\u590D
   add <\u63CF\u8FF0>           \u8FFD\u52A0\u4EFB\u52A1 [--type frontend|backend|general]`;
