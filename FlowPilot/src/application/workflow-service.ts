@@ -44,6 +44,7 @@ export class WorkflowService {
     await this.repo.saveTasks(tasksMd);
     await this.repo.saveProtocol(generateProtocol(def.name));
     await this.repo.saveSummary(`# ${def.name}\n\n${def.description}\n`);
+    await this.repo.ensureClaudeMd();
     return data;
   }
 
