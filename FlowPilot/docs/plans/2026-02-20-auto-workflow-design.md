@@ -19,19 +19,22 @@
   │  只做：flow next → 派发子Agent → flow checkpoint
   │  上下文占用：< 100行（协议+当前任务）
   │
+  ├── CLAUDE.md（协议嵌入层）
+  │     <!-- flowpilot:start/end --> 标记包裹完整调度协议
+  │     CC 启动时自动读取，无需额外引用
+  │
   ├── flow CLI（状态管理层）
   │     管理任务树、进度、记忆文件
+  │     init 时自动检测环境（Agent Teams / 插件 / MCP）
   │
   └── .workflow/（持久化层）
-        ├── protocol.md          # 调度协议（CLAUDE.md引用）
         ├── progress.md          # 任务状态列表（主Agent读）
         ├── tasks.md             # 完整任务树+依赖+类型
-        ├── context/
-        │   ├── summary.md       # 滚动摘要（关键决策）
-        │   ├── task-001.md      # 任务详细产出
-        │   ├── task-002.md
-        │   └── ...
-        └── context.json         # 配置文件
+        └── context/
+            ├── summary.md       # 滚动摘要（关键决策）
+            ├── task-001.md      # 任务详细产出
+            ├── task-002.md
+            └── ...
 ```
 
 ## 命令设计
@@ -40,7 +43,7 @@
 
 | 命令 | 用途 | 状态 |
 |------|------|------|
-| `flow init [--force]` | 解析文档→任务树+协议+CLAUDE.md引用 / 无stdin则接管项目 | ✅ |
+| `flow init [--force]` | 解析文档→任务树+CLAUDE.md协议嵌入+环境检测 / 无stdin则接管项目 | ✅ |
 | `flow next [--batch]` | 返回下一个/所有可并行任务（含依赖上下文） | ✅ |
 | `flow checkpoint <id>` | 记录任务完成（stdin/--file/内联文本）+ FAILED重试 | ✅ |
 | `flow skip <id>` | 手动跳过任务 | ✅ 新增 |
@@ -135,50 +138,30 @@
 ### 任务拆解阶段
 
 使用 `superpowers:brainstorming` 插件进行头脑风暴后自动拆解：
-- `flow init` 生成的 protocol.md 中明确要求主Agent调用该技能
+- CLAUDE.md 嵌入协议中明确要求主Agent调用该技能
 - 头脑风暴完成后，结果写入 tasks.md
 
-### 插件检测
+### 环境检测（env-check.ts）
 
-`flow init` 时检测必需插件是否可用：
-- 检查 superpowers、frontend-design、feature-dev 是否已安装
-- 未安装则输出安装命令并中止
+`flow init` 时自动检测三类环境依赖，输出警告但不阻止启动：
 
-## 协议生成（protocol.md）
+1. **Agent Teams 检测**：读取 `~/.claude/settings.json`，检查 `enabledBetaFeatureFlags` 含 `agent_teams`
+2. **插件检测**：检查 `~/.claude/plugins/` 下是否存在 CLAUDE.md 协议中引用的全部插件：
+   - superpowers（需求拆解头脑风暴）
+   - frontend-design（前端任务）
+   - feature-dev（后端任务）
+   - code-review（收尾代码审查）
+3. **context7 MCP 检测**：检查 `~/.claude/mcp.json` 或 `.mcp.json` 是否配置了 context7（子Agent查询文档）
 
-`flow init` 自动生成，写入 CLAUDE.md 引用。协议内容模板：
+## 协议嵌入（CLAUDE.md 直接注入）
 
-```markdown
-# 工作流调度协议
+> 已废弃独立的 protocol.md 文件。协议直接嵌入 CLAUDE.md，CC 合规性最高。
 
-你是一个调度器。严格遵循以下规则：
-
-## 启动规则
-- 当用户说"开始"时，执行 `flow resume` 检查是否有未完成工作流
-- 如果有：从中断点继续
-- 如果没有：询问用户提供需求文档或描述需求
-
-## 需求拆解规则
-- 收到需求后，调用 /superpowers:brainstorming 进行头脑风暴
-- 头脑风暴完成后，将结果整理为任务列表
-- 每个任务标注类型(frontend/backend/general)和依赖关系
-- 展示任务树给用户确认，确认后执行 flow init 写入
-
-## 执行循环
-重复以下步骤直到所有任务完成：
-1. 执行 `flow next` 获取下一个任务
-2. 根据任务类型派发子Agent：
-   - frontend → 子Agent调用 /frontend-design
-   - backend → 子Agent调用 /feature-dev
-   - general → 子Agent直接执行
-3. 子Agent完成后，执行 `flow checkpoint <id> <摘要>`
-4. 如果连续失败3次，跳过该任务继续下一个
-
-## 上下文规则
-- 你只读 progress.md 了解全局状态
-- 不要自己写代码，全部交给子Agent
-- 每次只处理一个任务，保持上下文最小
-```
+`flow init` / `flow init`（无stdin接管模式）通过 `ensureClaudeMd()` 将完整协议块注入项目 CLAUDE.md：
+- 使用 `<!-- flowpilot:start -->` / `<!-- flowpilot:end -->` 标记包裹
+- 幂等写入：已存在标记则跳过
+- 协议使用英文祈使句风格（NEVER / MUST / ALWAYS），CC 合规性最佳
+- 包含：触发规则、铁律、执行循环、子Agent规则、安全规则、收尾流程、崩溃恢复
 
 ## 错误处理与恢复
 
@@ -193,11 +176,8 @@
 3. 返回恢复点信息，主Agent从该任务继续循环
 
 ### CLAUDE.md 自引导
-`flow init` 在项目 CLAUDE.md 中追加一行：
-```
-遵循 .workflow/protocol.md 工作流调度协议
-```
-新窗口打开CC → 自动读CLAUDE.md → 发现协议引用 → 用户说"开始" → flow resume → 无缝继续
+`flow init` 将完整协议块直接嵌入项目 CLAUDE.md（`<!-- flowpilot:start/end -->` 标记）。
+新窗口打开CC → 自动读CLAUDE.md → 发现嵌入协议 → 用户说"开始" → flow resume → 无缝继续
 
 ## 实现计划
 
@@ -214,7 +194,7 @@
 
 - `workflow-service.ts` — 8个用例（init/next/nextBatch/checkpoint/skip/resume/add/finish/setup/status） ✅
 - 上下文注入直接内置于 next/nextBatch，无需独立 context-service ✅
-- `protocol-generator.ts` — 含Agent Teams检测+铁律+并行/串行强制Task工具 ✅
+- ~~`protocol-generator.ts`~~ — 已删除，协议直接嵌入 CLAUDE.md（generateClaudeMdBlock）
 
 ### 阶段3：接口层 ✅
 
@@ -224,10 +204,11 @@
 
 ### 阶段4：基础设施层 ✅
 
-- `fs-repository.ts` — progress.md读写+context/+summary+protocol+CLAUDE.md ✅
+- `fs-repository.ts` — progress.md读写+context/+summary+CLAUDE.md协议嵌入 ✅
 - `markdown-parser.ts` — 支持类型+依赖+缩进描述 ✅
 - `git.ts` — 新增，每任务自动commit ✅
 - `verify.ts` — 新增，7种语言自动检测验证 ✅
+- `env-check.ts` — 新增，Agent Teams+插件+context7 MCP环境检测 ✅
 
 ### 最终文件清单
 
@@ -239,7 +220,8 @@
 | src/domain/runtime.ts | 删除 | ✅ |
 | src/domain/task-tree.ts | 删除 | ✅ |
 | src/application/workflow-service.ts | 重写(8用例) | ✅ |
-| src/application/protocol-generator.ts | 新建 | ✅ |
+| src/application/protocol-generator.ts | 已删除（协议嵌入CLAUDE.md） | ✅ |
+| src/infrastructure/env-check.ts | 新建（环境检测） | ✅ |
 | src/infrastructure/fs-repository.ts | 重写 | ✅ |
 | src/infrastructure/markdown-parser.ts | 重写 | ✅ |
 | src/infrastructure/git.ts | 新建(计划外) | ✅ |

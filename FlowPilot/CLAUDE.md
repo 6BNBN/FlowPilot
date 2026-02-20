@@ -13,8 +13,6 @@
 
 - 工作流状态只能通过 flow CLI 变更
 - progress.md 是记忆本体，compact/重启后读它恢复
-- 如有 .workflow/protocol.md，遵循其中的调度协议
+- 协议直接嵌入目标项目 CLAUDE.md（<!-- flowpilot:start/end --> 标记）
 - 主Agent禁止直接读源码/写代码，全部交给子Agent
 - 本工具必须在 Agent Teams 开启的环境下使用
-
-遵循 .workflow/protocol.md 工作流调度协议
