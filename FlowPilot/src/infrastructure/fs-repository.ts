@@ -66,9 +66,9 @@ Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, i
      > On success: \`echo 'one-line summary' | node flow.js checkpoint <id> --files file1 file2 ...\`
      > On failure: \`node flow.js checkpoint <id> FAILED\`
      > \`--files\` MUST list every file you created or modified. This ensures parallel tasks get isolated git commits.
-3. **After ALL sub-agents return, run checkpoint for each task** (if sub-agent didn't):
+3. **After ALL sub-agents return, verify checkpoints**: run \`node flow.js status\`. If any batch task is still \`active\` (sub-agent failed to checkpoint), run checkpoint as fallback:
    \`echo 'summary extracted from sub-agent result' | node flow.js checkpoint <id>\`
-   This ensures context is recorded and git commit is made per-task. **NEVER skip to next batch without checkpointing.**
+   **NEVER proceed to next batch with active tasks.**
 4. Loop back to step 1.
 5. When no tasks remain, run \`node flow.js finish\`.
 
