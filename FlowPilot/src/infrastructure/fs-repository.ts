@@ -74,8 +74,6 @@ Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, i
 ### Finalization
 Dispatch a sub-agent to run /code-review:code-review. Fix issues if any, then \`node flow.js finish\`.
 
-### Crash Recovery
-\`claude --dangerously-skip-permissions --continue\` → say "开始" → auto-resume.
 <!-- flowpilot:end -->`;
 }
 

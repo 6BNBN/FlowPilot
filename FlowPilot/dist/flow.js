@@ -13,20 +13,8 @@ function generateClaudeMdBlock() {
 
 ### On Session Start
 Run \`node flow.js resume\`:
-- If unfinished workflow \u2192 check user request:
-  - User says "\u5F00\u59CB" / "\u7EE7\u7EED" / describes next requirement \u2192 enter **Execution Loop**
-  - User asks an unrelated question or ad-hoc task \u2192 handle via **Ad-hoc Dispatch** first, then remind user the workflow is paused
-- If no workflow \u2192 **Smart Routing** based on user request:
-
-### Smart Routing (no active workflow)
-Judge the task and pick ONE path:
-| Signal | Path | Example |
-|--------|------|---------|
-| No tool use needed | **Reply directly** | "\u4F60\u597D", "\u8C22\u8C22", "FlowPilot\u662F\u4EC0\u4E48" |
-| Needs tools but is a single-round task | **Ad-hoc Dispatch** | "\u5206\u6790\u9700\u6C42\u5B8C\u6210\u60C5\u51B5", "\u68C0\u67E5\u4EE3\u7801\u8D28\u91CF", "\u8BFB\u4E00\u4E0B\u8FD9\u4E2A\u6587\u4EF6" |
-| Multi-step work that modifies codebase | **Requirement Decomposition** | "\u505A\u4E00\u4E2A\u767B\u5F55\u529F\u80FD", "\u4FEE\u590D\u8FD95\u4E2Abug", "\u91CD\u6784\u8BA4\u8BC1\u6A21\u5757" |
-
-**Rule: when in doubt, prefer Ad-hoc Dispatch over Reply directly. Prefer Requirement Decomposition over Ad-hoc Dispatch if task involves 2+ files to create/modify.**
+- If unfinished workflow \u2192 enter **Execution Loop** (unless user is asking an unrelated question \u2014 handle it first via **Ad-hoc Dispatch**, then remind user the workflow is paused)
+- If no workflow \u2192 **judge the request**: reply directly for pure chitchat, use **Ad-hoc Dispatch** for one-off tasks, or enter **Requirement Decomposition** for multi-step development work. When in doubt, prefer the heavier path.
 
 ### Ad-hoc Dispatch (one-off tasks, no workflow init)
 Dispatch sub-agent(s) via Task tool. No init/checkpoint/finish needed. Iron Rule #4 does NOT apply (no task ID exists). Main agent MAY use Read/Glob/Grep directly for trivial lookups (e.g. reading a single file) \u2014 Iron Rule #2 is relaxed in Ad-hoc mode only.
