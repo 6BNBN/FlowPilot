@@ -23,6 +23,8 @@ export interface WorkflowRepository {
   loadTasks(): Promise<string | null>;
   /** 确保CLAUDE.md包含工作流协议 */
   ensureClaudeMd(): Promise<boolean>;
+  /** 确保.claude/settings.json包含hooks */
+  ensureHooks(): Promise<boolean>;
   /** 项目根目录 */
   projectRoot(): string;
   /** 文件锁 */

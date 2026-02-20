@@ -232,4 +232,26 @@ export class FsWorkflowRepository implements WorkflowRepository {
     }
     return true;
   }
+
+  async ensureHooks(): Promise<boolean> {
+    const dir = join(this.base, '.claude');
+    const path = join(dir, 'settings.json');
+    const required = {
+      PreToolUse: [{
+        matcher: 'TaskCreate|TaskUpdate|TaskList',
+        hooks: [{ type: 'prompt' as const, prompt: 'BLOCK this tool call. FlowPilot requires using node flow.js commands instead of native task tools.' }]
+      }]
+    };
+    let settings: Record<string, unknown> = {};
+    try { settings = JSON.parse(await readFile(path, 'utf-8')); } catch {}
+    const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
+    // 幂等：已有 FlowPilot 的 matcher 则跳过
+    const existing = hooks.PreToolUse as Array<{ matcher?: string }> | undefined;
+    if (existing?.some(h => h.matcher === required.PreToolUse[0].matcher)) return false;
+    hooks.PreToolUse = [...(existing ?? []), ...required.PreToolUse];
+    settings.hooks = hooks;
+    await mkdir(dir, { recursive: true });
+    await writeFile(path, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
+    return true;
+  }
 }
