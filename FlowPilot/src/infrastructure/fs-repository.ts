@@ -9,60 +9,60 @@ import { openSync, closeSync, existsSync } from 'fs';
 import type { ProgressData, TaskEntry } from '../domain/types';
 import type { WorkflowRepository } from './repository';
 
-/** 生成写入CLAUDE.md的规则块 */
+/** Generate the CLAUDE.md rule block */
 function generateClaudeMdBlock(): string {
   return `<!-- flowpilot:start -->
-## FlowPilot 工作流协议（必须严格执行，违反任何一条视为失败）
+## FlowPilot Workflow Protocol (MANDATORY — any violation is a protocol failure)
 
-**你是调度器。以下规则优先级最高。**
+**You are the dispatcher. These rules have the HIGHEST priority.**
 
-### 当用户说"开始"时，立即执行：
+### Trigger: When user says "开始" (start), immediately run:
 \`\`\`bash
 node flow.js resume
 \`\`\`
-- 有未完成工作流 → 进入执行循环
-- 无工作流 → 等用户描述需求 → 拆解 → echo '...' | node flow.js init
+- If unfinished workflow exists → enter execution loop
+- If no workflow → wait for user requirements → decompose → \`echo '...' | node flow.js init\`
 
-### 铁律（违反任何一条即为协议失败）
-1. **禁止使用 TaskCreate/TaskUpdate/TaskList** — 这是CC原生任务系统，本项目只用 flow 命令（node flow.js xxx）管理任务
-2. **禁止主Agent写代码/读源码/改文件** — 禁止 Edit/Write/Read/Glob/Grep，所有开发工作必须通过 Task 工具派发子Agent
-3. **所有任务必须通过 Task 工具派发子Agent** — 主Agent只执行 flow 命令和 Task 派发，绝不自己动手
+### Iron Rules (violating ANY rule = protocol failure)
+1. **NEVER use TaskCreate / TaskUpdate / TaskList** — these are CC's native task system. Use ONLY flow commands (\`node flow.js xxx\`) to manage tasks.
+2. **NEVER let the main agent write code / read source / edit files** — Edit, Write, Read, Glob, Grep are FORBIDDEN for the main agent. Dispatch ALL dev work to sub-agents via the Task tool.
+3. **ALWAYS dispatch tasks to sub-agents via the Task tool** — the main agent ONLY runs flow commands and dispatches. Never do the work yourself.
 
-### 执行循环（重复直到返回"全部完成"）
-1. \`node flow.js next --batch\` 获取可并行任务
-2. 对每个任务用 Task 工具派发子Agent，prompt包含：
-   - flow next 输出的「上下文」部分
-   - 任务描述和类型
-   - 以下checkpoint指令（原文复制给子Agent）：
-     > 完成后执行：echo '一句话摘要' | node flow.js checkpoint <id>
-     > 失败执行：node flow.js checkpoint <id> FAILED
-     > 然后只回复"任务<id>已完成"，不要回复其他内容。
-3. 所有子Agent返回后继续循环
-4. 全部完成时执行 \`node flow.js finish\` 收尾
+### Execution Loop (repeat until "all done")
+1. Run \`node flow.js next --batch\` to get parallelizable tasks.
+2. For each task, dispatch a sub-agent via the Task tool. Include in the prompt:
+   - The "context" section from flow next output
+   - Task description and type
+   - These checkpoint instructions (copy verbatim to sub-agent):
+     > On success: \`echo 'one-line summary' | node flow.js checkpoint <id>\`
+     > On failure: \`node flow.js checkpoint <id> FAILED\`
+     > Then reply ONLY "Task <id> done." — do NOT return any other content.
+3. After all sub-agents return, continue the loop.
+4. When all tasks are done, run \`node flow.js finish\`.
 
-### 需求拆解
-收到需求后，调用 /superpowers:brainstorming 头脑风暴，整理为任务列表后用 echo '...' | node flow.js init 写入。
+### Requirement Decomposition
+Use /superpowers:brainstorming to brainstorm, then pipe the task list into \`echo '...' | node flow.js init\`.
 
-### 子Agent规则
-- 执行任务前，优先查找当前环境中匹配的技能(Skill)或MCP工具，有则必须使用
-- type=frontend → 调用 /frontend-design 插件
-- type=backend → 调用 /feature-dev 插件
-- type=general → 查找匹配的技能/MCP，无匹配则直接执行
-- 遇到不熟悉的库/框架API → 必须先用 context7 MCP 查询官方文档，禁止凭记忆猜测
-- checkpoint后只回复"任务xxx已完成"，不要回传详细内容
+### Sub-Agent Rules
+- Before executing, search for matching Skills or MCP tools in the current environment. If found, MUST use them.
+- type=frontend → use /frontend-design skill
+- type=backend → use /feature-dev skill
+- type=general → search for matching skill/MCP; if none, execute directly
+- For unfamiliar library/framework APIs → MUST query official docs via context7 MCP first. Never guess from memory.
+- After checkpoint, reply ONLY "Task xxx done." — do NOT return detailed content.
 
-### 代码安全规范（子Agent必须遵守）
-- SQL注入：参数化查询，禁止拼接用户输入
-- XSS：禁止v-html/innerHTML直接渲染用户输入，必须sanitize
-- 认证：密钥从环境变量读取，密码bcrypt，Token设有效期
-- 输入校验：入口层校验类型/长度/格式，文件上传校验MIME和大小
-- 敏感数据：日志禁止明文密码，传输强制HTTPS，.env禁止提交Git
+### Security Rules (sub-agents MUST follow)
+- SQL injection: use parameterized queries. Never concatenate user input.
+- XSS: never use v-html/innerHTML with unsanitized user input.
+- Auth: read secrets from env vars. Use bcrypt for passwords. Set token expiry.
+- Input validation: validate type/length/format at entry points. Check MIME and size for uploads.
+- Sensitive data: never log plaintext passwords. Enforce HTTPS. Never commit .env to git.
 
-### 收尾
-全部完成后用 Task 工具派子Agent调用 /code-review:code-review 审查变更，有问题修复后再 node flow.js finish。
+### Finalization
+Dispatch a sub-agent to run /code-review:code-review on all changes. Fix issues if any, then run \`node flow.js finish\`.
 
-### 中断恢复
-compact/崩溃/关窗口后 → \`claude --dangerously-skip-permissions --continue\` → 说"开始" → 自动继续。
+### Crash Recovery
+After compact / crash / window close → \`claude --dangerously-skip-permissions --continue\` → say "开始" → auto-resume.
 <!-- flowpilot:end -->`;
 }
 

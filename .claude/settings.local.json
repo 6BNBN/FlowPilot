@@ -12,7 +12,9 @@
       "Bash(printf:*)",
       "Bash(dir:*)",
       "Bash(npx vitest run)",
-      "Bash(npm test)"
+      "Bash(npm test)",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__plugin_context7_context7__query-docs"
     ]
   }
 }
