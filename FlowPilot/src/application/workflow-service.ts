@@ -197,10 +197,9 @@ export class WorkflowService {
     return `已跳过任务 ${id}: ${task.title}`;
   }
 
-  /** setup: 项目接管模式 - 生成协议+写入CLAUDE.md */
+  /** setup: 项目接管模式 - 写入CLAUDE.md */
   async setup(): Promise<string> {
     const existing = await this.repo.loadProgress();
-    await this.repo.saveProtocol(generateProtocol('project'));
     const wrote = await this.repo.ensureClaudeMd();
     const lines: string[] = [];
 
