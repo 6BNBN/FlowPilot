@@ -56,7 +56,10 @@ export class WorkflowService {
       if (isAllDone(data.tasks)) return null;
 
       const task = findNextTask(data.tasks);
-      if (!task) return null;
+      if (!task) {
+        await this.repo.saveProgress(data); // persist cascadeSkip changes
+        return null;
+      }
 
       task.status = 'active';
       data.current = task.id;
