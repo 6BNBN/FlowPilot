@@ -55,16 +55,27 @@ export class CLI {
       case 'checkpoint': {
         const id = rest[0];
         if (!id) throw new Error('需要任务ID');
+        const filesIdx = rest.indexOf('--files');
         const fileIdx = rest.indexOf('--file');
         let detail: string;
+        let files: string[] | undefined;
+
+        // 解析 --files（必须在解析detail之前，从rest中剥离）
+        if (filesIdx >= 0) {
+          files = [];
+          for (let i = filesIdx + 1; i < rest.length && !rest[i].startsWith('--'); i++) {
+            files.push(rest[i]);
+          }
+        }
+
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
           detail = readFileSync(rest[fileIdx + 1], 'utf-8');
-        } else if (rest.length > 1 && fileIdx < 0) {
+        } else if (rest.length > 1 && fileIdx < 0 && filesIdx < 0) {
           detail = rest.slice(1).join(' ');
         } else {
           detail = await readStdinIfPiped();
         }
-        return await s.checkpoint(id, detail.trim());
+        return await s.checkpoint(id, detail.trim(), files);
       }
 
       case 'skip': {
