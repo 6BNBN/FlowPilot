@@ -11,7 +11,8 @@
       "Bash(node:*)",
       "Bash(printf:*)",
       "Bash(dir:*)",
-      "Bash(npx vitest run)"
+      "Bash(npx vitest run)",
+      "Bash(npm test)"
     ]
   }
 }
