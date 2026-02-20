@@ -7,7 +7,6 @@ import type { ProgressData, TaskEntry } from '../domain/types';
 import type { WorkflowDefinition } from '../domain/workflow';
 import type { WorkflowRepository } from '../infrastructure/repository';
 import { makeTaskId, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
-import { generateProtocol } from './protocol-generator';
 import { autoCommit } from '../infrastructure/git';
 import { runVerify } from '../infrastructure/verify';
 
@@ -42,7 +41,6 @@ export class WorkflowService {
     };
     await this.repo.saveProgress(data);
     await this.repo.saveTasks(tasksMd);
-    await this.repo.saveProtocol(generateProtocol(def.name));
     await this.repo.saveSummary(`# ${def.name}\n\n${def.description}\n`);
     await this.repo.ensureClaudeMd();
     return data;

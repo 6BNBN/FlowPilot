@@ -18,8 +18,6 @@ export interface WorkflowRepository {
   /** 保存/加载滚动摘要 */
   saveSummary(content: string): Promise<void>;
   loadSummary(): Promise<string>;
-  /** 保存协议文件 */
-  saveProtocol(content: string): Promise<void>;
   /** 保存任务树定义 */
   saveTasks(content: string): Promise<void>;
   loadTasks(): Promise<string | null>;
