@@ -690,7 +690,7 @@ ${changeSummary}
 };
 
 // src/interfaces/cli.ts
-var import_fs2 = require("fs");
+var import_fs3 = require("fs");
 
 // src/interfaces/formatter.ts
 var ICON = {
@@ -759,6 +759,49 @@ function readStdinIfPiped(timeout = 3e4) {
   });
 }
 
+// src/infrastructure/env-check.ts
+var import_fs2 = require("fs");
+var import_path2 = require("path");
+var import_os = require("os");
+function checkEnvironment() {
+  const warnings = [];
+  const home = (0, import_os.homedir)();
+  const claudeDir = (0, import_path2.join)(home, ".claude");
+  if (!(0, import_fs2.existsSync)(claudeDir)) {
+    warnings.push("\u672A\u68C0\u6D4B\u5230 Claude Code \u73AF\u5883\uFF08~/.claude \u4E0D\u5B58\u5728\uFF09");
+  } else {
+    try {
+      const settingsPath = (0, import_path2.join)(claudeDir, "settings.json");
+      if ((0, import_fs2.existsSync)(settingsPath)) {
+        const raw = (0, import_fs2.readFileSync)(settingsPath, "utf-8");
+        if (!raw.includes("enabledBetaFeatureFlags") || !raw.includes("agent_teams")) {
+          warnings.push("Agent Teams \u53EF\u80FD\u672A\u5F00\u542F \u2192 Settings \u2192 Feature Flags \u2192 Agent Teams");
+        }
+      }
+    } catch {
+    }
+  }
+  const pluginDirs = [
+    (0, import_path2.join)(claudeDir, "plugins"),
+    (0, import_path2.join)(home, ".claude", "plugins")
+  ];
+  const requiredPlugins = ["superpowers", "frontend-design", "feature-dev"];
+  const foundPlugins = /* @__PURE__ */ new Set();
+  for (const dir of pluginDirs) {
+    if (!(0, import_fs2.existsSync)(dir)) continue;
+    for (const name of requiredPlugins) {
+      if ((0, import_fs2.existsSync)((0, import_path2.join)(dir, name)) || (0, import_fs2.existsSync)((0, import_path2.join)(dir, name + ".json"))) {
+        foundPlugins.add(name);
+      }
+    }
+  }
+  const missing = requiredPlugins.filter((p) => !foundPlugins.has(p));
+  if (missing.length) {
+    warnings.push(`\u63A8\u8350\u63D2\u4EF6\u672A\u68C0\u6D4B\u5230: ${missing.join(", ")}\uFF08\u5B50Agent\u529F\u80FD\u53EF\u80FD\u964D\u7EA7\uFF09`);
+  }
+  return warnings;
+}
+
 // src/interfaces/cli.ts
 var CLI = class {
   constructor(service2) {
@@ -782,11 +825,16 @@ var CLI = class {
       case "init": {
         const force = rest.includes("--force");
         const md = await readStdinIfPiped();
+        let out;
         if (md.trim()) {
           const data = await s.init(md, force);
-          return `\u5DF2\u521D\u59CB\u5316\u5DE5\u4F5C\u6D41: ${data.name} (${data.tasks.length} \u4E2A\u4EFB\u52A1)`;
+          out = `\u5DF2\u521D\u59CB\u5316\u5DE5\u4F5C\u6D41: ${data.name} (${data.tasks.length} \u4E2A\u4EFB\u52A1)`;
+        } else {
+          out = await s.setup();
         }
-        return await s.setup();
+        const warnings = checkEnvironment();
+        if (warnings.length) out += "\n\n" + warnings.map((w) => `\u26A0 ${w}`).join("\n");
+        return out;
       }
       case "next": {
         if (rest.includes("--batch")) {
@@ -804,7 +852,7 @@ var CLI = class {
         const fileIdx = rest.indexOf("--file");
         let detail;
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
-          detail = (0, import_fs2.readFileSync)(rest[fileIdx + 1], "utf-8");
+          detail = (0, import_fs3.readFileSync)(rest[fileIdx + 1], "utf-8");
         } else if (rest.length > 1 && fileIdx < 0) {
           detail = rest.slice(1).join(" ");
         } else {
