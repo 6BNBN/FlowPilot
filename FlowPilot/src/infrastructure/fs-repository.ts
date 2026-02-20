@@ -24,9 +24,10 @@ function generateClaudeMdBlock(): string {
 收到需求后，调用 /superpowers:brainstorming 头脑风暴，整理为任务列表后用 echo '...' | node flow.js init 写入。
 
 ### 子Agent规则
+- 执行任务前，优先查找当前环境中匹配的技能(Skill)或MCP工具，有则必须使用
 - type=frontend → 调用 /frontend-design 插件
 - type=backend → 调用 /feature-dev 插件
-- type=general → 直接执行
+- type=general → 查找匹配的技能/MCP，无匹配则直接执行
 - 遇到不熟悉的库/框架API → 必须先用 context7 MCP 查询官方文档，禁止凭记忆猜测
 - checkpoint后只回复"任务xxx已完成"，不要回传详细内容
 

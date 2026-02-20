@@ -5,6 +5,37 @@
 var import_promises = require("fs/promises");
 var import_path = require("path");
 var import_fs = require("fs");
+function generateClaudeMdBlock() {
+  return `<!-- flowpilot:start -->
+## FlowPilot \u5DE5\u4F5C\u6D41\u89C4\u5219
+
+\u9075\u5FAA .workflow/protocol.md \u5DE5\u4F5C\u6D41\u8C03\u5EA6\u534F\u8BAE\u3002
+
+### \u7981\u6B62\u4E8B\u9879
+- **\u7981\u6B62\u4F7F\u7528 TaskCreate/TaskUpdate/TaskList** \u2014 \u53EA\u7528 flow \u547D\u4EE4\u7BA1\u7406\u4EFB\u52A1
+- **\u7981\u6B62\u4E3BAgent\u5199\u4EE3\u7801/\u8BFB\u6E90\u7801/\u6539\u6587\u4EF6** \u2014 \u7981\u6B62 Edit/Write/Read/Glob/Grep\uFF0C\u5168\u90E8\u4EA4\u7ED9\u5B50Agent
+
+### \u9700\u6C42\u62C6\u89E3
+\u6536\u5230\u9700\u6C42\u540E\uFF0C\u8C03\u7528 /superpowers:brainstorming \u5934\u8111\u98CE\u66B4\uFF0C\u6574\u7406\u4E3A\u4EFB\u52A1\u5217\u8868\u540E\u7528 echo '...' | node flow.js init \u5199\u5165\u3002
+
+### \u5B50Agent\u89C4\u5219
+- type=frontend \u2192 \u8C03\u7528 /frontend-design \u63D2\u4EF6
+- type=backend \u2192 \u8C03\u7528 /feature-dev \u63D2\u4EF6
+- type=general \u2192 \u76F4\u63A5\u6267\u884C
+- \u9047\u5230\u4E0D\u719F\u6089\u7684\u5E93/\u6846\u67B6API \u2192 \u5FC5\u987B\u5148\u7528 context7 MCP \u67E5\u8BE2\u5B98\u65B9\u6587\u6863\uFF0C\u7981\u6B62\u51ED\u8BB0\u5FC6\u731C\u6D4B
+- checkpoint\u540E\u53EA\u56DE\u590D"\u4EFB\u52A1xxx\u5DF2\u5B8C\u6210"\uFF0C\u4E0D\u8981\u56DE\u4F20\u8BE6\u7EC6\u5185\u5BB9
+
+### \u4EE3\u7801\u5B89\u5168\u89C4\u8303\uFF08\u5B50Agent\u5FC5\u987B\u9075\u5B88\uFF09
+- SQL\u6CE8\u5165\uFF1A\u53C2\u6570\u5316\u67E5\u8BE2\uFF0C\u7981\u6B62\u62FC\u63A5\u7528\u6237\u8F93\u5165
+- XSS\uFF1A\u7981\u6B62v-html/innerHTML\u76F4\u63A5\u6E32\u67D3\u7528\u6237\u8F93\u5165\uFF0C\u5FC5\u987Bsanitize
+- \u8BA4\u8BC1\uFF1A\u5BC6\u94A5\u4ECE\u73AF\u5883\u53D8\u91CF\u8BFB\u53D6\uFF0C\u5BC6\u7801bcrypt\uFF0CToken\u8BBE\u6709\u6548\u671F
+- \u8F93\u5165\u6821\u9A8C\uFF1A\u5165\u53E3\u5C42\u6821\u9A8C\u7C7B\u578B/\u957F\u5EA6/\u683C\u5F0F\uFF0C\u6587\u4EF6\u4E0A\u4F20\u6821\u9A8CMIME\u548C\u5927\u5C0F
+- \u654F\u611F\u6570\u636E\uFF1A\u65E5\u5FD7\u7981\u6B62\u660E\u6587\u5BC6\u7801\uFF0C\u4F20\u8F93\u5F3A\u5236HTTPS\uFF0C.env\u7981\u6B62\u63D0\u4EA4Git
+
+### \u6536\u5C3E
+\u5168\u90E8\u5B8C\u6210\u540E\u7528 Task \u5DE5\u5177\u6D3E\u5B50Agent\u8C03\u7528 /code-review:code-review \u5BA1\u67E5\u53D8\u66F4\uFF0C\u6709\u95EE\u9898\u4FEE\u590D\u540E\u518D node flow.js finish\u3002
+<!-- flowpilot:end -->`;
+}
 var FsWorkflowRepository = class {
   root;
   ctxDir;
@@ -142,13 +173,14 @@ var FsWorkflowRepository = class {
   async ensureClaudeMd() {
     const base = (0, import_path.join)(this.root, "..");
     const path = (0, import_path.join)(base, "CLAUDE.md");
-    const ref = "\u9075\u5FAA .workflow/protocol.md \u5DE5\u4F5C\u6D41\u8C03\u5EA6\u534F\u8BAE";
+    const marker = "<!-- flowpilot:start -->";
+    const block = generateClaudeMdBlock();
     try {
       const content = await (0, import_promises.readFile)(path, "utf-8");
-      if (content.includes(ref)) return false;
-      await (0, import_promises.writeFile)(path, content.trimEnd() + "\n\n" + ref + "\n", "utf-8");
+      if (content.includes(marker)) return false;
+      await (0, import_promises.writeFile)(path, content.trimEnd() + "\n\n" + block + "\n", "utf-8");
     } catch {
-      await (0, import_promises.writeFile)(path, "# Project\n\n" + ref + "\n", "utf-8");
+      await (0, import_promises.writeFile)(path, "# Project\n\n" + block + "\n", "utf-8");
     }
     return true;
   }
