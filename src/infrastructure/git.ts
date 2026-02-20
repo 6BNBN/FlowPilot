@@ -29,15 +29,20 @@ function groupBySubmodule(files: string[], submodules: string[]): Map<string, st
 
 /** 在指定目录执行 git add + commit */
 function commitIn(cwd: string, files: string[] | null, msg: string): void {
-  const opts = { stdio: 'pipe' as const, cwd };
+  const opts = { stdio: 'pipe' as const, cwd, encoding: 'utf-8' as const };
   try {
     if (files) {
       for (const f of files) execSync(`git add ${JSON.stringify(f)}`, opts);
     } else {
       execSync('git add -A', opts);
     }
-    execSync(`git commit -m ${JSON.stringify(msg)} --allow-empty`, opts);
-  } catch {}
+    const status = execSync('git diff --cached --quiet || echo HAS_CHANGES', opts).trim();
+    if (status === 'HAS_CHANGES') {
+      execSync(`git commit -m ${JSON.stringify(msg)}`, opts);
+    }
+  } catch (e: any) {
+    console.error(`[FlowPilot] git commit 失败 (${cwd}): ${e.stderr || e.message}`);
+  }
 }
 
 /** 自动 git add + commit，files 指定只提交特定文件 */
@@ -61,11 +66,16 @@ export function autoCommit(taskId: string, title: string, summary: string, files
       const touchedSubs = [...groups.keys()].filter(k => k !== '');
       for (const s of touchedSubs) execSync(`git add ${JSON.stringify(s)}`, { stdio: 'pipe' });
       for (const f of parentFiles) execSync(`git add ${JSON.stringify(f)}`, { stdio: 'pipe' });
-      execSync(`git commit -m ${JSON.stringify(msg)} --allow-empty`, { stdio: 'pipe' });
+      const status = execSync('git diff --cached --quiet || echo HAS_CHANGES', { stdio: 'pipe', encoding: 'utf-8' }).trim();
+      if (status === 'HAS_CHANGES') {
+        execSync(`git commit -m ${JSON.stringify(msg)}`, { stdio: 'pipe' });
+      }
     } else {
       // 无指定文件：所有子模块 + 父仓库全部提交
       for (const sub of submodules) commitIn(sub, null, msg);
       commitIn(process.cwd(), null, msg);
     }
-  } catch {}
+  } catch (e: any) {
+    console.error(`[FlowPilot] autoCommit 失败: ${e.stderr || e.message}`);
+  }
 }

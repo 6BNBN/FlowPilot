@@ -256,7 +256,8 @@ export class WorkflowService {
 
     // 清理 .workflow/ 然后最终提交（包含清理）
     await this.repo.clearAll();
-    autoCommit('finish', data.name, stats);
+    const titles = done.map(t => `- ${t.id}: ${t.title}`).join('\n');
+    autoCommit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`);
 
     const scripts = result.scripts.length ? result.scripts.join(', ') : '无验证脚本';
     return `验证通过: ${scripts}\n${stats}\n已提交最终commit，工作流回到待命状态\n等待下一个需求...`;
