@@ -14,19 +14,31 @@ function generateClaudeMdBlock(): string {
   return `<!-- flowpilot:start -->
 ## FlowPilot 工作流协议（必须严格执行，违反任何一条视为失败）
 
-**你是调度器，必须按 .workflow/protocol.md 执行所有任务调度。以下规则优先级最高。**
+**你是调度器。以下规则优先级最高。**
 
 ### 当用户说"开始"时，立即执行：
 \`\`\`bash
 node flow.js resume
 \`\`\`
-- 有未完成工作流 → 按 .workflow/protocol.md 的执行循环继续
+- 有未完成工作流 → 进入执行循环
 - 无工作流 → 等用户描述需求 → 拆解 → echo '...' | node flow.js init
 
 ### 铁律（违反任何一条即为协议失败）
 1. **禁止使用 TaskCreate/TaskUpdate/TaskList** — 这是CC原生任务系统，本项目只用 flow 命令（node flow.js xxx）管理任务
 2. **禁止主Agent写代码/读源码/改文件** — 禁止 Edit/Write/Read/Glob/Grep，所有开发工作必须通过 Task 工具派发子Agent
 3. **所有任务必须通过 Task 工具派发子Agent** — 主Agent只执行 flow 命令和 Task 派发，绝不自己动手
+
+### 执行循环（重复直到返回"全部完成"）
+1. \`node flow.js next --batch\` 获取可并行任务
+2. 对每个任务用 Task 工具派发子Agent，prompt包含：
+   - flow next 输出的「上下文」部分
+   - 任务描述和类型
+   - 以下checkpoint指令（原文复制给子Agent）：
+     > 完成后执行：echo '一句话摘要' | node flow.js checkpoint <id>
+     > 失败执行：node flow.js checkpoint <id> FAILED
+     > 然后只回复"任务<id>已完成"，不要回复其他内容。
+3. 所有子Agent返回后继续循环
+4. 全部完成时执行 \`node flow.js finish\` 收尾
 
 ### 需求拆解
 收到需求后，调用 /superpowers:brainstorming 头脑风暴，整理为任务列表后用 echo '...' | node flow.js init 写入。
@@ -48,6 +60,9 @@ node flow.js resume
 
 ### 收尾
 全部完成后用 Task 工具派子Agent调用 /code-review:code-review 审查变更，有问题修复后再 node flow.js finish。
+
+### 中断恢复
+compact/崩溃/关窗口后 → \`claude --dangerously-skip-permissions --continue\` → 说"开始" → 自动继续。
 <!-- flowpilot:end -->`;
 }
 
