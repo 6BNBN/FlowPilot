@@ -94,7 +94,16 @@ cd /your/project
 # 初始化（生成协议 + 写入CLAUDE.md）
 node flow.js init
 
-# 打开 CC，输入"开始"，然后描述你的需求，剩下的全自动
+# 全自动模式启动 CC，输入"开始"，然后描述需求，剩下的全自动
+claude --dangerously-skip-permissions
+```
+
+> `--dangerously-skip-permissions` 跳过所有权限确认，实现真正的无人值守。
+
+中断恢复：
+```bash
+claude --dangerously-skip-permissions --continue   # 接续最近一次对话
+claude --dangerously-skip-permissions --resume     # 从历史对话列表选择
 ```
 
 ## 架构概览

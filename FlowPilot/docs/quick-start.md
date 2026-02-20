@@ -23,9 +23,11 @@ cp FlowPilot目录/dist/flow.js  你的项目/
 cd 你的项目
 node flow.js init
 
-# 3. 打开 Claude Code，说：
-开始
+# 3. 用全自动模式启动 Claude Code，说"开始"
+claude --dangerously-skip-permissions
 ```
+
+> `--dangerously-skip-permissions` 会跳过所有权限确认弹窗，实现真正的全自动。不加的话每个操作都要你点确认。
 
 然后直接告诉 CC 你要做什么，比如：
 
@@ -53,11 +55,17 @@ node flow.js init
 
 不管是电脑关了、CC 崩了、还是上下文满了，都一样：
 
-```
-新开一个 CC 窗口，说：开始
+```bash
+# 接续最近一次对话，全自动继续
+claude --dangerously-skip-permissions --continue
 ```
 
-它会自动从断点继续，之前做的不会丢。
+进去后说「开始」，它会自动从断点继续，之前做的不会丢。
+
+如果想从历史对话列表里挑一个恢复：
+```bash
+claude --dangerously-skip-permissions --resume
+```
 
 ## 中途想加需求
 
