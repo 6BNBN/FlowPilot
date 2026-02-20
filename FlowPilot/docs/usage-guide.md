@@ -12,11 +12,10 @@
 - **必须开启 Agent Teams 功能**：
   - 路径：Claude Code → Settings → Feature Flags → Agent Teams → 开启
   - 这是核心依赖，未开启则无法派发子Agent执行任务
-- 推荐安装以下 CC 插件（非必须但强烈推荐）：
-  - superpowers（任务拆解与头脑风暴）
-  - frontend-design（前端任务专业化执行）
-  - feature-dev（后端任务专业化执行）
-  - code-review（收尾代码审查）
+- **建议先安装插件**（未安装则子Agent功能降级）：
+  在 CC 中执行 `/plugin` 打开插件商店，选择安装：
+  `superpowers`、`frontend-design`、`feature-dev`、`code-review`
+- 推荐配置 **context7 MCP**（子Agent查询官方文档）：在 `~/.claude/mcp.json` 中添加
 
 ## 快速开始
 
@@ -34,8 +33,8 @@ node flow.js init
 ```
 
 这会自动生成：
-- `.workflow/protocol.md` — 调度协议（告诉CC怎么工作）
-- `CLAUDE.md` — 添加协议引用（CC启动时自动读取）
+- `CLAUDE.md` — 嵌入调度协议（`<!-- flowpilot:start/end -->` 标记包裹）
+- `.workflow/` 目录 — 任务状态持久化
 
 ### 第三步：开始
 
@@ -132,9 +131,8 @@ CC：恢复工作流: 博客系统 | 进度: 7/12 | 继续执行
 ```
 你的项目/
 ├── flow.js                    # 工具本体（你复制过来的）
-├── CLAUDE.md                  # CC 配置（自动添加协议引用）
+├── CLAUDE.md                  # CC 配置（嵌入调度协议）
 └── .workflow/
-    ├── protocol.md            # 调度协议（CC读这个文件工作）
     ├── progress.md            # 任务状态表（核心记忆）
     ├── tasks.md               # 原始任务定义
     └── context/
@@ -149,7 +147,7 @@ CC：恢复工作流: 博客系统 | 进度: 7/12 | 继续执行
 ```
 用户说"开始"
     ↓
-CC 读 CLAUDE.md → 发现 protocol.md → 进入调度模式
+CC 读 CLAUDE.md → 发现嵌入协议 → 进入调度模式
     ↓
 flow resume → 检查是否有未完成工作流
     ↓

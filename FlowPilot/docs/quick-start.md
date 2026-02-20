@@ -7,7 +7,8 @@
 1. 确保电脑装了 Node.js（版本 20 以上）
 2. 打开 Claude Code，进设置开启 Agent Teams：
    - Settings → Feature Flags → Agent Teams → 开启
-3. 构建工具：
+3. 安装插件：在 CC 中执行 `/plugin`，选择安装 `superpowers`、`frontend-design`、`feature-dev`、`code-review`
+4. 构建工具：
    ```bash
    cd FlowPilot目录
    npm install && npm run build

@@ -81,6 +81,19 @@ CC 会自动：拆解任务 → 识别依赖 → 并行派发子Agent → 写代
 - [快速上手](docs/quick-start.md) — 不懂原理也能用，3 步开始全自动开发
 - [详细使用指南](docs/usage-guide.md) — 完整命令说明、并行开发技巧、任务设计实战示例
 
+## 前置准备
+
+建议先安装插件，否则子Agent功能会降级。在 CC 中执行 `/plugin` 打开插件商店，选择安装：
+
+- `superpowers` — 需求拆解头脑风暴
+- `frontend-design` — 前端任务
+- `feature-dev` — 后端任务
+- `code-review` — 收尾代码审查
+
+另外确保开启 **Agent Teams**（Settings → Feature Flags → Agent Teams），并配置 context7 MCP（`~/.claude/mcp.json`）。
+
+`node flow.js init` 会自动检测以上环境，缺失项输出 ⚠ 警告。
+
 ## 快速开始
 
 ```bash
@@ -91,7 +104,7 @@ cd FlowPilot && npm install && npm run build
 cp dist/flow.js /your/project/
 cd /your/project
 
-# 初始化（生成协议 + 写入CLAUDE.md）
+# 初始化（协议嵌入CLAUDE.md + 环境检测）
 node flow.js init
 
 # 全自动模式启动 CC，输入"开始"，然后描述需求，剩下的全自动
@@ -121,7 +134,6 @@ claude --dangerously-skip-permissions --resume     # 从历史对话列表选择
   ├─ node flow.js checkpoint ──→ 记录产出 + git commit
   │
   └─ .workflow/（持久化层）
-      ├─ protocol.md        # 调度协议
       ├─ progress.md        # 任务状态表（主Agent读）
       ├─ tasks.md           # 完整任务定义
       └─ context/
@@ -158,7 +170,7 @@ node flow.js add <描述> [--type]  # 追加任务（frontend/backend/general）
 ```
 node flow.js init
        ↓
-  生成 protocol.md + 写入 CLAUDE.md
+  生成 CLAUDE.md 协议嵌入 + 环境检测
        ↓
   用户开CC说"开始"
        ↓
@@ -202,12 +214,12 @@ src/
 │   ├── task-store.ts                # 任务状态管理（纯函数）
 │   └── workflow.ts                  # WorkflowDefinition 定义
 ├── application/
-│   ├── workflow-service.ts          # 核心用例（8个命令）
-│   └── protocol-generator.ts        # 生成 protocol.md
+│   └── workflow-service.ts          # 核心用例（8个命令）
 ├── infrastructure/
 │   ├── repository.ts                # 仓储接口
-│   ├── fs-repository.ts             # 文件系统实现
+│   ├── fs-repository.ts             # 文件系统实现 + CLAUDE.md协议嵌入
 │   ├── markdown-parser.ts           # 任务Markdown解析
+│   ├── env-check.ts                 # 环境检测（Agent Teams/插件/MCP）
 │   ├── git.ts                       # 自动git提交
 │   └── verify.ts                    # 多语言项目验证
 └── interfaces/
