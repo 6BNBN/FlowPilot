@@ -1,7 +1,7 @@
 # 全自动工作流引擎改造设计
 
 > **实现状态：已完成** (2026-02-20)
-> 所有核心目标已达成，额外实现了并行任务批处理、多语言验证、Agent Teams强制检测等增强功能。
+> 所有核心目标已达成，额外实现了并行任务批处理、多语言验证、Hooks强制拦截等增强功能。
 
 ## 目标
 
@@ -10,7 +10,7 @@
 - ✅ 分层记忆实现无限上下文（超10任务自动压缩摘要）
 - ✅ 跨会话无缝恢复（万步0偏移）
 - ✅ 插件驱动的专业化子Agent分工
-- ✅ **新增** Agent Teams 前置检测（未开启则阻止启动）
+- ✅ **新增** Hooks 强制拦截（禁用 TaskCreate/TaskUpdate/TaskList）
 
 ## 核心架构
 
@@ -42,7 +42,7 @@
 
 | 命令 | 用途 | 状态 |
 |------|------|------|
-| `flow init [--force]` | 解析文档→任务树+CLAUDE.md协议嵌入+环境检测 / 无stdin则接管项目 | ✅ |
+| `flow init [--force]` | 解析文档→任务树+CLAUDE.md协议嵌入+Hooks注入 / 无stdin则接管项目 | ✅ |
 | `flow next [--batch]` | 返回下一个/所有可并行任务（含依赖上下文） | ✅ |
 | `flow checkpoint <id>` | 记录任务完成（stdin/--file/内联文本）+ FAILED重试 | ✅ |
 | `flow skip <id>` | 手动跳过任务 | ✅ 新增 |
@@ -146,6 +146,13 @@
 - Agent Teams（Settings → Feature Flags → Agent Teams）
 - 插件：superpowers、frontend-design、feature-dev、code-review（通过 `/plugin` 安装）
 - context7 MCP（`~/.claude/mcp.json` 配置）
+
+### Hooks 强制拦截
+
+`flow init` 自动在目标项目 `.claude/settings.json` 中注入 PreToolUse hook：
+- 拦截 TaskCreate/TaskUpdate/TaskList 调用，强制使用 `node flow.js` 命令
+- 幂等写入：已有相同 matcher 则跳过
+- 与现有 settings.json 合并，不覆盖
 
 ## 协议嵌入（CLAUDE.md 直接注入）
 

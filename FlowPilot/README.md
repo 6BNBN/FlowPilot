@@ -217,9 +217,8 @@ src/
 │   └── workflow-service.ts          # 核心用例（8个命令）
 ├── infrastructure/
 │   ├── repository.ts                # 仓储接口
-│   ├── fs-repository.ts             # 文件系统实现 + CLAUDE.md协议嵌入
+│   ├── fs-repository.ts             # 文件系统实现 + CLAUDE.md协议嵌入 + Hooks注入
 │   ├── markdown-parser.ts           # 任务Markdown解析
-│   ├── env-check.ts                 # 环境检测（Agent Teams/插件/MCP）
 │   ├── git.ts                       # 自动git提交
 │   └── verify.ts                    # 多语言项目验证
 └── interfaces/

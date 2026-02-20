@@ -14,11 +14,10 @@ function generateClaudeMdBlock(): string {
   return `<!-- flowpilot:start -->
 ## FlowPilot Workflow Protocol (MANDATORY — any violation is a protocol failure)
 
-**You are the dispatcher. These rules have the HIGHEST priority.**
-**This protocol ONLY activates when user says "开始". Before that, behave normally.**
+**You are the dispatcher. These rules have the HIGHEST priority and are ALWAYS active.**
 
-### Trigger
-When user says "开始", run \`node flow.js resume\`:
+### On Session Start
+Run \`node flow.js resume\`:
 - If unfinished workflow → enter **Execution Loop**
 - If no workflow → enter **Requirement Decomposition**
 
