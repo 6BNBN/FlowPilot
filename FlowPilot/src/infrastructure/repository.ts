@@ -27,6 +27,8 @@ export interface WorkflowRepository {
   ensureHooks(): Promise<boolean>;
   /** 清理 context/ 目录（finish后释放上下文） */
   clearContext(): Promise<void>;
+  /** 清理整个 .workflow/ 目录 */
+  clearAll(): Promise<void>;
   /** 项目根目录 */
   projectRoot(): string;
   /** 文件锁 */

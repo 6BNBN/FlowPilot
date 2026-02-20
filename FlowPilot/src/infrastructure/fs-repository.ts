@@ -186,6 +186,10 @@ export class FsWorkflowRepository implements WorkflowRepository {
     await rm(this.ctxDir, { recursive: true, force: true });
   }
 
+  async clearAll(): Promise<void> {
+    await rm(this.root, { recursive: true, force: true });
+  }
+
   async saveTaskContext(taskId: string, content: string): Promise<void> {
     await this.ensure(this.ctxDir);
     await writeFile(join(this.ctxDir, `task-${taskId}.md`), content, 'utf-8');
