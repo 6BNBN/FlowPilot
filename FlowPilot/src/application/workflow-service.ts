@@ -116,7 +116,7 @@ export class WorkflowService {
   }
 
   /** checkpoint: 记录任务完成 */
-  async checkpoint(id: string, detail: string): Promise<string> {
+  async checkpoint(id: string, detail: string, files?: string[]): Promise<string> {
     await this.repo.lock();
     try {
       const data = await this.requireProgress();
