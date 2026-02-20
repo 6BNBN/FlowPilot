@@ -89,7 +89,10 @@ export class WorkflowService {
       if (isAllDone(data.tasks)) return [];
 
       const tasks = findParallelTasks(data.tasks);
-      if (!tasks.length) return [];
+      if (!tasks.length) {
+        await this.repo.saveProgress(data); // persist cascadeSkip changes
+        return [];
+      }
 
       for (const t of tasks) t.status = 'active';
       data.current = tasks[0].id;
