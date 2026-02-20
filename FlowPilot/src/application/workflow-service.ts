@@ -202,6 +202,7 @@ export class WorkflowService {
   async setup(): Promise<string> {
     const existing = await this.repo.loadProgress();
     const wrote = await this.repo.ensureClaudeMd();
+    await this.repo.ensureHooks();
     const lines: string[] = [];
 
     if (existing && (existing.status === 'running' || existing.status === 'finishing')) {
