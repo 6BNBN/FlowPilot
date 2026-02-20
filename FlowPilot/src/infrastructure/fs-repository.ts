@@ -26,6 +26,7 @@ Run \`node flow.js resume\`:
 1. **NEVER use TaskCreate / TaskUpdate / TaskList** — use ONLY \`node flow.js xxx\`.
 2. **Main agent can ONLY use Bash, Task, and Skill** — Edit, Write, Read, Glob, Grep, Explore are ALL FORBIDDEN. To read any file (including docs), dispatch a sub-agent.
 3. **ALWAYS dispatch via Task tool** — one Task call per task. N tasks = N Task calls **in a single message** for parallel execution.
+4. **Sub-agents MUST run checkpoint before replying** — \`echo 'summary' | node flow.js checkpoint <id>\` is the LAST command before reply. Skipping checkpoint = protocol failure. This triggers per-task git commit; without it, parallel tasks collapse into one commit.
 
 ### Requirement Decomposition
 1. Dispatch a sub-agent to read requirement docs and return a summary.
