@@ -690,7 +690,7 @@ ${changeSummary}
 };
 
 // src/interfaces/cli.ts
-var import_fs3 = require("fs");
+var import_fs2 = require("fs");
 
 // src/interfaces/formatter.ts
 var ICON = {
@@ -759,57 +759,6 @@ function readStdinIfPiped(timeout = 3e4) {
   });
 }
 
-// src/infrastructure/env-check.ts
-var import_fs2 = require("fs");
-var import_path2 = require("path");
-var import_os = require("os");
-function checkEnvironment() {
-  const warnings = [];
-  const home = (0, import_os.homedir)();
-  const claudeDir = (0, import_path2.join)(home, ".claude");
-  if (!(0, import_fs2.existsSync)(claudeDir)) {
-    warnings.push("\u672A\u68C0\u6D4B\u5230 Claude Code \u73AF\u5883\uFF08~/.claude \u4E0D\u5B58\u5728\uFF09");
-  } else {
-    try {
-      const settingsPath = (0, import_path2.join)(claudeDir, "settings.json");
-      if ((0, import_fs2.existsSync)(settingsPath)) {
-        const raw = (0, import_fs2.readFileSync)(settingsPath, "utf-8");
-        if (!raw.includes("enabledBetaFeatureFlags") || !raw.includes("agent_teams")) {
-          warnings.push("Agent Teams \u53EF\u80FD\u672A\u5F00\u542F \u2192 Settings \u2192 Feature Flags \u2192 Agent Teams");
-        }
-      }
-    } catch {
-    }
-  }
-  const pluginDir = (0, import_path2.join)(claudeDir, "plugins");
-  const required = ["superpowers", "frontend-design", "feature-dev", "code-review"];
-  const missing = [];
-  if ((0, import_fs2.existsSync)(pluginDir)) {
-    for (const name of required) {
-      if (!(0, import_fs2.existsSync)((0, import_path2.join)(pluginDir, name)) && !(0, import_fs2.existsSync)((0, import_path2.join)(pluginDir, name + ".json"))) {
-        missing.push(name);
-      }
-    }
-  } else {
-    missing.push(...required);
-  }
-  if (missing.length) {
-    warnings.push(`\u63A8\u8350\u63D2\u4EF6\u672A\u68C0\u6D4B\u5230: ${missing.join(", ")}\uFF08\u5B50Agent\u529F\u80FD\u53EF\u80FD\u964D\u7EA7\uFF09`);
-  }
-  const mcpPaths = [(0, import_path2.join)(claudeDir, "mcp.json"), (0, import_path2.join)(claudeDir, ".mcp.json")];
-  const hasMcp = mcpPaths.some((p) => {
-    try {
-      return (0, import_fs2.existsSync)(p) && (0, import_fs2.readFileSync)(p, "utf-8").includes("context7");
-    } catch {
-      return false;
-    }
-  });
-  if (!hasMcp) {
-    warnings.push("context7 MCP \u672A\u68C0\u6D4B\u5230\uFF08\u5B50Agent\u67E5\u8BE2\u6587\u6863\u529F\u80FD\u4E0D\u53EF\u7528\uFF09");
-  }
-  return warnings;
-}
-
 // src/interfaces/cli.ts
 var CLI = class {
   constructor(service2) {
@@ -840,9 +789,7 @@ var CLI = class {
         } else {
           out = await s.setup();
         }
-        const warnings = checkEnvironment();
-        if (warnings.length) out += "\n\n" + warnings.map((w) => `\u26A0 ${w}`).join("\n");
-        return out;
+        return out + "\n\n\u63D0\u793A: \u5EFA\u8BAE\u5148\u901A\u8FC7 /plugin \u5B89\u88C5\u63D2\u4EF6 superpowers\u3001frontend-design\u3001feature-dev\u3001code-review\uFF0C\u672A\u5B89\u88C5\u5219\u5B50Agent\u65E0\u6CD5\u4F7F\u7528\u4E13\u4E1A\u6280\u80FD\uFF0C\u529F\u80FD\u4F1A\u964D\u7EA7";
       }
       case "next": {
         if (rest.includes("--batch")) {
@@ -860,7 +807,7 @@ var CLI = class {
         const fileIdx = rest.indexOf("--file");
         let detail;
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
-          detail = (0, import_fs3.readFileSync)(rest[fileIdx + 1], "utf-8");
+          detail = (0, import_fs2.readFileSync)(rest[fileIdx + 1], "utf-8");
         } else if (rest.length > 1 && fileIdx < 0) {
           detail = rest.slice(1).join(" ");
         } else {

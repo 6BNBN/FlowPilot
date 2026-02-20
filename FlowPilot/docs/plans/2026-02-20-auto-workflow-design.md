@@ -25,7 +25,6 @@
   │
   ├── flow CLI（状态管理层）
   │     管理任务树、进度、记忆文件
-  │     init 时自动检测环境（Agent Teams / 插件 / MCP）
   │
   └── .workflow/（持久化层）
         ├── progress.md          # 任务状态列表（主Agent读）
@@ -141,17 +140,12 @@
 - CLAUDE.md 嵌入协议中明确要求主Agent调用该技能
 - 头脑风暴完成后，结果写入 tasks.md
 
-### 环境检测（env-check.ts）
+### 环境依赖
 
-`flow init` 时自动检测三类环境依赖，输出警告但不阻止启动：
-
-1. **Agent Teams 检测**：读取 `~/.claude/settings.json`，检查 `enabledBetaFeatureFlags` 含 `agent_teams`
-2. **插件检测**：检查 `~/.claude/plugins/` 下是否存在 CLAUDE.md 协议中引用的全部插件：
-   - superpowers（需求拆解头脑风暴）
-   - frontend-design（前端任务）
-   - feature-dev（后端任务）
-   - code-review（收尾代码审查）
-3. **context7 MCP 检测**：检查 `~/.claude/mcp.json` 或 `.mcp.json` 是否配置了 context7（子Agent查询文档）
+以下环境依赖需用户手动安装，`flow init` 输出中会提醒：
+- Agent Teams（Settings → Feature Flags → Agent Teams）
+- 插件：superpowers、frontend-design、feature-dev、code-review（通过 `/plugin` 安装）
+- context7 MCP（`~/.claude/mcp.json` 配置）
 
 ## 协议嵌入（CLAUDE.md 直接注入）
 
@@ -208,7 +202,6 @@
 - `markdown-parser.ts` — 支持类型+依赖+缩进描述 ✅
 - `git.ts` — 新增，每任务自动commit ✅
 - `verify.ts` — 新增，7种语言自动检测验证 ✅
-- `env-check.ts` — 新增，Agent Teams+插件+context7 MCP环境检测 ✅
 
 ### 最终文件清单
 
@@ -221,7 +214,6 @@
 | src/domain/task-tree.ts | 删除 | ✅ |
 | src/application/workflow-service.ts | 重写(8用例) | ✅ |
 | src/application/protocol-generator.ts | 已删除（协议嵌入CLAUDE.md） | ✅ |
-| src/infrastructure/env-check.ts | 新建（环境检测） | ✅ |
 | src/infrastructure/fs-repository.ts | 重写 | ✅ |
 | src/infrastructure/markdown-parser.ts | 重写 | ✅ |
 | src/infrastructure/git.ts | 新建(计划外) | ✅ |

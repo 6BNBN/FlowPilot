@@ -7,7 +7,7 @@ import { readFileSync } from 'fs';
 import type { WorkflowService } from '../application/workflow-service';
 import { formatStatus, formatTask, formatBatch } from './formatter';
 import { readStdinIfPiped } from './stdin';
-import { checkEnvironment } from '../infrastructure/env-check';
+
 
 export class CLI {
   constructor(private readonly service: WorkflowService) {}
@@ -38,9 +38,7 @@ export class CLI {
         } else {
           out = await s.setup();
         }
-        const warnings = checkEnvironment();
-        if (warnings.length) out += '\n\n' + warnings.map(w => `⚠ ${w}`).join('\n');
-        return out;
+        return out + '\n\n提示: 建议先通过 /plugin 安装插件 superpowers、frontend-design、feature-dev、code-review，未安装则子Agent无法使用专业技能，功能会降级';
       }
 
       case 'next': {
