@@ -75,12 +75,23 @@ export function generateProtocol(projectName: string): string {
 这样主Agent上下文不会因子Agent产出而膨胀，即使并行10个也不会溢出。
 如果主Agent仍然溢出，新窗口说"开始"→ flow resume 会重置所有未完成的 active 任务。
 
+## 代码安全规范（子Agent必须遵守）
+
+- **SQL注入**：必须参数化查询（占位符/ORM绑定），禁止拼接用户输入；分页参数强制转int并限上限；排序字段白名单校验
+- **XSS防护**：禁止直接渲染用户输入的HTML（如v-html/innerHTML），必须经过sanitize库过滤；响应头设置 X-Content-Type-Options: nosniff
+- **认证安全**：密钥/Secret从环境变量读取禁止硬编码；密码用bcrypt存储禁止MD5/SHA；Token设合理有效期；登录接口限流防暴力破解
+- **输入校验**：所有用户输入在入口层校验（类型/长度/格式/白名单）；金额用整数分存储禁止浮点运算；文件上传校验MIME白名单和大小上限
+- **敏感数据**：手机号/身份证按角色脱敏；日志禁止明文密码/完整证件号；传输强制HTTPS；.env/密钥禁止提交Git
+- **接口安全**：生产环境错误响应不暴露SQL/堆栈；关键写操作加幂等键；支付回调验签+金额校验
+- **依赖安全**：使用语言对应的漏洞扫描工具（govulncheck/npm audit/pip-audit等）；容器不以root运行；数据库禁止无密码暴露
+
 ## 铁律（违反任何一条即为协议失败）
 
 1. **所有任务必须通过 Task 工具派发子Agent执行**，无论并行还是串行，主Agent绝不能自己写代码、读源码、修改文件
 2. 主Agent只允许执行 flow 命令（node flow.js xxx）和 Task 工具派发，不允许使用 Edit/Write/Read 等文件操作工具
 3. 每次只关注当前任务的 flow 命令输出，不主动探索项目文件
 4. compact 后说"开始"即可恢复
+5. 子Agent遇到不熟悉的库/框架API时，必须先用 context7 MCP 查询官方文档，禁止凭记忆猜测
 
 ## 追加任务
 
