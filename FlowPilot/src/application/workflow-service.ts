@@ -16,7 +16,7 @@ export class WorkflowService {
     private readonly parse: (md: string) => WorkflowDefinition,
   ) {}
 
-  /** init: 解析任务markdown → 生成progress/tasks/protocol */
+  /** init: 解析任务markdown → 生成progress/tasks */
   async init(tasksMd: string, force = false): Promise<ProgressData> {
     const existing = await this.repo.loadProgress();
     if (existing && existing.status === 'running' && !force) {

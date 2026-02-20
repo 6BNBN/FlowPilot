@@ -196,7 +196,7 @@ export class FsWorkflowRepository implements WorkflowRepository {
     }
   }
 
-  // --- protocol.md / tasks.md ---
+  // --- tasks.md ---
 
   async saveTasks(content: string): Promise<void> {
     await this.ensure(this.root);

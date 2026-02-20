@@ -32,7 +32,7 @@ export class CLI {
         const md = await readStdinIfPiped();
         if (md.trim()) {
           const data = await s.init(md, force);
-          return `已初始化工作流: ${data.name} (${data.tasks.length} 个任务)\n协议已生成: .workflow/protocol.md`;
+          return `已初始化工作流: ${data.name} (${data.tasks.length} 个任务)`;
         }
         return await s.setup();
       }
