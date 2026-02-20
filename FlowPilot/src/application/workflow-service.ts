@@ -262,7 +262,7 @@ export class WorkflowService {
     await this.repo.clearContext();
 
     const scripts = result.scripts.length ? result.scripts.join(', ') : '无验证脚本';
-    return `验证通过: ${scripts}\n${changeSummary}\n已提交最终commit，工作流回到待命状态\n等待下一个需求...`;
+    return `验证通过: ${scripts}\n${stats}\n已提交最终commit，工作流回到待命状态\n等待下一个需求...`;
   }
 
   /** status: 全局进度 */
