@@ -46,8 +46,11 @@ Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, i
      > On success: \`echo 'one-line summary' | node flow.js checkpoint <id>\`
      > On failure: \`node flow.js checkpoint <id> FAILED\`
      > Then reply ONLY "Task <id> done."
-3. Wait for ALL sub-agents, then loop back to step 1.
-4. When no tasks remain, run \`node flow.js finish\`.
+3. **After ALL sub-agents return, run checkpoint for each task** (if sub-agent didn't):
+   \`echo 'summary extracted from sub-agent result' | node flow.js checkpoint <id>\`
+   This ensures context is recorded and git commit is made per-task. **NEVER skip to next batch without checkpointing.**
+4. Loop back to step 1.
+5. When no tasks remain, run \`node flow.js finish\`.
 
 ### Sub-Agent Rules
 - Search for matching Skills or MCP tools first. If found, MUST use them.
