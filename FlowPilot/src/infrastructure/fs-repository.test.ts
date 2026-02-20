@@ -59,7 +59,7 @@ describe('FsWorkflowRepository', () => {
     const wrote = await repo.ensureClaudeMd();
     expect(wrote).toBe(true);
     const content = await readFile(join(dir, 'CLAUDE.md'), 'utf-8');
-    expect(content).toContain('protocol.md');
+    expect(content).toContain('flowpilot:start');
   });
 
   it('ensureClaudeMd 幂等', async () => {
