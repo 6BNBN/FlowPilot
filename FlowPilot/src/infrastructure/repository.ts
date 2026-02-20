@@ -25,6 +25,8 @@ export interface WorkflowRepository {
   ensureClaudeMd(): Promise<boolean>;
   /** 确保.claude/settings.json包含hooks */
   ensureHooks(): Promise<boolean>;
+  /** 清理 context/ 目录（finish后释放上下文） */
+  clearContext(): Promise<void>;
   /** 项目根目录 */
   projectRoot(): string;
   /** 文件锁 */

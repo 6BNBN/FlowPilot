@@ -3,7 +3,7 @@
  * @description 文件系统仓储 - 基于 .workflow/ 目录的分层记忆存储
  */
 
-import { mkdir, readFile, writeFile, unlink } from 'fs/promises';
+import { mkdir, readFile, writeFile, unlink, rm } from 'fs/promises';
 import { join } from 'path';
 import { openSync, closeSync, existsSync } from 'fs';
 import type { ProgressData, TaskEntry } from '../domain/types';

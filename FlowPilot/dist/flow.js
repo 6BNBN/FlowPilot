@@ -371,8 +371,7 @@ function parseTasksMarkdown(markdown) {
 var import_node_child_process = require("child_process");
 function autoCommit(taskId, title, summary) {
   try {
-    (0, import_node_child_process.execSync)("git add -u", { stdio: "pipe" });
-    (0, import_node_child_process.execSync)("git add .workflow/", { stdio: "pipe" });
+    (0, import_node_child_process.execSync)("git add -A", { stdio: "pipe" });
     const msg = `task-${taskId}: ${title}
 
 ${summary}`;
