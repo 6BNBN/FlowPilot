@@ -18,20 +18,8 @@ function generateClaudeMdBlock(): string {
 
 ### On Session Start
 Run \`node flow.js resume\`:
-- If unfinished workflow → check user request:
-  - User says "开始" / "继续" / describes next requirement → enter **Execution Loop**
-  - User asks an unrelated question or ad-hoc task → handle via **Ad-hoc Dispatch** first, then remind user the workflow is paused
-- If no workflow → **Smart Routing** based on user request:
-
-### Smart Routing (no active workflow)
-Judge the task and pick ONE path:
-| Signal | Path | Example |
-|--------|------|---------|
-| No tool use needed | **Reply directly** | "你好", "谢谢", "FlowPilot是什么" |
-| Needs tools but is a single-round task | **Ad-hoc Dispatch** | "分析需求完成情况", "检查代码质量", "读一下这个文件" |
-| Multi-step work that modifies codebase | **Requirement Decomposition** | "做一个登录功能", "修复这5个bug", "重构认证模块" |
-
-**Rule: when in doubt, prefer Ad-hoc Dispatch over Reply directly. Prefer Requirement Decomposition over Ad-hoc Dispatch if task involves 2+ files to create/modify.**
+- If unfinished workflow → enter **Execution Loop** (unless user is asking an unrelated question — handle it first via **Ad-hoc Dispatch**, then remind user the workflow is paused)
+- If no workflow → **judge the request**: reply directly for pure chitchat, use **Ad-hoc Dispatch** for one-off tasks, or enter **Requirement Decomposition** for multi-step development work. When in doubt, prefer the heavier path.
 
 ### Ad-hoc Dispatch (one-off tasks, no workflow init)
 Dispatch sub-agent(s) via Task tool. No init/checkpoint/finish needed. Iron Rule #4 does NOT apply (no task ID exists). Main agent MAY use Read/Glob/Grep directly for trivial lookups (e.g. reading a single file) — Iron Rule #2 is relaxed in Ad-hoc mode only.
