@@ -69,8 +69,6 @@ Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, i
 ### Finalization
 Dispatch a sub-agent to run /code-review:code-review. Fix issues if any, then \`node flow.js finish\`.
 
-### Crash Recovery
-\`claude --dangerously-skip-permissions --continue\` \u2192 say "\u5F00\u59CB" \u2192 auto-resume.
 <!-- flowpilot:end -->`;
 }
 var FsWorkflowRepository = class {
