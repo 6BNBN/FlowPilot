@@ -15,54 +15,61 @@ function generateClaudeMdBlock(): string {
 ## FlowPilot Workflow Protocol (MANDATORY — any violation is a protocol failure)
 
 **You are the dispatcher. These rules have the HIGHEST priority.**
+**This protocol ONLY activates when user says "开始". Before that, behave normally.**
 
-### Trigger: When user says "开始" (start), immediately run:
-\`\`\`bash
-node flow.js resume
-\`\`\`
-- If unfinished workflow exists → enter execution loop
-- If no workflow → wait for user requirements → decompose → \`echo '...' | node flow.js init\`
+### Trigger
+When user says "开始", run \`node flow.js resume\`:
+- If unfinished workflow → enter **Execution Loop**
+- If no workflow → enter **Requirement Decomposition**
 
-### Iron Rules (violating ANY rule = protocol failure)
-1. **NEVER use TaskCreate / TaskUpdate / TaskList** — these are CC's native task system. Use ONLY flow commands (\`node flow.js xxx\`) to manage tasks.
-2. **NEVER let the main agent write code / read source / edit files** — Edit, Write, Read, Glob, Grep are FORBIDDEN for the main agent. Dispatch ALL dev work to sub-agents via the Task tool.
-3. **ALWAYS dispatch tasks to sub-agents via the Task tool** — the main agent ONLY runs flow commands and dispatches. Never do the work yourself.
-
-### Execution Loop (repeat until "all done")
-1. Run \`node flow.js next --batch\` to get parallelizable tasks.
-2. For each task, dispatch a sub-agent via the Task tool. Include in the prompt:
-   - The "context" section from flow next output
-   - Task description and type
-   - These checkpoint instructions (copy verbatim to sub-agent):
-     > On success: \`echo 'one-line summary' | node flow.js checkpoint <id>\`
-     > On failure: \`node flow.js checkpoint <id> FAILED\`
-     > Then reply ONLY "Task <id> done." — do NOT return any other content.
-3. After all sub-agents return, continue the loop.
-4. When all tasks are done, run \`node flow.js finish\`.
+### Iron Rules (violating ANY = protocol failure)
+1. **NEVER use TaskCreate / TaskUpdate / TaskList** — use ONLY \`node flow.js xxx\`.
+2. **Main agent can ONLY use Bash** — Edit, Write, Read, Glob, Grep, Explore are ALL FORBIDDEN. To read any file (including docs), dispatch a sub-agent.
+3. **ALWAYS dispatch via Task tool** — one Task call per task. N tasks = N Task calls **in a single message** for parallel execution.
 
 ### Requirement Decomposition
-Use /superpowers:brainstorming to brainstorm, then pipe the task list into \`echo '...' | node flow.js init\`.
+1. Dispatch a sub-agent to read requirement docs and return a summary.
+2. Use /superpowers:brainstorming to brainstorm and produce a task list.
+3. Pipe into init using this **exact format**:
+\`\`\`bash
+cat <<'EOF' | node flow.js init
+1. [backend] Task title
+   Description of what to do
+2. [frontend] Another task (deps: 1)
+   Description here
+3. [general] Third task (deps: 1, 2)
+EOF
+\`\`\`
+Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, indented lines = description.
+
+### Execution Loop
+1. Run \`node flow.js next --batch\`.
+2. For **EVERY** task in batch, dispatch a sub-agent via Task tool. **ALL Task calls in one message.** Include in each prompt:
+   - The "context" section from flow next output
+   - Task description and type
+   - Checkpoint instructions (copy verbatim):
+     > On success: \`echo 'one-line summary' | node flow.js checkpoint <id>\`
+     > On failure: \`node flow.js checkpoint <id> FAILED\`
+     > Then reply ONLY "Task <id> done."
+3. Wait for ALL sub-agents, then loop back to step 1.
+4. When no tasks remain, run \`node flow.js finish\`.
 
 ### Sub-Agent Rules
-- Before executing, search for matching Skills or MCP tools in the current environment. If found, MUST use them.
-- type=frontend → use /frontend-design skill
-- type=backend → use /feature-dev skill
-- type=general → search for matching skill/MCP; if none, execute directly
-- For unfamiliar library/framework APIs → MUST query official docs via context7 MCP first. Never guess from memory.
-- After checkpoint, reply ONLY "Task xxx done." — do NOT return detailed content.
+- Search for matching Skills or MCP tools first. If found, MUST use them.
+- type=frontend → /frontend-design, type=backend → /feature-dev, type=general → match or execute directly
+- Unfamiliar APIs → query context7 MCP first. Never guess.
+- After checkpoint, reply ONLY "Task xxx done."
 
 ### Security Rules (sub-agents MUST follow)
-- SQL injection: use parameterized queries. Never concatenate user input.
-- XSS: never use v-html/innerHTML with unsanitized user input.
-- Auth: read secrets from env vars. Use bcrypt for passwords. Set token expiry.
-- Input validation: validate type/length/format at entry points. Check MIME and size for uploads.
-- Sensitive data: never log plaintext passwords. Enforce HTTPS. Never commit .env to git.
+- SQL: parameterized queries only. XSS: no unsanitized v-html/innerHTML.
+- Auth: secrets from env vars, bcrypt passwords, token expiry.
+- Input: validate at entry points. Never log passwords. Never commit .env.
 
 ### Finalization
-Dispatch a sub-agent to run /code-review:code-review on all changes. Fix issues if any, then run \`node flow.js finish\`.
+Dispatch a sub-agent to run /code-review:code-review. Fix issues if any, then \`node flow.js finish\`.
 
 ### Crash Recovery
-After compact / crash / window close → \`claude --dangerously-skip-permissions --continue\` → say "开始" → auto-resume.
+\`claude --dangerously-skip-permissions --continue\` → say "开始" → auto-resume.
 <!-- flowpilot:end -->`;
 }
 
