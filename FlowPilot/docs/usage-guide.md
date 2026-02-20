@@ -2,7 +2,7 @@
 
 ## 这是什么
 
-一个 30KB 的单文件工具，让 Claude Code 变成全自动开发机器。
+一个 38KB 的单文件工具，让 Claude Code 变成全自动开发机器。
 复制一个文件到项目里，说一句"开始"，它就会自动拆解需求、分配任务、写代码、提交 git、跑测试，直到全部完成。
 
 ## 前置条件
@@ -94,10 +94,11 @@ CC：恢复工作流: 博客系统 | 进度: 7/12 | 继续执行
 | `node flow.js status` | 查看当前进度 |
 | `node flow.js next` | 获取下一个任务（含依赖上下文） |
 | `node flow.js next --batch` | 获取所有可并行任务 |
-| `node flow.js checkpoint <id>` | 标记任务完成（stdin/--file/内联文本） |
+| `node flow.js checkpoint <id>` | 标记任务完成（stdin/--file/内联文本）[--files f1 f2 ...] |
 | `node flow.js skip <id>` | 跳过某个任务 |
 | `node flow.js resume` | 中断恢复（重置active→pending） |
-| `node flow.js finish` | 智能收尾（验证+汇报跳过失败项+提交） |
+| `node flow.js review` | 标记code-review已完成（finish前必须执行） |
+| `node flow.js finish` | 智能收尾（验证+汇报跳过失败项+提交，需先review） |
 | `node flow.js add <描述> [--type T]` | 追加新任务（参数顺序任意） |
 
 > 注意：正常使用时你不需要手动执行这些命令，CC 会按协议自动调用。
@@ -159,7 +160,9 @@ CC 用 Task 工具并行派发子Agent（Agent Teams）
     ↓
 主Agent确认进度 → 循环直到全部完成
     ↓
-flow finish → 自动跑 build/test/lint → 汇报完成/跳过/失败项 → 最终提交
+code-review → flow review → 解锁finish
+    ↓
+flow finish → 自动跑 build/test/lint → 汇报完成/跳过/失败项 → 清除.workflow/ → 最终提交
     ↓
 回到待命，等待下一个需求
 ```
@@ -314,7 +317,7 @@ CC 自动 compact 后，说"开始"即可恢复。所有状态都在文件里，
 插件是可选的。没有 frontend-design 插件时，前端任务会以 general 模式执行。
 
 **Q: .workflow 目录要提交到 git 吗？**
-建议提交。这样团队成员也能看到任务进度和历史决策。
+开发过程中建议提交，方便团队成员查看任务进度和历史决策。注意 `flow finish` 收尾成功后会自动清除 `.workflow/` 目录。
 
 **Q: 任务很多时摘要会不会太长？**
 不会。超过 10 个已完成任务后，摘要会自动按类型压缩，只保留每组最近 3 个任务名。

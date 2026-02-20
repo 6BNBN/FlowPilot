@@ -1,6 +1,6 @@
 /**
  * @module application/workflow-service
- * @description 工作流应用服务 - 6个核心用例
+ * @description 工作流应用服务 - 11个用例
  */
 
 import type { ProgressData, TaskEntry } from '../domain/types';

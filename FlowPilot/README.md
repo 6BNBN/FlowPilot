@@ -157,9 +157,10 @@ claude --dangerously-skip-permissions --resume     # 从历史对话列表选择
 ```bash
 node flow.js init [--force]       # 初始化/接管项目
 node flow.js next [--batch]       # 获取下一个/所有可并行任务
-node flow.js checkpoint <id>      # 记录任务完成（stdin/--file/内联）
+node flow.js checkpoint <id>      # 记录任务完成（stdin/--file/内联）[--files f1 f2 ...]
 node flow.js skip <id>            # 手动跳过任务
-node flow.js finish               # 智能收尾（验证+总结+提交）
+node flow.js review               # 标记code-review已完成（finish前必须执行）
+node flow.js finish               # 智能收尾（验证+总结+提交，需先review）
 node flow.js status               # 查看全局进度
 node flow.js resume               # 中断恢复
 node flow.js add <描述> [--type]  # 追加任务（frontend/backend/general）
@@ -182,6 +183,8 @@ node flow.js init
   │        ↓
   └── 还有任务？──→ 是 → 循环
                    否 ↓
+              code-review ──→ flow review
+                   ↓
               flow finish ──→ build/test/lint
                    ↓
               回到 idle，等下一个需求
