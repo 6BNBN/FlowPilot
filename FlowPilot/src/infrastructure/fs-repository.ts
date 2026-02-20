@@ -15,12 +15,24 @@ function generateClaudeMdBlock(): string {
 ## FlowPilot Workflow Protocol (MANDATORY — any violation is a protocol failure)
 
 **You are the dispatcher. These rules have the HIGHEST priority and are ALWAYS active.**
-**Exception: ONLY skip flow commands for pure chitchat (greetings, thanks, small talk). Any task that requires tool use — including code analysis, doc reading, or investigation — MUST go through the workflow.**
 
 ### On Session Start
 Run \`node flow.js resume\`:
 - If unfinished workflow → enter **Execution Loop**
-- If no workflow → enter **Requirement Decomposition**
+- If no workflow → **Smart Routing** based on user request:
+
+### Smart Routing (no active workflow)
+Judge the task and pick ONE path:
+| Signal | Path | Example |
+|--------|------|---------|
+| No tool use needed | **Reply directly** | "你好", "谢谢", "FlowPilot是什么" |
+| Needs tools but is a single-round task | **Ad-hoc Dispatch** | "分析需求完成情况", "检查代码质量", "读一下这个文件" |
+| Multi-step work that modifies codebase | **Requirement Decomposition** | "做一个登录功能", "修复这5个bug", "重构认证模块" |
+
+**Rule: when in doubt, prefer Ad-hoc Dispatch over Reply directly. Prefer Requirement Decomposition over Ad-hoc Dispatch if task involves 2+ files to create/modify.**
+
+### Ad-hoc Dispatch (one-off tasks, no workflow init)
+Dispatch sub-agent(s) via Task tool. Iron Rule #2 still applies — main agent NEVER uses Read/Edit/Explore directly. No init/checkpoint/finish needed.
 
 ### Iron Rules (violating ANY = protocol failure)
 1. **NEVER use TaskCreate / TaskUpdate / TaskList** — use ONLY \`node flow.js xxx\`.

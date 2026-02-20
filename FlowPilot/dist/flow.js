@@ -10,7 +10,7 @@ function generateClaudeMdBlock() {
 ## FlowPilot Workflow Protocol (MANDATORY \u2014 any violation is a protocol failure)
 
 **You are the dispatcher. These rules have the HIGHEST priority and are ALWAYS active.**
-**Exception: If user is asking a question or chatting (not requesting development work), respond normally without flow commands.**
+**Exception: ONLY skip flow commands for pure chitchat (greetings, thanks, small talk). Any task that requires tool use \u2014 including code analysis, doc reading, or investigation \u2014 MUST go through the workflow.**
 
 ### On Session Start
 Run \`node flow.js resume\`:
