@@ -46,10 +46,13 @@ function commitIn(cwd: string, files: string[] | null, msg: string): string | nu
   }
 }
 
-/** 清理未提交的变更（resume时调用） */
+/** 清理未提交的变更（resume时调用），用stash保留而非丢弃 */
 export function gitCleanup(): void {
   try {
-    execSync('git checkout .', { stdio: 'pipe' });
+    const status = execSync('git status --porcelain', { stdio: 'pipe', encoding: 'utf-8' }).trim();
+    if (status) {
+      execSync('git stash push -m "flowpilot-resume: auto-stashed on interrupt recovery"', { stdio: 'pipe' });
+    }
   } catch {}
 }
 

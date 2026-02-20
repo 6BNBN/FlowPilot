@@ -7,7 +7,9 @@ import { mkdir, readFile, writeFile, unlink, rm, rename } from 'fs/promises';
 import { join } from 'path';
 import { openSync, closeSync, existsSync } from 'fs';
 import type { ProgressData, TaskEntry } from '../domain/types';
-import type { WorkflowRepository } from '../domain/repository';
+import type { WorkflowRepository, VerifyResult } from '../domain/repository';
+import { autoCommit, gitCleanup } from './git';
+import { runVerify } from './verify';
 
 /** Generate the CLAUDE.md rule block */
 function generateClaudeMdBlock(): string {
@@ -298,5 +300,17 @@ export class FsWorkflowRepository implements WorkflowRepository {
     await mkdir(dir, { recursive: true });
     await writeFile(path, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
     return true;
+  }
+
+  commit(taskId: string, title: string, summary: string, files?: string[]): string | null {
+    return autoCommit(taskId, title, summary, files);
+  }
+
+  cleanup(): void {
+    gitCleanup();
+  }
+
+  verify(): VerifyResult {
+    return runVerify(this.base);
   }
 }

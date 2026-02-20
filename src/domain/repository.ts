@@ -5,6 +5,13 @@
 
 import type { ProgressData } from './types';
 
+/** 验证结果 */
+export interface VerifyResult {
+  passed: boolean;
+  scripts: string[];
+  error?: string;
+}
+
 /** 仓储接口 */
 export interface WorkflowRepository {
   /** 保存进度数据到 progress.md */
@@ -34,4 +41,10 @@ export interface WorkflowRepository {
   /** 文件锁 */
   lock(maxWait?: number): Promise<void>;
   unlock(): Promise<void>;
+  /** Git自动提交，返回错误信息或null */
+  commit(taskId: string, title: string, summary: string, files?: string[]): string | null;
+  /** Git清理未提交变更（resume时调用），用stash保留而非丢弃 */
+  cleanup(): void;
+  /** 执行项目验证（build/test/lint） */
+  verify(): VerifyResult;
 }

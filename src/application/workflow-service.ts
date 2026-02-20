@@ -7,8 +7,6 @@ import type { ProgressData, TaskEntry } from '../domain/types';
 import type { WorkflowDefinition } from '../domain/workflow';
 import type { WorkflowRepository } from '../domain/repository';
 import { makeTaskId, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
-import { autoCommit, gitCleanup } from '../infrastructure/git';
-import { runVerify } from '../infrastructure/verify';
 
 export class WorkflowService {
   constructor(
@@ -152,7 +150,7 @@ export class WorkflowService {
       await this.repo.saveProgress(data);
       await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
       await this.updateSummary(data);
-      const commitErr = autoCommit(id, task.title, summaryLine, files);
+      const commitErr = this.repo.commit(id, task.title, summaryLine, files);
 
       const doneCount = data.tasks.filter(t => t.status === 'done').length;
       let msg = `任务 ${id} 完成 (${doneCount}/${data.tasks.length})`;
@@ -177,7 +175,7 @@ export class WorkflowService {
 
     const resetId = resumeProgress(data);
     await this.repo.saveProgress(data);
-    if (resetId) gitCleanup();
+    if (resetId) this.repo.cleanup();
 
     const doneCount = data.tasks.filter(t => t.status === 'done').length;
     const total = data.tasks.length;
@@ -269,7 +267,7 @@ export class WorkflowService {
     if (!isAllDone(data.tasks)) throw new Error('还有未完成的任务，请先完成所有任务');
 
     // 1. 先验证（廉价操作）
-    const result = runVerify(this.repo.projectRoot());
+    const result = this.repo.verify();
     if (!result.passed) {
       return `验证失败: ${result.error}\n请修复后重新执行 node flow.js finish`;
     }
@@ -286,7 +284,7 @@ export class WorkflowService {
     const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : '', failed.length ? `${failed.length} failed` : ''].filter(Boolean).join(', ');
 
     const titles = done.map(t => `- ${t.id}: ${t.title}`).join('\n');
-    const commitErr = autoCommit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`);
+    const commitErr = this.repo.commit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`);
     if (!commitErr) {
       await this.repo.clearAll();
     }
