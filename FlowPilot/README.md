@@ -92,7 +92,7 @@ CC 会自动：拆解任务 → 识别依赖 → 并行派发子Agent → 写代
 
 另外确保开启 **Agent Teams**（Settings → Feature Flags → Agent Teams），并配置 context7 MCP（`~/.claude/mcp.json`）。
 
-`node flow.js init` 会自动检测以上环境，缺失项输出 ⚠ 警告。
+`node flow.js init` 会自动生成协议和 Hooks，缺失插件会在输出中提醒。
 
 ## 快速开始
 
@@ -104,10 +104,10 @@ cd FlowPilot && npm install && npm run build
 cp dist/flow.js /your/project/
 cd /your/project
 
-# 初始化（协议嵌入CLAUDE.md + 环境检测）
+# 初始化（协议嵌入CLAUDE.md + Hooks注入）
 node flow.js init
 
-# 全自动模式启动 CC，输入"开始"，然后描述需求，剩下的全自动
+# 全自动模式启动 CC，直接描述需求，剩下的全自动
 claude --dangerously-skip-permissions
 ```
 

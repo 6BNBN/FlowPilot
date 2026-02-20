@@ -24,7 +24,7 @@ cp FlowPilot目录/dist/flow.js  你的项目/
 cd 你的项目
 node flow.js init
 
-# 3. 用全自动模式启动 Claude Code，说"开始"
+# 3. 用全自动模式启动 Claude Code，直接描述需求
 claude --dangerously-skip-permissions
 ```
 
