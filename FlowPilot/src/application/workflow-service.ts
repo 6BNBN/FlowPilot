@@ -218,9 +218,7 @@ export class WorkflowService {
     }
 
     lines.push('');
-    lines.push('协议已生成: .workflow/protocol.md');
-    if (wrote) lines.push('CLAUDE.md 已更新: 添加了协议引用');
-    lines.push('');
+    if (wrote) lines.push('CLAUDE.md 已更新: 添加了工作流协议');
     lines.push('用户说"开始"即可启动全自动开发');
     return lines.join('\n');
   }
