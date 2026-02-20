@@ -254,12 +254,9 @@ export class WorkflowService {
     const failed = data.tasks.filter(t => t.status === 'failed');
     const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : '', failed.length ? `${failed.length} failed` : ''].filter(Boolean).join(', ');
 
-    // 最终提交 + 状态回到 idle
-    data.status = 'idle';
-    data.current = null;
-    await this.repo.saveProgress(data);
-    autoCommit('finish', data.name, stats);
+    // 清理 .workflow/ 然后最终提交（包含清理）
     await this.repo.clearAll();
+    autoCommit('finish', data.name, stats);
 
     const scripts = result.scripts.length ? result.scripts.join(', ') : '无验证脚本';
     return `验证通过: ${scripts}\n${stats}\n已提交最终commit，工作流回到待命状态\n等待下一个需求...`;
