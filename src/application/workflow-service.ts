@@ -45,6 +45,10 @@ export class WorkflowService {
     await this.repo.saveSummary(`# ${def.name}\n\n${def.description}\n`);
     await this.repo.ensureClaudeMd();
     await this.repo.ensureHooks();
+
+    // 历史经验分析：读取历史统计，输出建议，自动调整参数
+    await this.applyHistoryInsights();
+
     return data;
   }
 
@@ -317,6 +321,11 @@ export class WorkflowService {
 
     const titles = done.map(t => `- ${t.id}: ${t.title}`).join('\n');
     await runLifecycleHook('onWorkflowFinish', this.repo.projectRoot(), { WORKFLOW_NAME: data.name });
+
+    // 保存工作流历史统计到 .flowpilot/history/（永久存储，不随 clearAll 清理）
+    const wfStats = collectStats(data);
+    await this.repo.saveHistory(wfStats);
+
     await this.repo.cleanupInjections();
     this.repo.cleanTags();
     const commitErr = this.repo.commit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`);
@@ -461,6 +470,35 @@ export class WorkflowService {
       for (const t of pending) lines.push(`- [${t.type}] ${t.title}`);
     }
     await this.repo.saveSummary(lines.join('\n') + '\n');
+  }
+
+  /** 读取历史经验，输出建议，自动调整默认参数 */
+  private async applyHistoryInsights(): Promise<void> {
+    const history = await this.repo.loadHistory();
+    if (!history.length) return;
+
+    const { suggestions, recommendedConfig } = analyzeHistory(history);
+    if (suggestions.length) {
+      console.log('\n[历史经验建议]');
+      for (const s of suggestions) console.log(`  - ${s}`);
+    }
+
+    // 仅在用户未自定义时写入推荐参数
+    if (Object.keys(recommendedConfig).length) {
+      const config = await this.repo.loadConfig();
+      const verify = (config.verify ?? {}) as Record<string, unknown>;
+      let changed = false;
+      for (const [k, v] of Object.entries(recommendedConfig)) {
+        if (!(k in config) && !(k in verify)) {
+          verify[k] = v;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await this.repo.saveConfig({ ...config, verify });
+        console.log('[历史经验] 已基于历史数据自动调整默认参数');
+      }
+    }
   }
 
   private async requireProgress(): Promise<ProgressData> {
