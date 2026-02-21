@@ -8,6 +8,7 @@ import { resolve, relative } from 'path';
 import type { WorkflowService } from '../application/workflow-service';
 import { formatStatus, formatTask, formatBatch } from './formatter';
 import { readStdinIfPiped } from './stdin';
+import { enableVerbose } from '../infrastructure/logger';
 
 
 export class CLI {
@@ -15,6 +16,12 @@ export class CLI {
 
   async run(argv: string[]): Promise<void> {
     const args = argv.slice(2);
+    // 全局 --verbose 标志，在命令分发前提取
+    const verboseIdx = args.indexOf('--verbose');
+    if (verboseIdx >= 0) {
+      enableVerbose();
+      args.splice(verboseIdx, 1);
+    }
     try {
       const output = await this.dispatch(args);
       process.stdout.write(output + '\n');
@@ -105,6 +112,12 @@ export class CLI {
       case 'abort':
         return await s.abort();
 
+      case 'rollback': {
+        const id = rest[0];
+        if (!id) throw new Error('需要任务ID');
+        return await s.rollback(id);
+      }
+
       case 'add': {
         const typeIdx = rest.indexOf('--type');
         const rawType = (typeIdx >= 0 && rest[typeIdx + 1]) || 'general';
@@ -121,7 +134,7 @@ export class CLI {
   }
 }
 
-const USAGE = `用法: node flow.js <command>
+const USAGE = `用法: node flow.js [--verbose] <command>
   init [--force]       初始化工作流 (stdin传入任务markdown，无stdin则接管项目)
   next [--batch]       获取下一个待执行任务 (--batch 返回所有可并行任务)
   checkpoint <id>      记录任务完成 [--file <path> | stdin | 内联文本] [--files f1 f2 ...]
@@ -131,4 +144,8 @@ const USAGE = `用法: node flow.js <command>
   status               查看全局进度
   resume               中断恢复
   abort                中止工作流并清理 .workflow/ 目录
-  add <描述>           追加任务 [--type frontend|backend|general]`;
+  rollback <id>        回滚到指定任务的快照 (git revert + 重置后续任务)
+  add <描述>           追加任务 [--type frontend|backend|general]
+
+全局选项:
+  --verbose            输出调试日志 (等同 FLOWPILOT_VERBOSE=1)`;
