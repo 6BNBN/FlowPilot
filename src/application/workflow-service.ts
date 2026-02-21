@@ -227,11 +227,12 @@ export class WorkflowService {
       const data = await this.requireProgress();
       const maxNum = data.tasks.reduce((m, t) => Math.max(m, parseInt(t.id, 10)), 0);
       const id = makeTaskId(maxNum + 1);
-      data.tasks.push({
+      const newTask: TaskEntry = {
         id, title, description: '', type, status: 'pending',
         deps: [], summary: '', retries: 0,
-      });
-      await this.repo.saveProgress(data);
+      };
+      const newTasks = [...data.tasks, newTask];
+      await this.repo.saveProgress({ ...data, tasks: newTasks });
       return `已追加任务 ${id}: ${title} [${type}]`;
     } finally {
       await this.repo.unlock();
@@ -247,10 +248,10 @@ export class WorkflowService {
       if (!task) throw new Error(`任务 ${id} 不存在`);
       if (task.status === 'done') return `任务 ${id} 已完成，无需跳过`;
       const warn = task.status === 'active' ? '（警告: 该任务为 active 状态，子Agent可能仍在运行）' : '';
-      task.status = 'skipped';
-      task.summary = '手动跳过';
-      data.current = null;
-      await this.repo.saveProgress(data);
+      const newTasks = data.tasks.map(t =>
+        t.id === id ? { ...t, status: 'skipped' as const, summary: '手动跳过' } : t
+      );
+      await this.repo.saveProgress({ ...data, current: null, tasks: newTasks });
       return `已跳过任务 ${id}: ${task.title}${warn}`;
     } finally {
       await this.repo.unlock();
@@ -289,8 +290,7 @@ export class WorkflowService {
     const data = await this.requireProgress();
     if (!isAllDone(data.tasks)) throw new Error('还有未完成的任务，请先完成所有任务');
     if (data.status === 'finishing') return '已处于review通过状态，可以执行 node flow.js finish';
-    data.status = 'finishing';
-    await this.repo.saveProgress(data);
+    await this.repo.saveProgress({ ...data, status: 'finishing' });
     return '代码审查已通过，请执行 node flow.js finish 完成收尾';
   }
 
@@ -371,8 +371,7 @@ export class WorkflowService {
   async abort(): Promise<string> {
     const data = await this.repo.loadProgress();
     if (!data) return '无活跃工作流，无需中止';
-    data.status = 'aborted';
-    await this.repo.saveProgress(data);
+    await this.repo.saveProgress({ ...data, status: 'aborted' });
     await this.repo.cleanupInjections();
     await this.repo.clearAll();
     return `工作流 "${data.name}" 已中止，.workflow/ 已清理`;
