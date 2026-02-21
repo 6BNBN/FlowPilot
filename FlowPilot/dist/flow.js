@@ -1144,45 +1144,68 @@ function parseConfigAction(action) {
   }
   return null;
 }
+async function saveSnapshot(basePath2, files) {
+  const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+  const p = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", `snapshot-${ts}.json`);
+  const snapshot = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), files };
+  await (0, import_promises3.mkdir)((0, import_path4.dirname)(p), { recursive: true });
+  await (0, import_promises3.writeFile)(p, JSON.stringify(snapshot, null, 2), "utf-8");
+  return p;
+}
+async function loadLatestSnapshot(basePath2) {
+  const dir = (0, import_path4.join)(basePath2, ".flowpilot", "evolution");
+  try {
+    const files = (await (0, import_promises3.readdir)(dir)).filter((f) => f.startsWith("snapshot-") && f.endsWith(".json")).sort();
+    if (!files.length) return null;
+    return JSON.parse(await (0, import_promises3.readFile)((0, import_path4.join)(dir, files[files.length - 1]), "utf-8"));
+  } catch {
+    return null;
+  }
+}
 async function experiment(report, basePath2) {
-  const log2 = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), experiments: [] };
+  const log2 = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), experiments: [], status: "completed" };
   if (!report.experiments.length) return log2;
   const configPath = (0, import_path4.join)(basePath2, ".flowpilot", "config.json");
   const protocolPath = (0, import_path4.join)(basePath2, "FlowPilot", "src", "templates", "protocol.md");
   const configSnapshot = await safeRead(configPath, "{}");
   const protocolSnapshot = await safeRead(protocolPath, "");
-  let configObj = JSON.parse(configSnapshot);
-  let protocolContent = protocolSnapshot;
-  for (const exp of report.experiments) {
-    const applied = { ...exp, applied: false, snapshotBefore: "" };
-    try {
-      if (exp.target === "config") {
-        applied.snapshotBefore = configSnapshot;
-        const parsed = parseConfigAction(exp.action);
-        if (parsed) {
-          configObj = { ...configObj, [parsed.key]: parsed.value };
-          applied.applied = true;
-        }
-      } else if (exp.target === "protocol") {
-        applied.snapshotBefore = protocolSnapshot;
-        const appendix = `
+  await saveSnapshot(basePath2, { "config.json": configSnapshot, "protocol.md": protocolSnapshot });
+  try {
+    let configObj = JSON.parse(configSnapshot);
+    let protocolContent = protocolSnapshot;
+    for (const exp of report.experiments) {
+      const applied = { ...exp, applied: false, snapshotBefore: "" };
+      try {
+        if (exp.target === "config") {
+          applied.snapshotBefore = configSnapshot;
+          const parsed = parseConfigAction(exp.action);
+          if (parsed) {
+            configObj = { ...configObj, [parsed.key]: parsed.value };
+            applied.applied = true;
+          }
+        } else if (exp.target === "protocol") {
+          applied.snapshotBefore = protocolSnapshot;
+          const appendix = `
 <!-- evolution: ${exp.trigger} -->
 > ${exp.action}
 `;
-        protocolContent += appendix;
-        applied.applied = true;
+          protocolContent += appendix;
+          applied.applied = true;
+        }
+      } catch {
       }
-    } catch {
+      log2.experiments.push(applied);
     }
-    log2.experiments.push(applied);
-  }
-  if (log2.experiments.some((e) => e.applied && e.target === "config")) {
-    await (0, import_promises3.mkdir)((0, import_path4.dirname)(configPath), { recursive: true });
-    await (0, import_promises3.writeFile)(configPath, JSON.stringify(configObj, null, 2), "utf-8");
-  }
-  if (log2.experiments.some((e) => e.applied && e.target === "protocol")) {
-    await (0, import_promises3.mkdir)((0, import_path4.dirname)(protocolPath), { recursive: true });
-    await (0, import_promises3.writeFile)(protocolPath, protocolContent, "utf-8");
+    if (log2.experiments.some((e) => e.applied && e.target === "config")) {
+      await (0, import_promises3.mkdir)((0, import_path4.dirname)(configPath), { recursive: true });
+      await (0, import_promises3.writeFile)(configPath, JSON.stringify(configObj, null, 2), "utf-8");
+    }
+    if (log2.experiments.some((e) => e.applied && e.target === "protocol")) {
+      await (0, import_promises3.mkdir)((0, import_path4.dirname)(protocolPath), { recursive: true });
+      await (0, import_promises3.writeFile)(protocolPath, protocolContent, "utf-8");
+    }
+  } catch {
+    log2.status = "failed";
   }
   const logPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
   await (0, import_promises3.mkdir)((0, import_path4.dirname)(logPath), { recursive: true });
@@ -1266,13 +1289,15 @@ async function review(basePath2) {
   }
   if (rolledBack) {
     try {
+      const snapshot = await loadLatestSnapshot(basePath2);
+      if (snapshot) {
+        if (snapshot.files["config.json"]) await (0, import_promises3.writeFile)(configPath, snapshot.files["config.json"], "utf-8");
+        if (snapshot.files["protocol.md"]) await (0, import_promises3.writeFile)(protocolPath, snapshot.files["protocol.md"], "utf-8");
+      }
       const logs = JSON.parse(await (0, import_promises3.readFile)(expPath, "utf-8"));
-      const last = logs[logs.length - 1];
-      if (last) {
-        const firstConfig = last.experiments.find((e) => e.applied && e.target === "config");
-        const firstProtocol = last.experiments.find((e) => e.applied && e.target === "protocol");
-        if (firstConfig?.snapshotBefore) await (0, import_promises3.writeFile)(configPath, firstConfig.snapshotBefore, "utf-8");
-        if (firstProtocol?.snapshotBefore) await (0, import_promises3.writeFile)(protocolPath, firstProtocol.snapshotBefore, "utf-8");
+      if (logs.length) {
+        logs[logs.length - 1].status = "skipped";
+        await (0, import_promises3.writeFile)(expPath, JSON.stringify(logs, null, 2), "utf-8");
       }
     } catch {
     }
@@ -1296,6 +1321,16 @@ var import_path5 = require("path");
 var import_crypto = require("crypto");
 var BM25_K1 = 1.2;
 var BM25_B = 0.75;
+var SPARSE_DIM_BITS = 20;
+var SPARSE_DIM_MASK = (1 << SPARSE_DIM_BITS) - 1;
+function termHash(term) {
+  let h = 2166136261;
+  for (let i = 0; i < term.length; i++) {
+    h ^= term.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0 & SPARSE_DIM_MASK;
+}
 var MEMORY_FILE = "memory.json";
 var DF_FILE = "memory-df.json";
 var SNAPSHOT_FILE = "memory-snapshot.json";
@@ -1303,7 +1338,8 @@ var VECTOR_FILE = "vectors.json";
 var EVERGREEN_SOURCES = ["architecture", "identity", "decision"];
 var CACHE_FILE = "memory-cache.json";
 var CACHE_MAX = 50;
-var CACHE_PRUNE_RATIO = 0.1;
+var CACHE_TTL_MS = 24 * 60 * 60 * 1e3;
+var dfDirty = false;
 function sha256(text) {
   return (0, import_crypto.createHash)("sha256").update(text).digest("hex");
 }
@@ -1312,7 +1348,12 @@ function cachePath(basePath2) {
 }
 async function loadCache(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises4.readFile)(cachePath(basePath2), "utf-8"));
+    const cache = JSON.parse(await (0, import_promises4.readFile)(cachePath(basePath2), "utf-8"));
+    const now = Date.now();
+    for (const k of Object.keys(cache.entries)) {
+      if (now - (cache.entries[k].createdAt ?? 0) > CACHE_TTL_MS) delete cache.entries[k];
+    }
+    return cache;
   } catch {
     return { entries: {} };
   }
@@ -1320,12 +1361,16 @@ async function loadCache(basePath2) {
 async function saveCache(basePath2, cache) {
   const p = cachePath(basePath2);
   await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
+  const now = Date.now();
+  for (const k of Object.keys(cache.entries)) {
+    if (now - (cache.entries[k].createdAt ?? 0) > CACHE_TTL_MS) delete cache.entries[k];
+  }
   const keys = Object.keys(cache.entries);
   if (keys.length > CACHE_MAX) {
     const sorted = keys.sort(
-      (a, b) => cache.entries[a].timestamp.localeCompare(cache.entries[b].timestamp)
+      (a, b) => (cache.entries[a].createdAt ?? 0) - (cache.entries[b].createdAt ?? 0)
     );
-    const pruneCount = Math.ceil(keys.length * CACHE_PRUNE_RATIO);
+    const pruneCount = Math.ceil(keys.length * 0.25);
     for (const k of sorted.slice(0, pruneCount)) delete cache.entries[k];
   }
   await (0, import_promises4.writeFile)(p, JSON.stringify(cache), "utf-8");
@@ -1368,7 +1413,7 @@ async function saveVectors(basePath2, vectors) {
 function vectorSearch(queryVec, vectors, entries, k) {
   const contentMap = new Map(entries.map((e) => [e.content, e]));
   return vectors.map((v) => {
-    const stored = new Map(Object.entries(v.vector));
+    const stored = new Map(Object.entries(v.vector).map(([k2, val]) => [Number(k2), val]));
     const entry = contentMap.get(v.content);
     if (!entry) return null;
     return { entry, score: cosineSimilarity(queryVec, stored) };
@@ -1381,14 +1426,30 @@ async function rebuildVectorIndex(basePath2, active, stats) {
   }));
   await saveVectors(basePath2, vectors);
 }
-var CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g;
+function isCJKRune(cp) {
+  return cp >= 19968 && cp <= 40959 || cp >= 13312 && cp <= 19903 || cp >= 131072 && cp <= 173791 || cp >= 173824 && cp <= 177983 || cp >= 177984 && cp <= 178207 || cp >= 178208 && cp <= 183983 || cp >= 183984 && cp <= 191471 || cp >= 63744 && cp <= 64255 || cp >= 12288 && cp <= 12351 || cp >= 12352 && cp <= 12447 || cp >= 12448 && cp <= 12543 || cp >= 44032 && cp <= 55215 || cp >= 4352 && cp <= 4607;
+}
+function fastDetectLanguage(text) {
+  let cjk = 0, total = 0;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp <= 32) continue;
+    total++;
+    if (isCJKRune(cp)) cjk++;
+  }
+  if (total === 0) return "en";
+  return cjk / total > 0.15 ? "cjk" : "en";
+}
 function tokenize(text) {
   const lower = text.toLowerCase();
   const tokens = [];
   for (const m of lower.matchAll(/[a-z0-9_]{2,}|[a-z]/g)) {
     tokens.push(m[0]);
   }
-  const cjk = [...lower.matchAll(CJK_RE)].map((m) => m[0]);
+  const cjk = [];
+  for (const ch of lower) {
+    if (isCJKRune(ch.codePointAt(0) ?? 0)) cjk.push(ch);
+  }
   for (let i = 0; i < cjk.length; i++) {
     tokens.push(cjk[i]);
     if (i + 1 < cjk.length) tokens.push(cjk[i] + cjk[i + 1]);
@@ -1411,7 +1472,9 @@ async function saveDf(basePath2, stats) {
   const p = dfPath(basePath2);
   await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
   await (0, import_promises4.writeFile)(p, JSON.stringify(stats), "utf-8");
+  dfDirty = false;
 }
+var _lastDfStats = null;
 function rebuildDf(entries) {
   const active = entries.filter((e) => !e.archived);
   const df = {};
@@ -1434,7 +1497,20 @@ function bm25Vector(tokens, stats) {
     const dfVal = stats.df[term] ?? 0;
     const idf = Math.log(1 + (N - dfVal + 0.5) / (dfVal + 0.5));
     const tfNorm = freq * (BM25_K1 + 1) / (freq + BM25_K1 * (1 - BM25_B + BM25_B * docLen / avgDl));
-    vec.set(term, tfNorm * idf);
+    const w = tfNorm * idf;
+    if (w === 0) continue;
+    const idx = termHash(term);
+    vec.set(idx, (vec.get(idx) ?? 0) + w);
+  }
+  return vec;
+}
+function bm25QueryVector(tokens, stats) {
+  const tf = termFrequency(tokens);
+  const vec = /* @__PURE__ */ new Map();
+  for (const [term, freq] of tf) {
+    if ((stats.df[term] ?? 0) === 0) continue;
+    const idx = termHash(term);
+    vec.set(idx, (vec.get(idx) ?? 0) + freq);
   }
   return vec;
 }
@@ -1487,6 +1563,8 @@ async function appendMemory(basePath2, entry) {
   }
   const saved = await loadMemory(basePath2);
   const newStats = rebuildDf(saved);
+  dfDirty = true;
+  _lastDfStats = newStats;
   await saveDf(basePath2, newStats);
   const vec = bm25Vector(tokenize(entry.content), newStats);
   const vecRecord = Object.fromEntries(vec);
@@ -1546,7 +1624,7 @@ async function queryMemory(basePath2, taskDescription) {
   if (!active.length) return [];
   const stats = await loadDf(basePath2);
   const fallback = stats.docCount > 0 ? stats : rebuildDf(entries);
-  const queryVec = bm25Vector(tokenize(taskDescription), fallback);
+  const queryVec = bm25QueryVector(tokenize(taskDescription), fallback);
   const source1 = active.map((e) => {
     const vec = bm25Vector(tokenize(e.content), fallback);
     return { entry: e, score: cosineSimilarity(queryVec, vec) * temporalDecayScore(e), vec };
@@ -1569,7 +1647,7 @@ async function queryMemory(basePath2, taskDescription) {
     log.debug(`memory: \u67E5\u8BE2\u547D\u4E2D ${reranked.length} \u6761`);
   }
   const results = reranked.map((s) => ({ ...s.entry, refs: s.entry.refs + 1 }));
-  cache.entries[cacheKey] = { results, timestamp: (/* @__PURE__ */ new Date()).toISOString() };
+  cache.entries[cacheKey] = { results, timestamp: (/* @__PURE__ */ new Date()).toISOString(), createdAt: Date.now() };
   await saveCache(basePath2, cache);
   return results;
 }
@@ -1589,7 +1667,7 @@ async function decayMemory(basePath2) {
   }
   return count;
 }
-async function saveSnapshot(basePath2, entries) {
+async function saveSnapshot2(basePath2, entries) {
   const p = snapshotPath(basePath2);
   await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
   await (0, import_promises4.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
@@ -1598,7 +1676,7 @@ async function compactMemory(basePath2, targetCount) {
   const entries = await loadMemory(basePath2);
   const active = entries.filter((e) => !e.archived);
   if (active.length <= 1) return 0;
-  await saveSnapshot(basePath2, entries);
+  await saveSnapshot2(basePath2, entries);
   const stats = rebuildDf(entries);
   const vecs = active.map((e) => bm25Vector(tokenize(e.content), stats));
   const merged = /* @__PURE__ */ new Set();
@@ -1625,6 +1703,8 @@ async function compactMemory(basePath2, targetCount) {
     const final = result.filter((e) => !toRemove.has(e));
     await saveMemory(basePath2, final);
     const finalStats = rebuildDf(final);
+    dfDirty = true;
+    _lastDfStats = finalStats;
     await saveDf(basePath2, finalStats);
     await rebuildVectorIndex(basePath2, final.filter((e) => !e.archived), finalStats);
     await clearCache(basePath2);
@@ -1633,6 +1713,8 @@ async function compactMemory(basePath2, targetCount) {
   }
   await saveMemory(basePath2, result);
   const resultStats = rebuildDf(result);
+  dfDirty = true;
+  _lastDfStats = resultStats;
   await saveDf(basePath2, resultStats);
   await rebuildVectorIndex(basePath2, result.filter((e) => !e.archived), resultStats);
   await clearCache(basePath2);
@@ -1642,6 +1724,9 @@ async function compactMemory(basePath2, targetCount) {
 }
 
 // src/infrastructure/truncation.ts
+function estimateCharsPerToken(text) {
+  return fastDetectLanguage(text) === "cjk" ? 1.5 : 3.5;
+}
 function truncateHeadTail(text, maxChars) {
   if (text.length <= maxChars) return text;
   const head = Math.floor(maxChars * 0.7);
@@ -1651,6 +1736,10 @@ function truncateHeadTail(text, maxChars) {
 [...truncated ${text.length - head - tail} chars...]
 
 ${text.slice(-tail)}`;
+}
+function computeMaxChars(contextWindow = 128e3, sample) {
+  const cpt = sample ? estimateCharsPerToken(sample) : 3.5;
+  return Math.floor(contextWindow * 0.3 * cpt);
 }
 
 // src/infrastructure/loop-detector.ts
@@ -1750,26 +1839,90 @@ async function detect(basePath2, taskId, summary, failed) {
   return repeatedNoProgress(updated) ?? pingPong(updated) ?? globalCircuitBreaker(updated);
 }
 
-// src/application/workflow-service.ts
+// src/infrastructure/heartbeat.ts
 var import_promises6 = require("fs/promises");
 var import_path7 = require("path");
+var TASK_TIMEOUT_MS = 30 * 60 * 1e3;
+var MEMORY_COMPACT_THRESHOLD = 100;
+var DEFAULT_INTERVAL_MS = 5 * 60 * 1e3;
+async function runHeartbeat(basePath2) {
+  const warnings = [];
+  const actions = [];
+  try {
+    const raw = await (0, import_promises6.readFile)((0, import_path7.join)(basePath2, ".workflow", "progress.json"), "utf-8");
+    const data = JSON.parse(raw);
+    if (data.status === "running") {
+      const active = data.tasks.filter((t) => t.status === "active");
+      if (active.length) {
+        const window = await loadWindow(basePath2);
+        const lastTs = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
+        if (lastTs && Date.now() - lastTs > TASK_TIMEOUT_MS) {
+          warnings.push(`[TIMEOUT] \u4EFB\u52A1 ${active.map((t) => t.id).join(",")} \u8D85\u8FC730\u5206\u949F\u65E0checkpoint`);
+        }
+      }
+    }
+  } catch {
+  }
+  try {
+    const memories = await loadMemory(basePath2);
+    const activeCount = memories.filter((e) => !e.archived).length;
+    if (activeCount > MEMORY_COMPACT_THRESHOLD) {
+      await compactMemory(basePath2);
+      actions.push(`compacted memory from ${activeCount} entries`);
+      warnings.push(`[MEMORY] \u6D3B\u8DC3\u8BB0\u5FC6 ${activeCount} \u6761\uFF0C\u5DF2\u81EA\u52A8\u538B\u7F29`);
+    }
+  } catch {
+  }
+  try {
+    const dfStats = await loadDf(basePath2);
+    if (dfStats.docCount > 0) {
+      const memories = await loadMemory(basePath2);
+      const rebuilt = rebuildDf(memories);
+      const diff = Math.abs(dfStats.docCount - rebuilt.docCount) / Math.max(dfStats.docCount, 1);
+      if (diff > 0.1) {
+        await saveDf(basePath2, rebuilt);
+        actions.push("rebuilt DF stats");
+        warnings.push(`[DF] docCount \u504F\u5DEE ${(diff * 100).toFixed(0)}%\uFF0C\u5DF2\u91CD\u5EFA`);
+      }
+    }
+  } catch {
+  }
+  if (warnings.length) log.info(`[heartbeat] ${warnings.join("; ")}`);
+  return { warnings, actions };
+}
+function startHeartbeat(basePath2, intervalMs = DEFAULT_INTERVAL_MS) {
+  const timer = setInterval(() => {
+    runHeartbeat(basePath2).catch(() => {
+    });
+  }, intervalMs);
+  log.debug(`[heartbeat] started (interval=${intervalMs}ms)`);
+  return () => {
+    clearInterval(timer);
+    log.debug("[heartbeat] stopped");
+  };
+}
+
+// src/application/workflow-service.ts
+var import_promises7 = require("fs/promises");
+var import_path8 = require("path");
 var WorkflowService = class {
   constructor(repo2, parse) {
     this.repo = repo2;
     this.parse = parse;
   }
+  stopHeartbeat = null;
   loopWarningPath() {
-    return (0, import_path7.join)(this.repo.projectRoot(), ".workflow", "loop-warning.txt");
+    return (0, import_path8.join)(this.repo.projectRoot(), ".workflow", "loop-warning.txt");
   }
   async saveLoopWarning(msg) {
     const p = this.loopWarningPath();
-    await (0, import_promises6.mkdir)((0, import_path7.join)(this.repo.projectRoot(), ".workflow"), { recursive: true });
-    await (0, import_promises6.writeFile)(p, msg, "utf-8");
+    await (0, import_promises7.mkdir)((0, import_path8.join)(this.repo.projectRoot(), ".workflow"), { recursive: true });
+    await (0, import_promises7.writeFile)(p, msg, "utf-8");
   }
   async loadAndClearLoopWarning() {
     try {
-      const msg = await (0, import_promises6.readFile)(this.loopWarningPath(), "utf-8");
-      await (0, import_promises6.unlink)(this.loopWarningPath());
+      const msg = await (0, import_promises7.readFile)(this.loopWarningPath(), "utf-8");
+      await (0, import_promises7.unlink)(this.loopWarningPath());
       return msg || null;
     } catch {
       return null;
@@ -1821,6 +1974,8 @@ ${def.description}
     if (memories.filter((e) => !e.archived).length > 50) {
       await compactMemory(this.repo.projectRoot());
     }
+    this.stopHeartbeat?.();
+    this.stopHeartbeat = startHeartbeat(this.repo.projectRoot());
     return data;
   }
   /** next: 获取下一个可执行任务（含依赖上下文） */
@@ -1950,6 +2105,8 @@ ${loopWarning}`);
 ${warns.join("\n")}` : msg2;
       }
       if (!detail.trim()) throw new Error(`\u4EFB\u52A1 ${id} checkpoint\u5185\u5BB9\u4E0D\u80FD\u4E3A\u7A7A`);
+      const maxChars = computeMaxChars(128e3, detail);
+      if (detail.length > maxChars) detail = truncateHeadTail(detail, maxChars);
       const summaryLine = detail.split("\n")[0].slice(0, 80);
       const newData = completeTask(data, id, summaryLine);
       log.debug(`checkpoint ${id}: \u5B8C\u6210, summary="${summaryLine}"`);
@@ -2005,6 +2162,8 @@ ${detail}
     }
     const doneCount = newData.tasks.filter((t) => t.status === "done").length;
     const total = newData.tasks.length;
+    this.stopHeartbeat?.();
+    this.stopHeartbeat = startHeartbeat(this.repo.projectRoot());
     if (resetId) {
       return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${newData.name}
 \u8FDB\u5EA6: ${doneCount}/${total}
@@ -2094,6 +2253,8 @@ ${detail}
     log.debug(`finish: status=${data.status}`);
     if (data.status === "idle" || data.status === "completed") return "\u5DE5\u4F5C\u6D41\u5DF2\u5B8C\u6210\uFF0C\u65E0\u9700\u91CD\u590Dfinish";
     if (!isAllDone(data.tasks)) throw new Error("\u8FD8\u6709\u672A\u5B8C\u6210\u7684\u4EFB\u52A1\uFF0C\u8BF7\u5148\u5B8C\u6210\u6240\u6709\u4EFB\u52A1");
+    this.stopHeartbeat?.();
+    this.stopHeartbeat = null;
     const result = this.repo.verify();
     log.debug(`finish: verify passed=${result.passed}`);
     if (!result.passed) {
@@ -2336,35 +2497,10 @@ ${entry}`;
     }
     return null;
   }
-  /** 心跳自检：任务超时 + 记忆膨胀 + DF一致性 */
+  /** 心跳自检：委托给 heartbeat 模块 */
   async healthCheck() {
-    const warnings = [];
-    const data = await this.repo.loadProgress();
-    if (!data || data.status !== "running") return warnings;
-    const active = data.tasks.filter((t) => t.status === "active");
-    if (active.length) {
-      const window = await loadWindow(this.repo.projectRoot());
-      const lastCp = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
-      if (lastCp && Date.now() - lastCp > 30 * 60 * 1e3) {
-        warnings.push(`[TIMEOUT] \u6D3B\u8DC3\u4EFB\u52A1 ${active.map((t) => t.id).join(",")} \u8D85\u8FC730\u5206\u949F\u65E0checkpoint`);
-      }
-    }
-    const memories = await loadMemory(this.repo.projectRoot());
-    const activeCount = memories.filter((e) => !e.archived).length;
-    if (activeCount > 100) {
-      await compactMemory(this.repo.projectRoot());
-      warnings.push(`[MEMORY] \u6D3B\u8DC3\u8BB0\u5FC6 ${activeCount} \u6761\uFF0C\u5DF2\u81EA\u52A8\u538B\u7F29`);
-    }
-    const dfStats = await loadDf(this.repo.projectRoot());
-    if (dfStats.docCount > 0) {
-      const rebuilt = rebuildDf(memories);
-      const diff = Math.abs(dfStats.docCount - rebuilt.docCount) / Math.max(dfStats.docCount, 1);
-      if (diff > 0.1) {
-        await saveDf(this.repo.projectRoot(), rebuilt);
-        warnings.push(`[DF] docCount \u504F\u5DEE ${(diff * 100).toFixed(0)}%\uFF0C\u5DF2\u91CD\u5EFA`);
-      }
-    }
-    return warnings;
+    const result = await runHeartbeat(this.repo.projectRoot());
+    return result.warnings;
   }
   async requireProgress() {
     const data = await this.repo.loadProgress();
@@ -2376,7 +2512,7 @@ ${entry}`;
 
 // src/interfaces/cli.ts
 var import_fs3 = require("fs");
-var import_path8 = require("path");
+var import_path9 = require("path");
 
 // src/interfaces/formatter.ts
 var ICON = {
@@ -2509,8 +2645,8 @@ var CLI = class {
           }
         }
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
-          const filePath = (0, import_path8.resolve)(rest[fileIdx + 1]);
-          if ((0, import_path8.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
+          const filePath = (0, import_path9.resolve)(rest[fileIdx + 1]);
+          if ((0, import_path9.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
           detail = (0, import_fs3.readFileSync)(filePath, "utf-8");
         } else if (rest.length > 1 && fileIdx < 0 && filesIdx < 0) {
           detail = rest.slice(1).join(" ");
