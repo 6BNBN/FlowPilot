@@ -29,6 +29,20 @@ export interface DfStats {
 const BM25_K1 = 1.2;
 const BM25_B = 0.75;
 
+/** FNV-1a 稀疏向量维度：20-bit → 1M 维空间 */
+const SPARSE_DIM_BITS = 20;
+const SPARSE_DIM_MASK = (1 << SPARSE_DIM_BITS) - 1;
+
+/** FNV-1a 32-bit hash → 20-bit 维度索引 */
+function termHash(term: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < term.length; i++) {
+    h ^= term.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0) & SPARSE_DIM_MASK;
+}
+
 const MEMORY_FILE = 'memory.json';
 const DF_FILE = 'memory-df.json';
 const SNAPSHOT_FILE = 'memory-snapshot.json';
@@ -37,7 +51,7 @@ const VECTOR_FILE = 'vectors.json';
 /** 向量存储条目 */
 interface VectorEntry {
   content: string;
-  vector: Record<string, number>;
+  vector: Record<number, number>;
 }
 const COMPACT_THRESHOLD = 50;
 const EVERGREEN_SOURCES = ['architecture', 'identity', 'decision'];
@@ -129,7 +143,7 @@ async function saveVectors(basePath: string, vectors: VectorEntry[]): Promise<vo
 
 /** 向量检索：余弦相似度 top-k */
 function vectorSearch(
-  queryVec: Map<string, number>,
+  queryVec: Map<number, number>,
   vectors: VectorEntry[],
   entries: MemoryEntry[],
   k: number
@@ -137,7 +151,7 @@ function vectorSearch(
   const contentMap = new Map(entries.map(e => [e.content, e]));
   return vectors
     .map(v => {
-      const stored = new Map(Object.entries(v.vector));
+      const stored = new Map(Object.entries(v.vector).map(([k, val]) => [Number(k), val]));
       const entry = contentMap.get(v.content);
       if (!entry) return null;
       return { entry, score: cosineSimilarity(queryVec, stored) };
@@ -156,8 +170,35 @@ async function rebuildVectorIndex(basePath: string, active: MemoryEntry[], stats
   await saveVectors(basePath, vectors);
 }
 
-/** CJK 全范围：中文 + 日文平假名/片假名 + 韩文 */
-const CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g;
+/** 判断码点是否为 CJK 字符（含 Extensions A-F、平假名/片假名、韩文） */
+function isCJKRune(cp: number): boolean {
+  return (cp >= 0x4E00 && cp <= 0x9FFF)
+    || (cp >= 0x3400 && cp <= 0x4DBF)
+    || (cp >= 0x20000 && cp <= 0x2A6DF)
+    || (cp >= 0x2A700 && cp <= 0x2B73F)
+    || (cp >= 0x2B740 && cp <= 0x2B81F)
+    || (cp >= 0x2B820 && cp <= 0x2CEAF)
+    || (cp >= 0x2CEB0 && cp <= 0x2EBEF)
+    || (cp >= 0xF900 && cp <= 0xFAFF)
+    || (cp >= 0x3000 && cp <= 0x303F)
+    || (cp >= 0x3040 && cp <= 0x309F)
+    || (cp >= 0x30A0 && cp <= 0x30FF)
+    || (cp >= 0xAC00 && cp <= 0xD7AF)
+    || (cp >= 0x1100 && cp <= 0x11FF);
+}
+
+/** 快速语言检测：CJK 比例 > 15% 判定为 CJK */
+export function fastDetectLanguage(text: string): 'cjk' | 'en' {
+  let cjk = 0, total = 0;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp <= 0x20) continue;
+    total++;
+    if (isCJKRune(cp)) cjk++;
+  }
+  if (total === 0) return 'en';
+  return cjk / total > 0.15 ? 'cjk' : 'en';
+}
 
 /** 多语言分词：CJK 单字+双字gram、拉丁词、数字、下划线标识符 */
 function tokenize(text: string): string[] {
@@ -166,7 +207,10 @@ function tokenize(text: string): string[] {
   for (const m of lower.matchAll(/[a-z0-9_]{2,}|[a-z]/g)) {
     tokens.push(m[0]);
   }
-  const cjk = [...lower.matchAll(CJK_RE)].map(m => m[0]);
+  const cjk: string[] = [];
+  for (const ch of lower) {
+    if (isCJKRune(ch.codePointAt(0) ?? 0)) cjk.push(ch);
+  }
   for (let i = 0; i < cjk.length; i++) {
     tokens.push(cjk[i]);
     if (i + 1 < cjk.length) tokens.push(cjk[i] + cjk[i + 1]);
@@ -178,7 +222,10 @@ function tokenize(text: string): string[] {
 export function detectLanguage(text: string): { cjkRatio: number; dominantScript: 'cjk' | 'latin' | 'mixed' } {
   const sample = text.slice(0, 300);
   if (!sample.length) return { cjkRatio: 0, dominantScript: 'latin' };
-  const cjkCount = (sample.match(CJK_RE) || []).length;
+  let cjkCount = 0;
+  for (const ch of sample) {
+    if (isCJKRune(ch.codePointAt(0) ?? 0)) cjkCount++;
+  }
   const cjkRatio = cjkCount / sample.length;
   return { cjkRatio, dominantScript: cjkRatio > 0.5 ? 'cjk' : cjkRatio < 0.1 ? 'latin' : 'mixed' };
 }
@@ -220,10 +267,10 @@ export function rebuildDf(entries: MemoryEntry[]): DfStats {
   return { docCount: active.length, df, avgDocLen: active.length ? totalLen / active.length : 0 };
 }
 
-/** 生成 BM25 加权向量 (k1=1.2, b=0.75) */
-function bm25Vector(tokens: string[], stats: DfStats): Map<string, number> {
+/** 生成 BM25 文档向量：完整 BM25 公式（TF-IDF），维度用 FNV-1a 20-bit hash */
+function bm25Vector(tokens: string[], stats: DfStats): Map<number, number> {
   const tf = termFrequency(tokens);
-  const vec = new Map<string, number>();
+  const vec = new Map<number, number>();
   const N = Math.max(stats.docCount, 1);
   const avgDl = stats.avgDocLen || 1;
   const docLen = tokens.length;
@@ -231,13 +278,28 @@ function bm25Vector(tokens: string[], stats: DfStats): Map<string, number> {
     const dfVal = stats.df[term] ?? 0;
     const idf = Math.log(1 + (N - dfVal + 0.5) / (dfVal + 0.5));
     const tfNorm = (freq * (BM25_K1 + 1)) / (freq + BM25_K1 * (1 - BM25_B + BM25_B * docLen / avgDl));
-    vec.set(term, tfNorm * idf);
+    const w = tfNorm * idf;
+    if (w === 0) continue;
+    const idx = termHash(term);
+    vec.set(idx, (vec.get(idx) ?? 0) + w);
+  }
+  return vec;
+}
+
+/** 生成 BM25 查询向量：raw TF 无 IDF，跳过语料库中不存在的 term */
+function bm25QueryVector(tokens: string[], stats: DfStats): Map<number, number> {
+  const tf = termFrequency(tokens);
+  const vec = new Map<number, number>();
+  for (const [term, freq] of tf) {
+    if ((stats.df[term] ?? 0) === 0) continue;
+    const idx = termHash(term);
+    vec.set(idx, (vec.get(idx) ?? 0) + freq);
   }
   return vec;
 }
 
 /** 余弦相似度 */
-function cosineSimilarity(a: Map<string, number>, b: Map<string, number>): number {
+function cosineSimilarity(a: Map<number, number>, b: Map<number, number>): number {
   let dot = 0, normA = 0, normB = 0;
   for (const [k, v] of a) {
     normA += v * v;
@@ -298,7 +360,7 @@ export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'r
 
   // 向量索引：追加/更新当前条目的 BM25 向量
   const vec = bm25Vector(tokenize(entry.content), newStats);
-  const vecRecord: Record<string, number> = Object.fromEntries(vec);
+  const vecRecord: Record<number, number> = Object.fromEntries(vec);
   const vectors = await loadVectors(basePath);
   const vi = vectors.findIndex(v => v.content === entry.content);
   const newVectors = vi >= 0
@@ -311,7 +373,7 @@ export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'r
 
 /** MMR 重排序：平衡相关性与多样性 (lambda=0.7) */
 function mmrRerank(
-  candidates: { entry: MemoryEntry; score: number; vec: Map<string, number> }[],
+  candidates: { entry: MemoryEntry; score: number; vec: Map<number, number> }[],
   k: number,
   lambda = 0.7
 ): { entry: MemoryEntry; score: number }[] {
@@ -367,7 +429,7 @@ export async function queryMemory(basePath: string, taskDescription: string): Pr
 
   const stats = await loadDf(basePath);
   const fallback = stats.docCount > 0 ? stats : rebuildDf(entries);
-  const queryVec = bm25Vector(tokenize(taskDescription), fallback);
+  const queryVec = bm25QueryVector(tokenize(taskDescription), fallback);
 
   // Source 1: BM25 + 余弦相似度 + 时间衰减
   const source1 = active.map(e => {
