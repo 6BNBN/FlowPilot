@@ -13,14 +13,25 @@ export interface VerifyResult {
   error?: string;
 }
 
+/** 从 .workflow/config.json 加载验证配置 */
+function loadConfig(cwd: string): { commands?: string[]; timeout?: number } {
+  try {
+    const raw = readFileSync(join(cwd, '.workflow', 'config.json'), 'utf-8');
+    const cfg = JSON.parse(raw);
+    return cfg?.verify ?? {};
+  } catch { return {}; }
+}
+
 /** 自动检测并执行项目验证脚本 */
 export function runVerify(cwd: string): VerifyResult {
-  const cmds = detectCommands(cwd);
+  const config = loadConfig(cwd);
+  const cmds = config.commands?.length ? config.commands : detectCommands(cwd);
+  const timeout = (config.timeout ?? 300) * 1_000;
   if (!cmds.length) return { passed: true, scripts: [] };
 
   for (const cmd of cmds) {
     try {
-      execSync(cmd, { cwd, stdio: 'pipe', timeout: 300_000 });
+      execSync(cmd, { cwd, stdio: 'pipe', timeout });
     } catch (e: any) {
       const stderr = e.stderr?.length ? e.stderr.toString() : '';
       const stdout = e.stdout?.length ? e.stdout.toString() : '';

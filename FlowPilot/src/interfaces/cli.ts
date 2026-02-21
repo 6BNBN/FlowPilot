@@ -102,6 +102,9 @@ export class CLI {
       case 'resume':
         return await s.resume();
 
+      case 'abort':
+        return await s.abort();
+
       case 'add': {
         const typeIdx = rest.indexOf('--type');
         const rawType = (typeIdx >= 0 && rest[typeIdx + 1]) || 'general';
@@ -127,4 +130,5 @@ const USAGE = `用法: node flow.js <command>
   finish               智能收尾 (验证+总结+回到待命，需先review)
   status               查看全局进度
   resume               中断恢复
+  abort                中止工作流并清理 .workflow/ 目录
   add <描述>           追加任务 [--type frontend|backend|general]`;
