@@ -35,3 +35,27 @@ export interface ProgressData {
   current: string | null;
   tasks: TaskEntry[];
 }
+
+/** 工作流历史统计 */
+export interface WorkflowStats {
+  /** 工作流名称 */
+  name: string;
+  /** 总任务数 */
+  totalTasks: number;
+  /** 完成数 */
+  doneCount: number;
+  /** 跳过数 */
+  skipCount: number;
+  /** 失败数 */
+  failCount: number;
+  /** 总重试次数 */
+  retryTotal: number;
+  /** 按类型分布 { frontend: 3, backend: 5, general: 2 } */
+  tasksByType: Record<string, number>;
+  /** 按类型统计失败数 */
+  failsByType: Record<string, number>;
+  /** 工作流开始时间 ISO */
+  startTime: string;
+  /** 工作流结束时间 ISO */
+  endTime: string;
+}

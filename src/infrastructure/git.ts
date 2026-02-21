@@ -56,6 +56,43 @@ export function gitCleanup(): void {
   } catch {}
 }
 
+/** 为任务打轻量 tag，返回错误信息或null */
+export function tagTask(taskId: string): string | null {
+  try {
+    execFileSync('git', ['tag', `flowpilot/task-${taskId}`], { stdio: 'pipe' });
+    return null;
+  } catch (e: any) {
+    return e.stderr?.toString?.() || e.message;
+  }
+}
+
+/** 回滚到指定任务的 tag，使用 git revert */
+export function rollbackToTask(taskId: string): string | null {
+  const tag = `flowpilot/task-${taskId}`;
+  try {
+    execFileSync('git', ['rev-parse', tag], { stdio: 'pipe' });
+    const log = execFileSync('git', ['log', '--oneline', `${tag}..HEAD`], { stdio: 'pipe', encoding: 'utf-8' }).trim();
+    if (!log) return '没有需要回滚的提交';
+    execFileSync('git', ['revert', '--no-commit', `${tag}..HEAD`], { stdio: 'pipe' });
+    execFileSync('git', ['commit', '-m', `rollback: revert to task-${taskId}`], { stdio: 'pipe' });
+    return null;
+  } catch (e: any) {
+    try { execFileSync('git', ['revert', '--abort'], { stdio: 'pipe' }); } catch {}
+    return e.stderr?.toString?.() || e.message;
+  }
+}
+
+/** 清理所有 flowpilot/ 前缀的 tag */
+export function cleanTags(): void {
+  try {
+    const tags = execFileSync('git', ['tag', '-l', 'flowpilot/*'], { stdio: 'pipe', encoding: 'utf-8' }).trim();
+    if (!tags) return;
+    for (const t of tags.split('\n')) {
+      if (t) execFileSync('git', ['tag', '-d', t], { stdio: 'pipe' });
+    }
+  } catch {}
+}
+
 /** 自动 git add + commit，返回错误信息或null */
 export function autoCommit(taskId: string, title: string, summary: string, files?: string[]): string | null {
   const msg = `task-${taskId}: ${title}\n\n${summary}`;

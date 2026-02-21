@@ -168,7 +168,7 @@ function detectCommands(cwd) {
 }
 
 // src/infrastructure/fs-repository.ts
-var BUILTIN_TEMPLATE = (0, import_path.join)(__dirname, "templates", "protocol.md");
+var BUILTIN_TEMPLATE = (0, import_fs.existsSync)((0, import_path.join)(__dirname, "..", "templates", "protocol.md")) ? (0, import_path.join)(__dirname, "..", "templates", "protocol.md") : (0, import_path.join)(__dirname, "templates", "protocol.md");
 async function loadProtocolTemplate(basePath) {
   try {
     const config = JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(basePath, ".workflow", "config.json"), "utf-8"));
