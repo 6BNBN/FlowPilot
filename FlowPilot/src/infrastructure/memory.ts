@@ -262,7 +262,26 @@ function mmrRerank(
   return selected.map(s => ({ entry: s.entry, score: s.score }));
 }
 
-/** 查询与任务描述相关的记忆（BM25 + 余弦相似度 + MMR），命中条目 refs++，含 SHA-256 + LRU 缓存 */
+/** RRF 多源融合：score = Σ 1/(k + rank_i)，k=60 */
+export function rrfFuse(sources: { entry: MemoryEntry; score: number }[][]): { entry: MemoryEntry; score: number }[] {
+  const RRF_K = 60;
+  const scores = new Map<string, { entry: MemoryEntry; score: number }>();
+  for (const source of sources) {
+    for (let rank = 0; rank < source.length; rank++) {
+      const { entry } = source[rank];
+      const key = entry.content;
+      const prev = scores.get(key);
+      const rrfScore = 1 / (RRF_K + rank + 1);
+      scores.set(key, {
+        entry,
+        score: (prev?.score ?? 0) + rrfScore,
+      });
+    }
+  }
+  return [...scores.values()].sort((a, b) => b.score - a.score);
+}
+
+/** 查询与任务描述相关的记忆（BM25 + 余弦相似度 + MMR + RRF 多源融合预留），命中条目 refs++，含 SHA-256 + LRU 缓存 */
 export async function queryMemory(basePath: string, taskDescription: string): Promise<MemoryEntry[]> {
   const cacheKey = sha256(taskDescription);
   const cache = await loadCache(basePath);
@@ -279,10 +298,26 @@ export async function queryMemory(basePath: string, taskDescription: string): Pr
   const fallback = stats.docCount > 0 ? stats : rebuildDf(entries);
   const queryVec = bm25Vector(tokenize(taskDescription), fallback);
 
-  const candidates = active.map(e => {
+  // Source 1: BM25 + 余弦相似度 + 时间衰减
+  const source1 = active.map(e => {
     const vec = bm25Vector(tokenize(e.content), fallback);
     return { entry: e, score: cosineSimilarity(queryVec, vec) * temporalDecayScore(e), vec };
   }).filter(s => s.score > 0.05);
+
+  // 未来可在此添加第二检索源（如向量检索）作为 source2
+  // const source2 = await vectorSearch(basePath, taskDescription);
+
+  // 单源时直接使用，多源时调用 rrfFuse
+  const sources = [source1.map(s => ({ entry: s.entry, score: s.score }))];
+  const fused = sources.length > 1
+    ? rrfFuse(sources)
+    : sources[0];
+
+  // 从 fused 结果恢复 vec 用于 MMR 重排序
+  const candidates = fused.map(f => {
+    const vec = bm25Vector(tokenize(f.entry.content), fallback);
+    return { entry: f.entry, score: f.score, vec };
+  });
 
   const reranked = mmrRerank(candidates, 5);
 

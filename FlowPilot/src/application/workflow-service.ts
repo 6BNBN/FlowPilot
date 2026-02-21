@@ -12,6 +12,7 @@ import { log, setWorkflowName } from '../infrastructure/logger';
 import { collectStats, analyzeHistory } from '../infrastructure/history';
 import { appendMemory, queryMemory, decayMemory, compactMemory, loadMemory, loadDf, saveDf, rebuildDf } from '../infrastructure/memory';
 import { extractAll } from '../infrastructure/extractor';
+import { truncateHeadTail } from '../infrastructure/truncation';
 import { detect as detectLoop, loadWindow, type LoopDetection } from '../infrastructure/loop-detector';
 import { writeFile, readFile, unlink, mkdir } from 'fs/promises';
 import { join } from 'path';
@@ -568,7 +569,8 @@ export class WorkflowService {
       progressItems.push({ label: `[${t.type}] ${text}`, text });
     }
     for (const t of recent) {
-      const text = t.summary ? `${t.title}: ${t.summary}` : t.title;
+      const summary = t.summary && t.summary.length > 500 ? truncateHeadTail(t.summary, 500) : t.summary;
+      const text = summary ? `${t.title}: ${summary}` : t.title;
       progressItems.push({ label: `[${t.type}] ${text}`, text });
     }
 
@@ -584,7 +586,9 @@ export class WorkflowService {
       lines.push('\n## 待完成\n');
       for (const t of pending) lines.push(`- [${t.type}] ${t.title}`);
     }
-    await this.repo.saveSummary(lines.join('\n') + '\n');
+    let totalSummary = lines.join('\n') + '\n';
+    if (totalSummary.length > 3000) totalSummary = truncateHeadTail(totalSummary, 3000);
+    await this.repo.saveSummary(totalSummary);
   }
 
   /** 读取历史经验，输出建议，自动写入 config.json（闭环进化） */
