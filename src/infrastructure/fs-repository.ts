@@ -6,7 +6,8 @@
 import { mkdir, readFile, writeFile, unlink, rm, rename } from 'fs/promises';
 import { join } from 'path';
 import { openSync, closeSync, existsSync } from 'fs';
-import type { ProgressData, TaskEntry } from '../domain/types';
+import { readdir } from 'fs/promises';
+import type { ProgressData, TaskEntry, WorkflowStats } from '../domain/types';
 import type { WorkflowRepository, VerifyResult } from '../domain/repository';
 import { autoCommit, gitCleanup } from './git';
 import { runVerify } from './verify';

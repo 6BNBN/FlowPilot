@@ -3,7 +3,7 @@
  * @description 仓储接口 - 持久化契约
  */
 
-import type { ProgressData } from './types';
+import type { ProgressData, WorkflowStats } from './types';
 
 /** 验证结果 */
 export interface VerifyResult {
@@ -49,4 +49,12 @@ export interface WorkflowRepository {
   verify(): VerifyResult;
   /** 清理注入的CLAUDE.md协议块和hooks */
   cleanupInjections(): Promise<void>;
+  /** 保存工作流历史统计到 .flowpilot/history/ */
+  saveHistory(stats: WorkflowStats): Promise<void>;
+  /** 加载所有历史统计 */
+  loadHistory(): Promise<WorkflowStats[]>;
+  /** 加载 .workflow/config.json */
+  loadConfig(): Promise<Record<string, unknown>>;
+  /** 保存 .workflow/config.json */
+  saveConfig(config: Record<string, unknown>): Promise<void>;
 }
