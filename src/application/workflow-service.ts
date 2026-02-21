@@ -9,6 +9,7 @@ import type { WorkflowRepository } from '../domain/repository';
 import { makeTaskId, cascadeSkip, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
 import { runLifecycleHook } from '../infrastructure/hooks';
 import { log } from '../infrastructure/logger';
+import { collectStats, analyzeHistory } from '../infrastructure/history';
 
 export class WorkflowService {
   constructor(

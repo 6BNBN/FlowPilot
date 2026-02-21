@@ -112,6 +112,12 @@ export class CLI {
       case 'abort':
         return await s.abort();
 
+      case 'rollback': {
+        const id = rest[0];
+        if (!id) throw new Error('需要任务ID');
+        return await s.rollback(id);
+      }
+
       case 'add': {
         const typeIdx = rest.indexOf('--type');
         const rawType = (typeIdx >= 0 && rest[typeIdx + 1]) || 'general';
@@ -138,6 +144,7 @@ const USAGE = `用法: node flow.js [--verbose] <command>
   status               查看全局进度
   resume               中断恢复
   abort                中止工作流并清理 .workflow/ 目录
+  rollback <id>        回滚到指定任务的快照 (git revert + 重置后续任务)
   add <描述>           追加任务 [--type frontend|backend|general]
 
 全局选项:
