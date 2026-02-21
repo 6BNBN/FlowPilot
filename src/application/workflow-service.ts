@@ -284,6 +284,7 @@ export class WorkflowService {
     const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : '', failed.length ? `${failed.length} failed` : ''].filter(Boolean).join(', ');
 
     const titles = done.map(t => `- ${t.id}: ${t.title}`).join('\n');
+    await this.repo.cleanupInjections();
     const commitErr = this.repo.commit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`);
     if (!commitErr) {
       await this.repo.clearAll();
@@ -301,33 +302,90 @@ export class WorkflowService {
     return this.repo.loadProgress();
   }
 
-  /** 滚动摘要：每次checkpoint追加，每10个任务压缩 */
+  /** 从文本中提取标记行 [DECISION]/[ARCHITECTURE]/[IMPORTANT] */
+  private extractTaggedLines(text: string): string[] {
+    const TAG_RE = /\[(?:DECISION|ARCHITECTURE|IMPORTANT)\]/i;
+    return text.split('\n').filter(l => TAG_RE.test(l)).map(l => l.trim());
+  }
+
+  /** 词袋 tokenize（兼容 CJK：连续非空白拉丁词 + 单个 CJK 字符） */
+  private tokenize(text: string): Set<string> {
+    const tokens = new Set<string>();
+    for (const m of text.toLowerCase().matchAll(/[a-z0-9_]+|[\u4e00-\u9fff]/g)) {
+      tokens.add(m[0]);
+    }
+    return tokens;
+  }
+
+  /** Jaccard 相似度 */
+  private similarity(a: string, b: string): number {
+    const sa = this.tokenize(a), sb = this.tokenize(b);
+    if (!sa.size || !sb.size) return 0;
+    let inter = 0;
+    for (const t of sa) if (sb.has(t)) inter++;
+    return inter / (sa.size + sb.size - inter);
+  }
+
+  /** 语义去重：相似度 > 0.8 的摘要合并 */
+  private dedup(items: { label: string; text: string }[]): { label: string; text: string }[] {
+    const result: { label: string; text: string }[] = [];
+    for (const item of items) {
+      if (!result.some(r => this.similarity(r.text, item.text) > 0.8)) {
+        result.push(item);
+      }
+    }
+    return result;
+  }
+
+  /** 智能滚动摘要：保留关键决策 + 时间衰减 + 语义去重 */
   private async updateSummary(data: ProgressData): Promise<void> {
     const done = data.tasks.filter(t => t.status === 'done');
     const lines = [`# ${data.name}\n`];
 
-    // 每10个已完成任务压缩为按类型分组的摘要
-    if (done.length > 10) {
-      const groups = new Map<string, string[]>();
-      for (const t of done) {
-        const arr = groups.get(t.type) || [];
-        arr.push(t.title);
-        groups.set(t.type, arr);
-      }
-      lines.push('## 已完成模块');
-      for (const [type, titles] of groups) {
-        lines.push(`- [${type}] ${titles.length}项: ${titles.slice(-3).join(', ')}${titles.length > 3 ? ' 等' : ''}`);
-      }
-    } else {
-      lines.push('## 已完成');
-      for (const t of done) {
-        lines.push(`- [${t.type}] ${t.title}: ${t.summary}`);
-      }
+    // 1. 提取所有关键决策标记
+    const taggedLines: string[] = [];
+    for (const t of done) {
+      const ctx = await this.repo.loadTaskContext(t.id);
+      if (ctx) taggedLines.push(...this.extractTaggedLines(ctx));
+    }
+    // 去重标记行
+    const uniqueTagged = [...new Set(taggedLines)];
+    if (uniqueTagged.length) {
+      lines.push('## 关键决策\n');
+      for (const l of uniqueTagged) lines.push(`- ${l}`);
+      lines.push('');
     }
 
+    // 2. 时间衰减：按完成顺序（done 数组已按完成顺序排列）
+    const recent = done.slice(-5);          // 最近5个：完整摘要
+    const mid = done.slice(-10, -5);        // 5-10个前：标题+首行
+    const old = done.slice(0, -10);         // 更早：仅标题
+
+    const progressItems: { label: string; text: string }[] = [];
+
+    for (const t of old) {
+      progressItems.push({ label: `[${t.type}] ${t.title}`, text: t.title });
+    }
+    for (const t of mid) {
+      const firstLine = t.summary.split('\n')[0] || '';
+      const text = firstLine ? `${t.title}: ${firstLine}` : t.title;
+      progressItems.push({ label: `[${t.type}] ${text}`, text });
+    }
+    for (const t of recent) {
+      const text = t.summary ? `${t.title}: ${t.summary}` : t.title;
+      progressItems.push({ label: `[${t.type}] ${text}`, text });
+    }
+
+    // 3. 语义去重
+    const deduped = this.dedup(progressItems);
+
+    lines.push('## 任务进展\n');
+    for (const item of deduped) lines.push(`- ${item.label}`);
+
+    // 4. 待完成
     const pending = data.tasks.filter(t => t.status !== 'done' && t.status !== 'skipped' && t.status !== 'failed');
     if (pending.length) {
-      lines.push('\n## 待完成');
+      lines.push('\n## 待完成\n');
       for (const t of pending) lines.push(`- [${t.type}] ${t.title}`);
     }
     await this.repo.saveSummary(lines.join('\n') + '\n');

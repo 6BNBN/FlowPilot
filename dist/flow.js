@@ -97,12 +97,23 @@ ${summary}`;
 var import_node_child_process2 = require("child_process");
 var import_node_fs2 = require("fs");
 var import_node_path = require("path");
+function loadConfig(cwd) {
+  try {
+    const raw = (0, import_node_fs2.readFileSync)((0, import_node_path.join)(cwd, ".workflow", "config.json"), "utf-8");
+    const cfg = JSON.parse(raw);
+    return cfg?.verify ?? {};
+  } catch {
+    return {};
+  }
+}
 function runVerify(cwd) {
-  const cmds = detectCommands(cwd);
+  const config = loadConfig(cwd);
+  const cmds = config.commands?.length ? config.commands : detectCommands(cwd);
+  const timeout = (config.timeout ?? 300) * 1e3;
   if (!cmds.length) return { passed: true, scripts: [] };
   for (const cmd of cmds) {
     try {
-      (0, import_node_child_process2.execSync)(cmd, { cwd, stdio: "pipe", timeout: 3e5 });
+      (0, import_node_child_process2.execSync)(cmd, { cwd, stdio: "pipe", timeout });
     } catch (e) {
       const stderr = e.stderr?.length ? e.stderr.toString() : "";
       const stdout = e.stdout?.length ? e.stdout.toString() : "";
@@ -437,38 +448,71 @@ var FsWorkflowRepository = class {
   verify() {
     return runVerify(this.base);
   }
+  /** 清理注入的CLAUDE.md协议块和.claude/settings.json hooks */
+  async cleanupInjections() {
+    const mdPath = (0, import_path.join)(this.base, "CLAUDE.md");
+    try {
+      const content = await (0, import_promises.readFile)(mdPath, "utf-8");
+      const cleaned = content.replace(/\n*<!-- flowpilot:start -->[\s\S]*?<!-- flowpilot:end -->\n*/g, "\n");
+      if (cleaned !== content) await (0, import_promises.writeFile)(mdPath, cleaned.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n", "utf-8");
+    } catch {
+    }
+    const settingsPath = (0, import_path.join)(this.base, ".claude", "settings.json");
+    try {
+      const raw = await (0, import_promises.readFile)(settingsPath, "utf-8");
+      const settings = JSON.parse(raw);
+      const hooks = settings.hooks?.PreToolUse;
+      if (hooks) {
+        const flowpilotMatchers = /* @__PURE__ */ new Set(["TaskCreate", "TaskUpdate", "TaskList"]);
+        settings.hooks.PreToolUse = hooks.filter((h) => !flowpilotMatchers.has(h.matcher ?? ""));
+        if (!settings.hooks.PreToolUse.length) delete settings.hooks.PreToolUse;
+        if (!Object.keys(settings.hooks).length) delete settings.hooks;
+        await (0, import_promises.writeFile)(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+      }
+    } catch {
+    }
+  }
 };
 
 // src/domain/task-store.ts
+function buildIndex(tasks) {
+  const m = /* @__PURE__ */ new Map();
+  for (const t of tasks) m.set(t.id, t);
+  return m;
+}
 function makeTaskId(n) {
   return String(n).padStart(3, "0");
 }
 function cascadeSkip(tasks) {
+  let result = tasks.map((t) => ({ ...t }));
   let changed = true;
   while (changed) {
     changed = false;
-    for (const t of tasks) {
+    const idx = buildIndex(result);
+    for (let i = 0; i < result.length; i++) {
+      const t = result[i];
       if (t.status !== "pending") continue;
       const blocked = t.deps.some((d) => {
-        const dep = tasks.find((x) => x.id === d);
+        const dep = idx.get(d);
         return dep && (dep.status === "failed" || dep.status === "skipped");
       });
       if (blocked) {
-        t.status = "skipped";
-        t.summary = "\u4F9D\u8D56\u4EFB\u52A1\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7";
+        result[i] = { ...t, status: "skipped", summary: "\u4F9D\u8D56\u4EFB\u52A1\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7" };
         changed = true;
       }
     }
   }
+  return result;
 }
 function detectCycles(tasks) {
+  const idx = buildIndex(tasks);
   const visited = /* @__PURE__ */ new Set();
   const inStack = /* @__PURE__ */ new Set();
   const parent = /* @__PURE__ */ new Map();
   function dfs(id) {
     visited.add(id);
     inStack.add(id);
-    const task = tasks.find((t) => t.id === id);
+    const task = idx.get(id);
     if (task) {
       for (const dep of task.deps) {
         if (!visited.has(dep)) {
@@ -502,52 +546,52 @@ function findNextTask(tasks) {
   const pending = tasks.filter((t) => t.status === "pending");
   const cycle = detectCycles(pending);
   if (cycle) throw new Error(`\u5FAA\u73AF\u4F9D\u8D56: ${cycle.join(" -> ")}`);
-  cascadeSkip(tasks);
+  const idx = buildIndex(tasks);
   for (const t of tasks) {
     if (t.status !== "pending") continue;
-    const depsOk = t.deps.every((d) => {
-      const dep = tasks.find((x) => x.id === d);
-      return dep && dep.status === "done";
-    });
-    if (depsOk) return t;
+    if (t.deps.every((d) => idx.get(d)?.status === "done")) return t;
   }
   return null;
 }
 function completeTask(data, id, summary) {
-  const t = data.tasks.find((x) => x.id === id);
-  if (!t) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
-  t.status = "done";
-  t.summary = summary;
-  data.current = null;
+  const idx = buildIndex(data.tasks);
+  if (!idx.has(id)) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
+  return {
+    ...data,
+    current: null,
+    tasks: data.tasks.map((t) => t.id === id ? { ...t, status: "done", summary } : t)
+  };
 }
 function failTask(data, id) {
-  const t = data.tasks.find((x) => x.id === id);
-  if (!t) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
-  t.retries++;
-  if (t.retries >= 3) {
-    t.status = "failed";
-    data.current = null;
-    return "skip";
+  const idx = buildIndex(data.tasks);
+  if (!idx.has(id)) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
+  const old = idx.get(id);
+  const retries = old.retries + 1;
+  if (retries >= 3) {
+    return {
+      result: "skip",
+      data: { ...data, current: null, tasks: data.tasks.map((t) => t.id === id ? { ...t, retries, status: "failed" } : t) }
+    };
   }
-  t.status = "pending";
-  data.current = null;
-  return "retry";
+  return {
+    result: "retry",
+    data: { ...data, current: null, tasks: data.tasks.map((t) => t.id === id ? { ...t, retries, status: "pending" } : t) }
+  };
 }
 function resumeProgress(data) {
+  const hasActive = data.tasks.some((t) => t.status === "active");
+  if (!hasActive) {
+    return { data, resetId: data.status === "running" ? data.current : null };
+  }
   let firstId = null;
-  for (const t of data.tasks) {
+  const tasks = data.tasks.map((t) => {
     if (t.status === "active") {
-      t.status = "pending";
       if (!firstId) firstId = t.id;
+      return { ...t, status: "pending" };
     }
-  }
-  if (firstId) {
-    data.current = null;
-    data.status = "running";
-    return firstId;
-  }
-  if (data.status === "running") return data.current;
-  return null;
+    return t;
+  });
+  return { data: { ...data, current: null, status: "running", tasks }, resetId: firstId };
 }
 function findParallelTasks(tasks) {
   const pending = tasks.filter((t) => t.status === "pending");
@@ -866,6 +910,7 @@ ${detail}
     const failed = data.tasks.filter((t) => t.status === "failed");
     const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : "", failed.length ? `${failed.length} failed` : ""].filter(Boolean).join(", ");
     const titles = done.map((t) => `- ${t.id}: ${t.title}`).join("\n");
+    await this.repo.cleanupInjections();
     const commitErr = this.repo.commit("finish", data.name || "\u5DE5\u4F5C\u6D41\u5B8C\u6210", `${stats}
 
 ${titles}`);
@@ -888,31 +933,75 @@ ${stats}
   async status() {
     return this.repo.loadProgress();
   }
-  /** 滚动摘要：每次checkpoint追加，每10个任务压缩 */
+  /** 从文本中提取标记行 [DECISION]/[ARCHITECTURE]/[IMPORTANT] */
+  extractTaggedLines(text) {
+    const TAG_RE = /\[(?:DECISION|ARCHITECTURE|IMPORTANT)\]/i;
+    return text.split("\n").filter((l) => TAG_RE.test(l)).map((l) => l.trim());
+  }
+  /** 词袋 tokenize（兼容 CJK：连续非空白拉丁词 + 单个 CJK 字符） */
+  tokenize(text) {
+    const tokens = /* @__PURE__ */ new Set();
+    for (const m of text.toLowerCase().matchAll(/[a-z0-9_]+|[\u4e00-\u9fff]/g)) {
+      tokens.add(m[0]);
+    }
+    return tokens;
+  }
+  /** Jaccard 相似度 */
+  similarity(a, b) {
+    const sa = this.tokenize(a), sb = this.tokenize(b);
+    if (!sa.size || !sb.size) return 0;
+    let inter = 0;
+    for (const t of sa) if (sb.has(t)) inter++;
+    return inter / (sa.size + sb.size - inter);
+  }
+  /** 语义去重：相似度 > 0.8 的摘要合并 */
+  dedup(items) {
+    const result = [];
+    for (const item of items) {
+      if (!result.some((r) => this.similarity(r.text, item.text) > 0.8)) {
+        result.push(item);
+      }
+    }
+    return result;
+  }
+  /** 智能滚动摘要：保留关键决策 + 时间衰减 + 语义去重 */
   async updateSummary(data) {
     const done = data.tasks.filter((t) => t.status === "done");
     const lines = [`# ${data.name}
 `];
-    if (done.length > 10) {
-      const groups = /* @__PURE__ */ new Map();
-      for (const t of done) {
-        const arr = groups.get(t.type) || [];
-        arr.push(t.title);
-        groups.set(t.type, arr);
-      }
-      lines.push("## \u5DF2\u5B8C\u6210\u6A21\u5757");
-      for (const [type, titles] of groups) {
-        lines.push(`- [${type}] ${titles.length}\u9879: ${titles.slice(-3).join(", ")}${titles.length > 3 ? " \u7B49" : ""}`);
-      }
-    } else {
-      lines.push("## \u5DF2\u5B8C\u6210");
-      for (const t of done) {
-        lines.push(`- [${t.type}] ${t.title}: ${t.summary}`);
-      }
+    const taggedLines = [];
+    for (const t of done) {
+      const ctx = await this.repo.loadTaskContext(t.id);
+      if (ctx) taggedLines.push(...this.extractTaggedLines(ctx));
     }
+    const uniqueTagged = [...new Set(taggedLines)];
+    if (uniqueTagged.length) {
+      lines.push("## \u5173\u952E\u51B3\u7B56\n");
+      for (const l of uniqueTagged) lines.push(`- ${l}`);
+      lines.push("");
+    }
+    const recent = done.slice(-5);
+    const mid = done.slice(-10, -5);
+    const old = done.slice(0, -10);
+    const progressItems = [];
+    for (const t of old) {
+      progressItems.push({ label: `[${t.type}] ${t.title}`, text: t.title });
+    }
+    for (const t of mid) {
+      const firstLine = t.summary.split("\n")[0] || "";
+      const text = firstLine ? `${t.title}: ${firstLine}` : t.title;
+      progressItems.push({ label: `[${t.type}] ${text}`, text });
+    }
+    for (const t of recent) {
+      const text = t.summary ? `${t.title}: ${t.summary}` : t.title;
+      progressItems.push({ label: `[${t.type}] ${text}`, text });
+    }
+    const deduped = this.dedup(progressItems);
+    lines.push("## \u4EFB\u52A1\u8FDB\u5C55\n");
+    for (const item of deduped) lines.push(`- ${item.label}`);
     const pending = data.tasks.filter((t) => t.status !== "done" && t.status !== "skipped" && t.status !== "failed");
     if (pending.length) {
-      lines.push("\n## \u5F85\u5B8C\u6210");
+      lines.push("\n## \u5F85\u5B8C\u6210\n");
       for (const t of pending) lines.push(`- [${t.type}] ${t.title}`);
     }
     await this.repo.saveSummary(lines.join("\n") + "\n");
