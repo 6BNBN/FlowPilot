@@ -1,12 +1,15 @@
 /**
  * @module infrastructure/memory
- * @description 永久记忆系统 - 跨工作流知识积累（BM25 + 余弦相似度 + MMR）
+ * @description 永久记忆系统 - 跨工作流知识积累（BM25 sparse + Dense embedding + RRF 融合 + MMR）
  */
 
 import { readFile, writeFile, mkdir, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { createHash } from 'crypto';
 import { log } from './logger';
+import { detectLanguage as detectLangCode, analyze } from './lang-analyzers';
+import { embedText } from './embedding';
+import { loadDenseVectors, saveDenseVectors, denseSearch, type DenseVectorEntry } from './vector-store';
 
 /** 记忆条目 */
 export interface MemoryEntry {
@@ -18,7 +21,7 @@ export interface MemoryEntry {
   evergreen?: boolean;
 }
 
-/** DF 统计持久化结构 */
+/** DF 统计持久化结构（key 格式: "{lang}:{term}" 按语言分 namespace，旧数据无前缀默认 en） */
 export interface DfStats {
   docCount: number;
   df: Record<string, number>;
@@ -215,22 +218,23 @@ export function fastDetectLanguage(text: string): 'cjk' | 'en' {
   return cjk / total > 0.15 ? 'cjk' : 'en';
 }
 
-/** 多语言分词：CJK 单字+双字gram、拉丁词、数字、下划线标识符 */
+/** 多语言分词：CJK 单字+双字gram、拉丁词、数字、下划线标识符 + 停用词过滤 + 英语词干提取 */
 function tokenize(text: string): string[] {
+  const lang = detectLangCode(text);
   const lower = text.toLowerCase();
-  const tokens: string[] = [];
+  const rawTokens: string[] = [];
   for (const m of lower.matchAll(/[a-z0-9_]{2,}|[a-z]/g)) {
-    tokens.push(m[0]);
+    rawTokens.push(m[0]);
   }
   const cjk: string[] = [];
   for (const ch of lower) {
     if (isCJKRune(ch.codePointAt(0) ?? 0)) cjk.push(ch);
   }
   for (let i = 0; i < cjk.length; i++) {
-    tokens.push(cjk[i]);
-    if (i + 1 < cjk.length) tokens.push(cjk[i] + cjk[i + 1]);
+    rawTokens.push(cjk[i]);
+    if (i + 1 < cjk.length) rawTokens.push(cjk[i] + cjk[i + 1]);
   }
-  return tokens;
+  return analyze(rawTokens, lang).tokens;
 }
 
 /** 检测文本的 CJK 比例，返回 { cjkRatio, dominantScript } */
@@ -282,16 +286,20 @@ export function startPeriodicDfSave(basePath: string, interval = 30_000): () => 
   return () => clearInterval(timer);
 }
 
-/** 从记忆条目重建 DF 统计（含 avgDocLen） */
+/** 从记忆条目重建 DF 统计（含 avgDocLen，key 按 {lang}:{term} namespace） */
 export function rebuildDf(entries: MemoryEntry[]): DfStats {
   const active = entries.filter(e => !e.archived);
   const df: Record<string, number> = {};
   let totalLen = 0;
   for (const e of active) {
+    const lang = detectLangCode(e.content);
     const tokens = tokenize(e.content);
     totalLen += tokens.length;
     const unique = new Set(tokens);
-    for (const t of unique) df[t] = (df[t] ?? 0) + 1;
+    for (const t of unique) {
+      const key = `${lang}:${t}`;
+      df[key] = (df[key] ?? 0) + 1;
+    }
   }
   return { docCount: active.length, df, avgDocLen: active.length ? totalLen / active.length : 0 };
 }
@@ -375,9 +383,11 @@ export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'r
     );
     log.debug(`memory: 更新已有条目 (相似度>0.8)`);
     await saveMemory(basePath, updated);
-    // 清除旧 content 的向量残留
+    // 清除旧 content 的向量残留（sparse + dense）
     const vectors = await loadVectors(basePath);
     await saveVectors(basePath, vectors.filter(v => v.content !== oldContent));
+    const denseVecs = await loadDenseVectors(basePath);
+    await saveDenseVectors(basePath, denseVecs.filter(v => v.id !== oldContent));
   } else {
     const newEntries = [...entries, { ...entry, refs: 0, archived: false }];
     log.debug(`memory: 新增条目, 总计 ${newEntries.length}`);
@@ -398,6 +408,18 @@ export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'r
     ? vectors.map((v, i) => i === vi ? { content: entry.content, vector: vecRecord } : v)
     : [...vectors, { content: entry.content, vector: vecRecord }];
   await saveVectors(basePath, newVectors);
+
+  // Dense 向量索引：调用 embedding API，无 key 时跳过
+  const denseVec = await embedText(entry.content, basePath);
+  if (denseVec) {
+    const denseVecs = await loadDenseVectors(basePath);
+    const di = denseVecs.findIndex(v => v.id === entry.content);
+    const newDense: DenseVectorEntry = { id: entry.content, vector: denseVec };
+    const updatedDense = di >= 0
+      ? denseVecs.map((v, i) => i === di ? newDense : v)
+      : [...denseVecs, newDense];
+    await saveDenseVectors(basePath, updatedDense);
+  }
 
   await clearCache(basePath);
 }
@@ -445,7 +467,7 @@ export function rrfFuse(sources: { entry: MemoryEntry; score: number }[][]): { e
   return [...scores.values()].sort((a, b) => b.score - a.score);
 }
 
-/** 查询与任务描述相关的记忆（BM25 文本检索 + 向量余弦检索 → RRF 双源融合 + MMR 重排序），命中条目 refs++，含 SHA-256 + LRU 缓存 */
+/** 查询与任务描述相关的记忆（BM25 sparse + Dense embedding + 向量余弦 → RRF 多源融合 + MMR 重排序），命中条目 refs++，含缓存 */
 export async function queryMemory(basePath: string, taskDescription: string): Promise<MemoryEntry[]> {
   const cacheKey = sha256(taskDescription);
   const cache = await loadCache(basePath);
@@ -468,15 +490,28 @@ export async function queryMemory(basePath: string, taskDescription: string): Pr
     return { entry: e, score: cosineSimilarity(queryVec, vec) * temporalDecayScore(e), vec };
   }).filter(s => s.score > 0.05);
 
-  // Source 2: 向量余弦检索
+  // Source 2: BM25 稀疏向量余弦检索
   const vectors = await loadVectors(basePath);
   const source2 = vectorSearch(queryVec, vectors, active, 10);
 
-  // RRF 双源融合
-  const fused = rrfFuse([
+  // Source 3: Dense embedding 检索（无 API key 时跳过）
+  const rrfSources: { entry: MemoryEntry; score: number }[][] = [
     source1.map(s => ({ entry: s.entry, score: s.score })),
     source2,
-  ]);
+  ];
+  const denseQueryVec = await embedText(taskDescription, basePath);
+  if (denseQueryVec) {
+    const denseVecs = await loadDenseVectors(basePath);
+    const contentMap = new Map(active.map(e => [e.content, e]));
+    const denseHits = denseSearch(denseQueryVec, denseVecs, 10);
+    const source3 = denseHits
+      .map(h => ({ entry: contentMap.get(h.id), score: h.score }))
+      .filter((h): h is { entry: MemoryEntry; score: number } => h.entry !== undefined);
+    if (source3.length) rrfSources.push(source3);
+  }
+
+  // RRF 多源融合
+  const fused = rrfFuse(rrfSources);
 
   // 从 fused 结果恢复 vec 用于 MMR 重排序
   const candidates = fused.map(f => {
