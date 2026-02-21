@@ -143,18 +143,15 @@ export function resumeProgress(data: ProgressData): { data: ProgressData; resetI
   return { data: { ...data, current: null, status: 'running', tasks }, resetId: firstId };
 }
 
-/** 查找所有可并行执行的任务（依赖已满足的pending任务） */
-export function findParallelTasks(tasks: TaskEntry[]): TaskEntry[] {
+/** 查找所有可并行执行的任务（纯查询，不触发cascadeSkip，调用方需先cascade） */
+export function findParallelTasks(tasks: readonly TaskEntry[]): TaskEntry[] {
   const pending = tasks.filter(t => t.status === 'pending');
   const cycle = detectCycles(pending);
   if (cycle) throw new Error(`循环依赖: ${cycle.join(' -> ')}`);
-  cascadeSkip(tasks);
+  const idx = buildIndex(tasks);
   return tasks.filter(t => {
     if (t.status !== 'pending') return false;
-    return t.deps.every(d => {
-      const dep = tasks.find(x => x.id === d);
-      return dep && dep.status === 'done';
-    });
+    return t.deps.every(d => idx.get(d)?.status === 'done');
   });
 }
 
