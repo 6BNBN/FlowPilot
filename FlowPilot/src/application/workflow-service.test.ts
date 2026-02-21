@@ -6,6 +6,7 @@ import { WorkflowService } from './workflow-service';
 import { FsWorkflowRepository } from '../infrastructure/fs-repository';
 import { parseTasksMarkdown } from '../infrastructure/markdown-parser';
 import { loadMemory } from '../infrastructure/memory';
+import { readFile } from 'fs/promises';
 
 let dir: string;
 let svc: WorkflowService;
@@ -163,5 +164,37 @@ describe('WorkflowService 集成测试', () => {
     await svc.checkpoint('002', '前端完成');
     const batch2 = await svc.nextBatch();
     expect(batch2[0]?.context).toContain('相关记忆');
+  });
+
+  it('rollbackEvolution恢复历史config', async () => {
+    await svc.init(TASKS_MD);
+    const repo = new FsWorkflowRepository(dir);
+    // Save initial evolution entry
+    await repo.saveEvolution({
+      timestamp: '2025-01-01T00:00:00Z',
+      workflowName: 'test',
+      configBefore: { maxRetries: 3 },
+      configAfter: { maxRetries: 5 },
+      suggestions: ['increase retries'],
+    });
+    // Save current config as the "after" state
+    await repo.saveConfig({ maxRetries: 5 });
+
+    const msg = await svc.rollbackEvolution(0);
+    expect(msg).toContain('回滚到进化点 0');
+
+    const config = await repo.loadConfig();
+    expect(config.maxRetries).toBe(3);
+
+    // Verify a rollback evolution entry was saved
+    const evos = await repo.loadEvolutions();
+    expect(evos.length).toBe(2);
+    expect(evos[1].workflowName).toContain('rollback');
+  });
+
+  it('rollbackEvolution returns error for empty log', async () => {
+    await svc.init(TASKS_MD);
+    const msg = await svc.rollbackEvolution(0);
+    expect(msg).toContain('无进化日志');
   });
 });

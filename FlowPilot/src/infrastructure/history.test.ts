@@ -33,6 +33,17 @@ describe('collectStats', () => {
     expect(stats.retryTotal).toBe(3);
   });
 
+  it('uses startTime from ProgressData when present', () => {
+    const stats = collectStats(makeProgress({ startTime: '2025-06-01T00:00:00Z' }));
+    expect(stats.startTime).toBe('2025-06-01T00:00:00Z');
+  });
+
+  it('falls back to current time when startTime missing', () => {
+    const before = new Date().toISOString();
+    const stats = collectStats(makeProgress({ startTime: undefined }));
+    expect(stats.startTime >= before).toBe(true);
+  });
+
   it('groups tasks by type', () => {
     const stats = collectStats(makeProgress());
     expect(stats.tasksByType).toEqual({ backend: 1, frontend: 1, general: 1 });
