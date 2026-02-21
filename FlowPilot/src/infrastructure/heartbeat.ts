@@ -73,6 +73,7 @@ export async function runHeartbeat(basePath: string): Promise<HeartbeatResult> {
 /** 启动定时心跳，返回停止函数 */
 export function startHeartbeat(basePath: string, intervalMs = DEFAULT_INTERVAL_MS): () => void {
   const timer = setInterval(() => { runHeartbeat(basePath).catch(() => {}); }, intervalMs);
+  timer.unref();
   log.debug(`[heartbeat] started (interval=${intervalMs}ms)`);
   return () => { clearInterval(timer); log.debug('[heartbeat] stopped'); };
 }

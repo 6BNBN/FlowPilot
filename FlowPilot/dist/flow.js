@@ -1299,7 +1299,8 @@ async function review(basePath2) {
         logs[logs.length - 1].status = "skipped";
         await (0, import_promises3.writeFile)(expPath, JSON.stringify(logs, null, 2), "utf-8");
       }
-    } catch {
+    } catch (e) {
+      log.warn(`[review] rollback failed: ${e}`);
     }
   }
   const result = {
@@ -1895,6 +1896,7 @@ function startHeartbeat(basePath2, intervalMs = DEFAULT_INTERVAL_MS) {
     runHeartbeat(basePath2).catch(() => {
     });
   }, intervalMs);
+  timer.unref();
   log.debug(`[heartbeat] started (interval=${intervalMs}ms)`);
   return () => {
     clearInterval(timer);
@@ -2106,8 +2108,8 @@ ${warns.join("\n")}` : msg2;
       }
       if (!detail.trim()) throw new Error(`\u4EFB\u52A1 ${id} checkpoint\u5185\u5BB9\u4E0D\u80FD\u4E3A\u7A7A`);
       const maxChars = computeMaxChars(128e3, detail);
-      if (detail.length > maxChars) detail = truncateHeadTail(detail, maxChars);
-      const summaryLine = detail.split("\n")[0].slice(0, 80);
+      const truncated = detail.length > maxChars ? truncateHeadTail(detail, maxChars) : detail;
+      const summaryLine = truncated.split("\n")[0].slice(0, 80);
       const newData = completeTask(data, id, summaryLine);
       log.debug(`checkpoint ${id}: \u5B8C\u6210, summary="${summaryLine}"`);
       await this.repo.saveProgress(newData);

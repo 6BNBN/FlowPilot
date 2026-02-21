@@ -5,6 +5,7 @@
 
 import type { WorkflowStats, ProgressData } from '../domain/types';
 import { callClaude } from './extractor';
+import { log } from './logger';
 import { readFile, writeFile, mkdir, readdir } from 'fs/promises';
 import { join, dirname } from 'path';
 
@@ -417,7 +418,7 @@ export async function review(basePath: string): Promise<ReviewResult> {
         logs[logs.length - 1].status = 'skipped';
         await writeFile(expPath, JSON.stringify(logs, null, 2), 'utf-8');
       }
-    } catch { /* 无法回滚 */ }
+    } catch (e) { log.warn(`[review] rollback failed: ${e}`); }
   }
 
   // 5. 保存审查结果

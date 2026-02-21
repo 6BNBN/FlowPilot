@@ -260,9 +260,9 @@ export class WorkflowService {
 
       // 智能截断：防止过长 summary 膨胀 context
       const maxChars = computeMaxChars(128_000, detail);
-      if (detail.length > maxChars) detail = truncateHeadTail(detail, maxChars);
+      const truncated = detail.length > maxChars ? truncateHeadTail(detail, maxChars) : detail;
 
-      const summaryLine = detail.split('\n')[0].slice(0, 80);
+      const summaryLine = truncated.split('\n')[0].slice(0, 80);
       const newData = completeTask(data, id, summaryLine);
       log.debug(`checkpoint ${id}: 完成, summary="${summaryLine}"`);
 
