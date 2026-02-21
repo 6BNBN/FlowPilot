@@ -128,7 +128,7 @@ export class CLI {
   }
 }
 
-const USAGE = `用法: node flow.js <command>
+const USAGE = `用法: node flow.js [--verbose] <command>
   init [--force]       初始化工作流 (stdin传入任务markdown，无stdin则接管项目)
   next [--batch]       获取下一个待执行任务 (--batch 返回所有可并行任务)
   checkpoint <id>      记录任务完成 [--file <path> | stdin | 内联文本] [--files f1 f2 ...]
@@ -138,4 +138,7 @@ const USAGE = `用法: node flow.js <command>
   status               查看全局进度
   resume               中断恢复
   abort                中止工作流并清理 .workflow/ 目录
-  add <描述>           追加任务 [--type frontend|backend|general]`;
+  add <描述>           追加任务 [--type frontend|backend|general]
+
+全局选项:
+  --verbose            输出调试日志 (等同 FLOWPILOT_VERBOSE=1)`;

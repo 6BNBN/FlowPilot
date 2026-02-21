@@ -8,6 +8,7 @@ import type { WorkflowDefinition } from '../domain/workflow';
 import type { WorkflowRepository } from '../domain/repository';
 import { makeTaskId, cascadeSkip, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
 import { runLifecycleHook } from '../infrastructure/hooks';
+import { log } from '../infrastructure/logger';
 
 export class WorkflowService {
   constructor(
