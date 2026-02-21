@@ -7,6 +7,7 @@ import type { ProgressData, TaskEntry } from '../domain/types';
 import type { WorkflowDefinition } from '../domain/workflow';
 import type { WorkflowRepository } from '../domain/repository';
 import { makeTaskId, cascadeSkip, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
+import { runLifecycleHook } from '../infrastructure/hooks';
 
 export class WorkflowService {
   constructor(
@@ -66,6 +67,7 @@ export class WorkflowService {
 
       const activated = cascaded.map(t => t.id === task.id ? { ...t, status: 'active' as const } : t);
       await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
+      await runLifecycleHook('onTaskStart', this.repo.projectRoot(), { TASK_ID: task.id, TASK_TITLE: task.title });
 
       // 拼装上下文：summary + 依赖任务产出
       const parts: string[] = [];
@@ -105,6 +107,9 @@ export class WorkflowService {
       const activeIds = new Set(tasks.map(t => t.id));
       const activated = cascaded.map(t => activeIds.has(t.id) ? { ...t, status: 'active' as const } : t);
       await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
+      for (const t of tasks) {
+        await runLifecycleHook('onTaskStart', this.repo.projectRoot(), { TASK_ID: t.id, TASK_TITLE: t.title });
+      }
 
       const summary = await this.repo.loadSummary();
       const results: { task: TaskEntry; context: string }[] = [];
@@ -136,8 +141,8 @@ export class WorkflowService {
       }
 
       if (detail === 'FAILED') {
-        const result = failTask(data, id);
-        await this.repo.saveProgress(data);
+        const { result, data: newData } = failTask(data, id);
+        await this.repo.saveProgress(newData);
         return result === 'retry'
           ? `任务 ${id} 失败(第${task.retries}次)，将重试`
           : `任务 ${id} 连续失败3次，已跳过`;
@@ -146,21 +151,22 @@ export class WorkflowService {
       if (!detail.trim()) throw new Error(`任务 ${id} checkpoint内容不能为空`);
 
       const summaryLine = detail.split('\n')[0].slice(0, 80);
-      completeTask(data, id, summaryLine);
+      const newData = completeTask(data, id, summaryLine);
 
-      await this.repo.saveProgress(data);
+      await this.repo.saveProgress(newData);
       await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
-      await this.updateSummary(data);
+      await this.updateSummary(newData);
       const commitErr = this.repo.commit(id, task.title, summaryLine, files);
+      await runLifecycleHook('onTaskComplete', this.repo.projectRoot(), { TASK_ID: id, TASK_TITLE: task.title });
 
-      const doneCount = data.tasks.filter(t => t.status === 'done').length;
-      let msg = `任务 ${id} 完成 (${doneCount}/${data.tasks.length})`;
+      const doneCount = newData.tasks.filter(t => t.status === 'done').length;
+      let msg = `任务 ${id} 完成 (${doneCount}/${newData.tasks.length})`;
       if (commitErr) {
         msg += `\n[git提交失败] ${commitErr}\n请根据错误修复后手动执行 git add -A && git commit`;
       } else {
         msg += ' [已自动提交]';
       }
-      return isAllDone(data.tasks) ? msg + '\n全部任务已完成，请执行 node flow.js finish 进行收尾' : msg;
+      return isAllDone(newData.tasks) ? msg + '\n全部任务已完成，请执行 node flow.js finish 进行收尾' : msg;
     } finally {
       await this.repo.unlock();
     }
@@ -174,17 +180,17 @@ export class WorkflowService {
     if (data.status === 'completed') return '工作流已全部完成';
     if (data.status === 'finishing') return `恢复工作流: ${data.name}\n正在收尾阶段，请执行 node flow.js finish`;
 
-    const resetId = resumeProgress(data);
-    await this.repo.saveProgress(data);
+    const { data: newData, resetId } = resumeProgress(data);
+    await this.repo.saveProgress(newData);
     if (resetId) this.repo.cleanup();
 
-    const doneCount = data.tasks.filter(t => t.status === 'done').length;
-    const total = data.tasks.length;
+    const doneCount = newData.tasks.filter(t => t.status === 'done').length;
+    const total = newData.tasks.length;
 
     if (resetId) {
-      return `恢复工作流: ${data.name}\n进度: ${doneCount}/${total}\n中断任务 ${resetId} 已重置，将重新执行`;
+      return `恢复工作流: ${newData.name}\n进度: ${doneCount}/${total}\n中断任务 ${resetId} 已重置，将重新执行`;
     }
-    return `恢复工作流: ${data.name}\n进度: ${doneCount}/${total}\n继续执行`;
+    return `恢复工作流: ${newData.name}\n进度: ${doneCount}/${total}\n继续执行`;
   }
 
   /** add: 追加任务 */
@@ -285,6 +291,7 @@ export class WorkflowService {
     const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : '', failed.length ? `${failed.length} failed` : ''].filter(Boolean).join(', ');
 
     const titles = done.map(t => `- ${t.id}: ${t.title}`).join('\n');
+    await runLifecycleHook('onWorkflowFinish', this.repo.projectRoot(), { WORKFLOW_NAME: data.name });
     await this.repo.cleanupInjections();
     const commitErr = this.repo.commit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`);
     if (!commitErr) {
@@ -304,6 +311,7 @@ export class WorkflowService {
     if (!data) return '无活跃工作流，无需中止';
     data.status = 'aborted';
     await this.repo.saveProgress(data);
+    await this.repo.cleanupInjections();
     await this.repo.clearAll();
     return `工作流 "${data.name}" 已中止，.workflow/ 已清理`;
   }
