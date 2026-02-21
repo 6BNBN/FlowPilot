@@ -483,6 +483,27 @@ function buildIndex(tasks) {
 function makeTaskId(n) {
   return String(n).padStart(3, "0");
 }
+function cascadeSkip(tasks) {
+  let result = tasks.map((t) => ({ ...t }));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const idx = buildIndex(result);
+    for (let i = 0; i < result.length; i++) {
+      const t = result[i];
+      if (t.status !== "pending") continue;
+      const blocked = t.deps.some((d) => {
+        const dep = idx.get(d);
+        return dep && (dep.status === "failed" || dep.status === "skipped");
+      });
+      if (blocked) {
+        result[i] = { ...t, status: "skipped", summary: "\u4F9D\u8D56\u4EFB\u52A1\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7" };
+        changed = true;
+      }
+    }
+  }
+  return result;
+}
 function detectCycles(tasks) {
   const idx = buildIndex(tasks);
   const visited = /* @__PURE__ */ new Set();
@@ -679,14 +700,14 @@ ${def.description}
       if (active.length) {
         throw new Error(`\u6709 ${active.length} \u4E2A\u4EFB\u52A1\u4ECD\u4E3A active \u72B6\u6001\uFF08${active.map((t) => t.id).join(",")}\uFF09\uFF0C\u8BF7\u5148\u6267\u884C node flow.js status \u68C0\u67E5\u5E76\u8865 checkpoint\uFF0C\u6216 node flow.js resume \u91CD\u7F6E`);
       }
-      const task = findNextTask(data.tasks);
+      const cascaded = cascadeSkip(data.tasks);
+      const task = findNextTask(cascaded);
       if (!task) {
-        await this.repo.saveProgress(data);
+        await this.repo.saveProgress({ ...data, tasks: cascaded });
         return null;
       }
-      task.status = "active";
-      data.current = task.id;
-      await this.repo.saveProgress(data);
+      const activated = cascaded.map((t) => t.id === task.id ? { ...t, status: "active" } : t);
+      await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
       const parts = [];
       const summary = await this.repo.loadSummary();
       if (summary) parts.push(summary);
@@ -1179,6 +1200,7 @@ var USAGE = `\u7528\u6CD5: node flow.js <command>
   finish               \u667A\u80FD\u6536\u5C3E (\u9A8C\u8BC1+\u603B\u7ED3+\u56DE\u5230\u5F85\u547D\uFF0C\u9700\u5148review)
   status               \u67E5\u770B\u5168\u5C40\u8FDB\u5EA6
   resume               \u4E2D\u65AD\u6062\u590D
+  abort                \u4E2D\u6B62\u5DE5\u4F5C\u6D41\u5E76\u6E05\u7406 .workflow/ \u76EE\u5F55
   add <\u63CF\u8FF0>           \u8FFD\u52A0\u4EFB\u52A1 [--type frontend|backend|general]`;
 
 // src/main.ts

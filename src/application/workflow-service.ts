@@ -95,15 +95,16 @@ export class WorkflowService {
         throw new Error(`有 ${active.length} 个任务仍为 active 状态（${active.map(t => t.id).join(',')}），请先执行 node flow.js status 检查并补 checkpoint，或 node flow.js resume 重置`);
       }
 
-      const tasks = findParallelTasks(data.tasks);
+      const cascaded = cascadeSkip(data.tasks);
+      const tasks = findParallelTasks(cascaded);
       if (!tasks.length) {
-        await this.repo.saveProgress(data); // persist cascadeSkip changes
+        await this.repo.saveProgress({ ...data, tasks: cascaded });
         return [];
       }
 
-      for (const t of tasks) t.status = 'active';
-      data.current = tasks[0].id;
-      await this.repo.saveProgress(data);
+      const activeIds = new Set(tasks.map(t => t.id));
+      const activated = cascaded.map(t => activeIds.has(t.id) ? { ...t, status: 'active' as const } : t);
+      await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
 
       const summary = await this.repo.loadSummary();
       const results: { task: TaskEntry; context: string }[] = [];
