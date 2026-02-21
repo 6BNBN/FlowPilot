@@ -67,6 +67,7 @@ export class WorkflowService {
 
       const activated = cascaded.map(t => t.id === task.id ? { ...t, status: 'active' as const } : t);
       await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
+      await runLifecycleHook('onTaskStart', this.repo.projectRoot(), { TASK_ID: task.id, TASK_TITLE: task.title });
 
       // 拼装上下文：summary + 依赖任务产出
       const parts: string[] = [];
@@ -106,6 +107,9 @@ export class WorkflowService {
       const activeIds = new Set(tasks.map(t => t.id));
       const activated = cascaded.map(t => activeIds.has(t.id) ? { ...t, status: 'active' as const } : t);
       await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
+      for (const t of tasks) {
+        await runLifecycleHook('onTaskStart', this.repo.projectRoot(), { TASK_ID: t.id, TASK_TITLE: t.title });
+      }
 
       const summary = await this.repo.loadSummary();
       const results: { task: TaskEntry; context: string }[] = [];
@@ -153,6 +157,7 @@ export class WorkflowService {
       await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
       await this.updateSummary(newData);
       const commitErr = this.repo.commit(id, task.title, summaryLine, files);
+      await runLifecycleHook('onTaskComplete', this.repo.projectRoot(), { TASK_ID: id, TASK_TITLE: task.title });
 
       const doneCount = newData.tasks.filter(t => t.status === 'done').length;
       let msg = `任务 ${id} 完成 (${doneCount}/${newData.tasks.length})`;
@@ -286,6 +291,7 @@ export class WorkflowService {
     const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : '', failed.length ? `${failed.length} failed` : ''].filter(Boolean).join(', ');
 
     const titles = done.map(t => `- ${t.id}: ${t.title}`).join('\n');
+    await runLifecycleHook('onWorkflowFinish', this.repo.projectRoot(), { WORKFLOW_NAME: data.name });
     await this.repo.cleanupInjections();
     const commitErr = this.repo.commit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`);
     if (!commitErr) {
