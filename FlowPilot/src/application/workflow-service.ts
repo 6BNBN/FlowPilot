@@ -6,7 +6,8 @@
 import type { ProgressData, TaskEntry } from '../domain/types';
 import type { WorkflowDefinition } from '../domain/workflow';
 import type { WorkflowRepository } from '../domain/repository';
-import { makeTaskId, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
+import { makeTaskId, cascadeSkip, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
+import { runLifecycleHook } from '../infrastructure/hooks';
 
 export class WorkflowService {
   constructor(
@@ -57,15 +58,15 @@ export class WorkflowService {
         throw new Error(`有 ${active.length} 个任务仍为 active 状态（${active.map(t => t.id).join(',')}），请先执行 node flow.js status 检查并补 checkpoint，或 node flow.js resume 重置`);
       }
 
-      const task = findNextTask(data.tasks);
+      const cascaded = cascadeSkip(data.tasks);
+      const task = findNextTask(cascaded);
       if (!task) {
-        await this.repo.saveProgress(data); // persist cascadeSkip changes
+        await this.repo.saveProgress({ ...data, tasks: cascaded });
         return null;
       }
 
-      task.status = 'active';
-      data.current = task.id;
-      await this.repo.saveProgress(data);
+      const activated = cascaded.map(t => t.id === task.id ? { ...t, status: 'active' as const } : t);
+      await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
 
       // 拼装上下文：summary + 依赖任务产出
       const parts: string[] = [];
@@ -95,15 +96,16 @@ export class WorkflowService {
         throw new Error(`有 ${active.length} 个任务仍为 active 状态（${active.map(t => t.id).join(',')}），请先执行 node flow.js status 检查并补 checkpoint，或 node flow.js resume 重置`);
       }
 
-      const tasks = findParallelTasks(data.tasks);
+      const cascaded = cascadeSkip(data.tasks);
+      const tasks = findParallelTasks(cascaded);
       if (!tasks.length) {
-        await this.repo.saveProgress(data); // persist cascadeSkip changes
+        await this.repo.saveProgress({ ...data, tasks: cascaded });
         return [];
       }
 
-      for (const t of tasks) t.status = 'active';
-      data.current = tasks[0].id;
-      await this.repo.saveProgress(data);
+      const activeIds = new Set(tasks.map(t => t.id));
+      const activated = cascaded.map(t => activeIds.has(t.id) ? { ...t, status: 'active' as const } : t);
+      await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
 
       const summary = await this.repo.loadSummary();
       const results: { task: TaskEntry; context: string }[] = [];
@@ -135,8 +137,8 @@ export class WorkflowService {
       }
 
       if (detail === 'FAILED') {
-        const result = failTask(data, id);
-        await this.repo.saveProgress(data);
+        const { result, data: newData } = failTask(data, id);
+        await this.repo.saveProgress(newData);
         return result === 'retry'
           ? `任务 ${id} 失败(第${task.retries}次)，将重试`
           : `任务 ${id} 连续失败3次，已跳过`;
@@ -145,21 +147,21 @@ export class WorkflowService {
       if (!detail.trim()) throw new Error(`任务 ${id} checkpoint内容不能为空`);
 
       const summaryLine = detail.split('\n')[0].slice(0, 80);
-      completeTask(data, id, summaryLine);
+      const newData = completeTask(data, id, summaryLine);
 
-      await this.repo.saveProgress(data);
+      await this.repo.saveProgress(newData);
       await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
-      await this.updateSummary(data);
+      await this.updateSummary(newData);
       const commitErr = this.repo.commit(id, task.title, summaryLine, files);
 
-      const doneCount = data.tasks.filter(t => t.status === 'done').length;
-      let msg = `任务 ${id} 完成 (${doneCount}/${data.tasks.length})`;
+      const doneCount = newData.tasks.filter(t => t.status === 'done').length;
+      let msg = `任务 ${id} 完成 (${doneCount}/${newData.tasks.length})`;
       if (commitErr) {
         msg += `\n[git提交失败] ${commitErr}\n请根据错误修复后手动执行 git add -A && git commit`;
       } else {
         msg += ' [已自动提交]';
       }
-      return isAllDone(data.tasks) ? msg + '\n全部任务已完成，请执行 node flow.js finish 进行收尾' : msg;
+      return isAllDone(newData.tasks) ? msg + '\n全部任务已完成，请执行 node flow.js finish 进行收尾' : msg;
     } finally {
       await this.repo.unlock();
     }
@@ -173,17 +175,17 @@ export class WorkflowService {
     if (data.status === 'completed') return '工作流已全部完成';
     if (data.status === 'finishing') return `恢复工作流: ${data.name}\n正在收尾阶段，请执行 node flow.js finish`;
 
-    const resetId = resumeProgress(data);
-    await this.repo.saveProgress(data);
+    const { data: newData, resetId } = resumeProgress(data);
+    await this.repo.saveProgress(newData);
     if (resetId) this.repo.cleanup();
 
-    const doneCount = data.tasks.filter(t => t.status === 'done').length;
-    const total = data.tasks.length;
+    const doneCount = newData.tasks.filter(t => t.status === 'done').length;
+    const total = newData.tasks.length;
 
     if (resetId) {
-      return `恢复工作流: ${data.name}\n进度: ${doneCount}/${total}\n中断任务 ${resetId} 已重置，将重新执行`;
+      return `恢复工作流: ${newData.name}\n进度: ${doneCount}/${total}\n中断任务 ${resetId} 已重置，将重新执行`;
     }
-    return `恢复工作流: ${data.name}\n进度: ${doneCount}/${total}\n继续执行`;
+    return `恢复工作流: ${newData.name}\n进度: ${doneCount}/${total}\n继续执行`;
   }
 
   /** add: 追加任务 */
@@ -284,6 +286,7 @@ export class WorkflowService {
     const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : '', failed.length ? `${failed.length} failed` : ''].filter(Boolean).join(', ');
 
     const titles = done.map(t => `- ${t.id}: ${t.title}`).join('\n');
+    await this.repo.cleanupInjections();
     const commitErr = this.repo.commit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`);
     if (!commitErr) {
       await this.repo.clearAll();
@@ -296,38 +299,106 @@ export class WorkflowService {
     return `验证通过: ${scripts}\n${stats}\n已提交最终commit，工作流回到待命状态\n等待下一个需求...`;
   }
 
+  /** abort: 中止工作流，清理 .workflow/ 目录 */
+  async abort(): Promise<string> {
+    const data = await this.repo.loadProgress();
+    if (!data) return '无活跃工作流，无需中止';
+    data.status = 'aborted';
+    await this.repo.saveProgress(data);
+    await this.repo.cleanupInjections();
+    await this.repo.clearAll();
+    return `工作流 "${data.name}" 已中止，.workflow/ 已清理`;
+  }
+
   /** status: 全局进度 */
   async status(): Promise<ProgressData | null> {
     return this.repo.loadProgress();
   }
 
-  /** 滚动摘要：每次checkpoint追加，每10个任务压缩 */
+  /** 从文本中提取标记行 [DECISION]/[ARCHITECTURE]/[IMPORTANT] */
+  private extractTaggedLines(text: string): string[] {
+    const TAG_RE = /\[(?:DECISION|ARCHITECTURE|IMPORTANT)\]/i;
+    return text.split('\n').filter(l => TAG_RE.test(l)).map(l => l.trim());
+  }
+
+  /** 词袋 tokenize（兼容 CJK：连续非空白拉丁词 + 单个 CJK 字符） */
+  private tokenize(text: string): Set<string> {
+    const tokens = new Set<string>();
+    for (const m of text.toLowerCase().matchAll(/[a-z0-9_]+|[\u4e00-\u9fff]/g)) {
+      tokens.add(m[0]);
+    }
+    return tokens;
+  }
+
+  /** Jaccard 相似度 */
+  private similarity(a: string, b: string): number {
+    const sa = this.tokenize(a), sb = this.tokenize(b);
+    if (!sa.size || !sb.size) return 0;
+    let inter = 0;
+    for (const t of sa) if (sb.has(t)) inter++;
+    return inter / (sa.size + sb.size - inter);
+  }
+
+  /** 语义去重：相似度 > 0.8 的摘要合并 */
+  private dedup(items: { label: string; text: string }[]): { label: string; text: string }[] {
+    const result: { label: string; text: string }[] = [];
+    for (const item of items) {
+      if (!result.some(r => this.similarity(r.text, item.text) > 0.8)) {
+        result.push(item);
+      }
+    }
+    return result;
+  }
+
+  /** 智能滚动摘要：保留关键决策 + 时间衰减 + 语义去重 */
   private async updateSummary(data: ProgressData): Promise<void> {
     const done = data.tasks.filter(t => t.status === 'done');
     const lines = [`# ${data.name}\n`];
 
-    // 每10个已完成任务压缩为按类型分组的摘要
-    if (done.length > 10) {
-      const groups = new Map<string, string[]>();
-      for (const t of done) {
-        const arr = groups.get(t.type) || [];
-        arr.push(t.title);
-        groups.set(t.type, arr);
-      }
-      lines.push('## 已完成模块');
-      for (const [type, titles] of groups) {
-        lines.push(`- [${type}] ${titles.length}项: ${titles.slice(-3).join(', ')}${titles.length > 3 ? ' 等' : ''}`);
-      }
-    } else {
-      lines.push('## 已完成');
-      for (const t of done) {
-        lines.push(`- [${t.type}] ${t.title}: ${t.summary}`);
-      }
+    // 1. 提取所有关键决策标记
+    const taggedLines: string[] = [];
+    for (const t of done) {
+      const ctx = await this.repo.loadTaskContext(t.id);
+      if (ctx) taggedLines.push(...this.extractTaggedLines(ctx));
+    }
+    // 去重标记行
+    const uniqueTagged = [...new Set(taggedLines)];
+    if (uniqueTagged.length) {
+      lines.push('## 关键决策\n');
+      for (const l of uniqueTagged) lines.push(`- ${l}`);
+      lines.push('');
     }
 
+    // 2. 时间衰减：按完成顺序（done 数组已按完成顺序排列）
+    const recent = done.slice(-5);          // 最近5个：完整摘要
+    const mid = done.slice(-10, -5);        // 5-10个前：标题+首行
+    const old = done.slice(0, -10);         // 更早：仅标题
+
+    const progressItems: { label: string; text: string }[] = [];
+
+    for (const t of old) {
+      progressItems.push({ label: `[${t.type}] ${t.title}`, text: t.title });
+    }
+    for (const t of mid) {
+      const firstLine = t.summary.split('\n')[0] || '';
+      const text = firstLine ? `${t.title}: ${firstLine}` : t.title;
+      progressItems.push({ label: `[${t.type}] ${text}`, text });
+    }
+    for (const t of recent) {
+      const text = t.summary ? `${t.title}: ${t.summary}` : t.title;
+      progressItems.push({ label: `[${t.type}] ${text}`, text });
+    }
+
+    // 3. 语义去重
+    const deduped = this.dedup(progressItems);
+
+    lines.push('## 任务进展\n');
+    for (const item of deduped) lines.push(`- ${item.label}`);
+
+    // 4. 待完成
     const pending = data.tasks.filter(t => t.status !== 'done' && t.status !== 'skipped' && t.status !== 'failed');
     if (pending.length) {
-      lines.push('\n## 待完成');
+      lines.push('\n## 待完成\n');
       for (const t of pending) lines.push(`- [${t.type}] ${t.title}`);
     }
     await this.repo.saveSummary(lines.join('\n') + '\n');

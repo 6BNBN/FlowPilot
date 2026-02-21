@@ -47,4 +47,6 @@ export interface WorkflowRepository {
   cleanup(): void;
   /** 执行项目验证（build/test/lint） */
   verify(): VerifyResult;
+  /** 清理注入的CLAUDE.md协议块和hooks */
+  cleanupInjections(): Promise<void>;
 }
