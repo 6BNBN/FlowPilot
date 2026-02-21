@@ -6,7 +6,7 @@
 import type { ProgressData, TaskEntry } from '../domain/types';
 import type { WorkflowDefinition } from '../domain/workflow';
 import type { WorkflowRepository } from '../domain/repository';
-import { makeTaskId, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
+import { makeTaskId, cascadeSkip, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
 
 export class WorkflowService {
   constructor(
