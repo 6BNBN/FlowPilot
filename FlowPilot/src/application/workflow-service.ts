@@ -8,9 +8,10 @@ import type { WorkflowDefinition } from '../domain/workflow';
 import type { WorkflowRepository } from '../domain/repository';
 import { makeTaskId, cascadeSkip, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
 import { runLifecycleHook } from '../infrastructure/hooks';
-import { log } from '../infrastructure/logger';
+import { log, setWorkflowName } from '../infrastructure/logger';
 import { collectStats, analyzeHistory } from '../infrastructure/history';
 import { appendMemory, queryMemory, decayMemory } from '../infrastructure/memory';
+import { extractAll } from '../infrastructure/extractor';
 
 export class WorkflowService {
   constructor(
@@ -41,6 +42,7 @@ export class WorkflowService {
       current: null,
       tasks,
     };
+    setWorkflowName(def.name);
     await this.repo.saveProgress(data);
     await this.repo.saveTasks(tasksMd);
     await this.repo.saveSummary(`# ${def.name}\n\n${def.description}\n`);
@@ -193,16 +195,13 @@ export class WorkflowService {
       await this.repo.saveProgress(newData);
       await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
 
-      // 提取 [REMEMBER] 标记写入永久记忆
-      for (const line of detail.split('\n')) {
-        const m = line.match(/\[REMEMBER\]\s*(.+)/i);
-        if (m) {
-          await appendMemory(this.repo.projectRoot(), {
-            content: m[1].trim(),
-            source: `task-${id}`,
-            timestamp: new Date().toISOString(),
-          });
-        }
+      // 智能提取知识写入永久记忆
+      for (const entry of extractAll(detail, `task-${id}`)) {
+        await appendMemory(this.repo.projectRoot(), {
+          content: entry.content,
+          source: entry.source,
+          timestamp: new Date().toISOString(),
+        });
       }
 
       await this.updateSummary(newData);
@@ -561,6 +560,7 @@ export class WorkflowService {
   private async requireProgress(): Promise<ProgressData> {
     const data = await this.repo.loadProgress();
     if (!data) throw new Error('无活跃工作流，请先 node flow.js init');
+    setWorkflowName(data.name);
     return data;
   }
 

@@ -8,7 +8,9 @@ import { FsWorkflowRepository } from './infrastructure/fs-repository';
 import { parseTasksMarkdown } from './infrastructure/markdown-parser';
 import { WorkflowService } from './application/workflow-service';
 import { CLI } from './interfaces/cli';
+import { configureLogger } from './infrastructure/logger';
 
+configureLogger(process.cwd());
 const repo = new FsWorkflowRepository(process.cwd());
 const service = new WorkflowService(repo, parseTasksMarkdown);
 const cli = new CLI(service);
