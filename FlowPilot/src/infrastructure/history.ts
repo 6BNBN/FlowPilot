@@ -191,6 +191,13 @@ export interface AppliedExperiment extends Experiment {
 export interface ExperimentLog {
   timestamp: string;
   experiments: AppliedExperiment[];
+  status: 'completed' | 'failed' | 'skipped';
+}
+
+/** 文件快照（参考 Memoh-v2 files_snapshot） */
+export interface FilesSnapshot {
+  timestamp: string;
+  files: Record<string, string>;
 }
 
 /** 反思引擎：分析工作流成败模式，输出结构化反思报告 */
@@ -226,51 +233,77 @@ function parseConfigAction(action: string): { key: string; value: number } | nul
   return null;
 }
 
+/** 保存预快照 */
+async function saveSnapshot(basePath: string, files: Record<string, string>): Promise<string> {
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  const p = join(basePath, '.flowpilot', 'evolution', `snapshot-${ts}.json`);
+  const snapshot: FilesSnapshot = { timestamp: new Date().toISOString(), files };
+  await mkdir(dirname(p), { recursive: true });
+  await writeFile(p, JSON.stringify(snapshot, null, 2), 'utf-8');
+  return p;
+}
+
+/** 加载最近的快照 */
+async function loadLatestSnapshot(basePath: string): Promise<FilesSnapshot | null> {
+  const dir = join(basePath, '.flowpilot', 'evolution');
+  try {
+    const files = (await readdir(dir)).filter(f => f.startsWith('snapshot-') && f.endsWith('.json')).sort();
+    if (!files.length) return null;
+    return JSON.parse(await readFile(join(dir, files[files.length - 1]), 'utf-8'));
+  } catch { return null; }
+}
+
 /** 实验引擎：基于反思报告自动调整配置和协议 */
 export async function experiment(
   report: ReflectReport,
   basePath: string,
 ): Promise<ExperimentLog> {
-  const log: ExperimentLog = { timestamp: new Date().toISOString(), experiments: [] };
+  const log: ExperimentLog = { timestamp: new Date().toISOString(), experiments: [], status: 'completed' };
   if (!report.experiments.length) return log;
 
   const configPath = join(basePath, '.flowpilot', 'config.json');
   const protocolPath = join(basePath, 'FlowPilot', 'src', 'templates', 'protocol.md');
 
-  // Fix C1: 循环外一次性读取原始快照，避免竞态
+  // 预快照：实验前保存完整文件内容（参考 Memoh-v2 files_snapshot）
   const configSnapshot = await safeRead(configPath, '{}');
   const protocolSnapshot = await safeRead(protocolPath, '');
-  let configObj = JSON.parse(configSnapshot);
-  let protocolContent = protocolSnapshot;
+  await saveSnapshot(basePath, { 'config.json': configSnapshot, 'protocol.md': protocolSnapshot });
 
-  for (const exp of report.experiments) {
-    const applied: AppliedExperiment = { ...exp, applied: false, snapshotBefore: '' };
-    try {
-      if (exp.target === 'config') {
-        applied.snapshotBefore = configSnapshot;
-        const parsed = parseConfigAction(exp.action);
-        if (parsed) {
-          configObj = { ...configObj, [parsed.key]: parsed.value };
+  try {
+    let configObj = JSON.parse(configSnapshot);
+    let protocolContent = protocolSnapshot;
+
+    for (const exp of report.experiments) {
+      const applied: AppliedExperiment = { ...exp, applied: false, snapshotBefore: '' };
+      try {
+        if (exp.target === 'config') {
+          applied.snapshotBefore = configSnapshot;
+          const parsed = parseConfigAction(exp.action);
+          if (parsed) {
+            configObj = { ...configObj, [parsed.key]: parsed.value };
+            applied.applied = true;
+          }
+        } else if (exp.target === 'protocol') {
+          applied.snapshotBefore = protocolSnapshot;
+          const appendix = `\n<!-- evolution: ${exp.trigger} -->\n> ${exp.action}\n`;
+          protocolContent += appendix;
           applied.applied = true;
         }
-      } else if (exp.target === 'protocol') {
-        applied.snapshotBefore = protocolSnapshot;
-        const appendix = `\n<!-- evolution: ${exp.trigger} -->\n> ${exp.action}\n`;
-        protocolContent += appendix;
-        applied.applied = true;
-      }
-    } catch { /* 降级：applied 保持 false */ }
-    log.experiments.push(applied);
-  }
+      } catch { /* 降级：applied 保持 false */ }
+      log.experiments.push(applied);
+    }
 
-  // 循环结束后一次性写入
-  if (log.experiments.some(e => e.applied && e.target === 'config')) {
-    await mkdir(dirname(configPath), { recursive: true });
-    await writeFile(configPath, JSON.stringify(configObj, null, 2), 'utf-8');
-  }
-  if (log.experiments.some(e => e.applied && e.target === 'protocol')) {
-    await mkdir(dirname(protocolPath), { recursive: true });
-    await writeFile(protocolPath, protocolContent, 'utf-8');
+    // 循环结束后一次性写入
+    if (log.experiments.some(e => e.applied && e.target === 'config')) {
+      await mkdir(dirname(configPath), { recursive: true });
+      await writeFile(configPath, JSON.stringify(configObj, null, 2), 'utf-8');
+    }
+    if (log.experiments.some(e => e.applied && e.target === 'protocol')) {
+      await mkdir(dirname(protocolPath), { recursive: true });
+      await writeFile(protocolPath, protocolContent, 'utf-8');
+    }
+  } catch {
+    log.status = 'failed';
   }
 
   // 追加保存实验日志
@@ -370,16 +403,19 @@ export async function review(basePath: string): Promise<ReviewResult> {
     checks.push({ name: 'experiments.json', passed: true, detail: '文件不存在，跳过' });
   }
 
-  // 4. 自动回滚：只用第一个 applied 实验的 snapshotBefore（即真正的原始状态）
+  // 4. 自动回滚：从预快照精确恢复（而非 snapshotBefore）
   if (rolledBack) {
     try {
+      const snapshot = await loadLatestSnapshot(basePath);
+      if (snapshot) {
+        if (snapshot.files['config.json']) await writeFile(configPath, snapshot.files['config.json'], 'utf-8');
+        if (snapshot.files['protocol.md']) await writeFile(protocolPath, snapshot.files['protocol.md'], 'utf-8');
+      }
+      // 标记最近实验为 skipped
       const logs: ExperimentLog[] = JSON.parse(await readFile(expPath, 'utf-8'));
-      const last = logs[logs.length - 1];
-      if (last) {
-        const firstConfig = last.experiments.find(e => e.applied && e.target === 'config');
-        const firstProtocol = last.experiments.find(e => e.applied && e.target === 'protocol');
-        if (firstConfig?.snapshotBefore) await writeFile(configPath, firstConfig.snapshotBefore, 'utf-8');
-        if (firstProtocol?.snapshotBefore) await writeFile(protocolPath, firstProtocol.snapshotBefore, 'utf-8');
+      if (logs.length) {
+        logs[logs.length - 1].status = 'skipped';
+        await writeFile(expPath, JSON.stringify(logs, null, 2), 'utf-8');
       }
     } catch { /* 无法回滚 */ }
   }
