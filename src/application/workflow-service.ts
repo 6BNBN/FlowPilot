@@ -57,15 +57,15 @@ export class WorkflowService {
         throw new Error(`有 ${active.length} 个任务仍为 active 状态（${active.map(t => t.id).join(',')}），请先执行 node flow.js status 检查并补 checkpoint，或 node flow.js resume 重置`);
       }
 
-      const task = findNextTask(data.tasks);
+      const cascaded = cascadeSkip(data.tasks);
+      const task = findNextTask(cascaded);
       if (!task) {
-        await this.repo.saveProgress(data); // persist cascadeSkip changes
+        await this.repo.saveProgress({ ...data, tasks: cascaded });
         return null;
       }
 
-      task.status = 'active';
-      data.current = task.id;
-      await this.repo.saveProgress(data);
+      const activated = cascaded.map(t => t.id === task.id ? { ...t, status: 'active' as const } : t);
+      await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
 
       // 拼装上下文：summary + 依赖任务产出
       const parts: string[] = [];
