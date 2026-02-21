@@ -8,6 +8,7 @@ import { resolve, relative } from 'path';
 import type { WorkflowService } from '../application/workflow-service';
 import { formatStatus, formatTask, formatBatch } from './formatter';
 import { readStdinIfPiped } from './stdin';
+import { enableVerbose } from '../infrastructure/logger';
 
 
 export class CLI {
@@ -15,6 +16,12 @@ export class CLI {
 
   async run(argv: string[]): Promise<void> {
     const args = argv.slice(2);
+    // 全局 --verbose 标志，在命令分发前提取
+    const verboseIdx = args.indexOf('--verbose');
+    if (verboseIdx >= 0) {
+      enableVerbose();
+      args.splice(verboseIdx, 1);
+    }
     try {
       const output = await this.dispatch(args);
       process.stdout.write(output + '\n');

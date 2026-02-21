@@ -252,6 +252,45 @@ export class FsWorkflowRepository implements WorkflowRepository {
     return runVerify(this.base);
   }
 
+  // --- .flowpilot/history/ 永久存储 ---
+
+  async saveHistory(stats: WorkflowStats): Promise<void> {
+    await this.ensure(this.historyDir);
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const p = join(this.historyDir, `${ts}.json`);
+    await writeFile(p, JSON.stringify(stats, null, 2), 'utf-8');
+  }
+
+  async loadHistory(): Promise<WorkflowStats[]> {
+    try {
+      const files = (await readdir(this.historyDir)).filter(f => f.endsWith('.json')).sort();
+      const results: WorkflowStats[] = [];
+      for (const f of files) {
+        try {
+          results.push(JSON.parse(await readFile(join(this.historyDir, f), 'utf-8')));
+        } catch { /* 跳过损坏文件 */ }
+      }
+      return results;
+    } catch {
+      return [];
+    }
+  }
+
+  // --- .workflow/config.json ---
+
+  async loadConfig(): Promise<Record<string, unknown>> {
+    try {
+      return JSON.parse(await readFile(join(this.root, 'config.json'), 'utf-8'));
+    } catch {
+      return {};
+    }
+  }
+
+  async saveConfig(config: Record<string, unknown>): Promise<void> {
+    await this.ensure(this.root);
+    await writeFile(join(this.root, 'config.json'), JSON.stringify(config, null, 2) + '\n', 'utf-8');
+  }
+
   /** 清理注入的CLAUDE.md协议块和.claude/settings.json hooks */
   async cleanupInjections(): Promise<void> {
     // 1) 移除 CLAUDE.md 中 flowpilot:start/end 块
