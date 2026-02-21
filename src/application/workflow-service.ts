@@ -537,9 +537,4 @@ export class WorkflowService {
     return data;
   }
 
-  /** 记录失败原因到 context（task-006 占位） */
-  private async appendFailureContext(_id: string, _task: TaskEntry, _detail: string): Promise<void> {}
-
-  /** 检测重复失败模式（task-006 占位） */
-  private async detectFailurePattern(_id: string, _task: TaskEntry): Promise<string | null> { return null; }
 }
