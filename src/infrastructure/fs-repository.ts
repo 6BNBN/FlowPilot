@@ -30,13 +30,14 @@ async function loadProtocolTemplate(basePath: string): Promise<string> {
 export class FsWorkflowRepository implements WorkflowRepository {
   private readonly root: string;
   private readonly ctxDir: string;
-
+  private readonly historyDir: string;
   private readonly base: string;
 
   constructor(basePath: string) {
     this.base = basePath;
     this.root = join(basePath, '.workflow');
     this.ctxDir = join(this.root, 'context');
+    this.historyDir = join(basePath, '.flowpilot', 'history');
   }
 
   projectRoot(): string { return this.base; }

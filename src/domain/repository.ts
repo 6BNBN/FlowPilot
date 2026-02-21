@@ -57,4 +57,10 @@ export interface WorkflowRepository {
   loadConfig(): Promise<Record<string, unknown>>;
   /** 保存 .workflow/config.json */
   saveConfig(config: Record<string, unknown>): Promise<void>;
+  /** 为任务打轻量 tag，返回错误信息或null */
+  tag(taskId: string): string | null;
+  /** 回滚到指定任务的 tag，返回错误信息或null */
+  rollback(taskId: string): string | null;
+  /** 清理所有 flowpilot/ 前缀的 tag */
+  cleanTags(): void;
 }
