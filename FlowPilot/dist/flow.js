@@ -97,12 +97,23 @@ ${summary}`;
 var import_node_child_process2 = require("child_process");
 var import_node_fs2 = require("fs");
 var import_node_path = require("path");
+function loadConfig(cwd) {
+  try {
+    const raw = (0, import_node_fs2.readFileSync)((0, import_node_path.join)(cwd, ".workflow", "config.json"), "utf-8");
+    const cfg = JSON.parse(raw);
+    return cfg?.verify ?? {};
+  } catch {
+    return {};
+  }
+}
 function runVerify(cwd) {
-  const cmds = detectCommands(cwd);
+  const config = loadConfig(cwd);
+  const cmds = config.commands?.length ? config.commands : detectCommands(cwd);
+  const timeout = (config.timeout ?? 300) * 1e3;
   if (!cmds.length) return { passed: true, scripts: [] };
   for (const cmd of cmds) {
     try {
-      (0, import_node_child_process2.execSync)(cmd, { cwd, stdio: "pipe", timeout: 3e5 });
+      (0, import_node_child_process2.execSync)(cmd, { cwd, stdio: "pipe", timeout });
     } catch (e) {
       const stderr = e.stderr?.length ? e.stderr.toString() : "";
       const stdout = e.stdout?.length ? e.stdout.toString() : "";
@@ -157,83 +168,16 @@ function detectCommands(cwd) {
 }
 
 // src/infrastructure/fs-repository.ts
-function generateClaudeMdBlock() {
-  return `<!-- flowpilot:start -->
-## FlowPilot Workflow Protocol (MANDATORY \u2014 any violation is a protocol failure)
-
-**You are the dispatcher. These rules have the HIGHEST priority and are ALWAYS active.**
-
-### On Session Start
-Run \`node flow.js resume\`:
-- If unfinished workflow \u2192 enter **Execution Loop** (unless user is asking an unrelated question \u2014 handle it first via **Ad-hoc Dispatch**, then remind user the workflow is paused)
-- If no workflow \u2192 **judge the request**: reply directly for pure chitchat, use **Ad-hoc Dispatch** for one-off tasks, or enter **Requirement Decomposition** for multi-step development work. When in doubt, prefer the heavier path.
-
-### Ad-hoc Dispatch (one-off tasks, no workflow init)
-Dispatch sub-agent(s) via Task tool. No init/checkpoint/finish needed. Iron Rule #4 does NOT apply (no task ID exists). Main agent MAY use Read/Glob/Grep directly for trivial lookups (e.g. reading a single file) \u2014 Iron Rule #2 is relaxed in Ad-hoc mode only.
-
-### Iron Rules (violating ANY = protocol failure)
-1. **NEVER use TaskCreate / TaskUpdate / TaskList** \u2014 use ONLY \`node flow.js xxx\`.
-2. **Main agent can ONLY use Bash, Task, and Skill** \u2014 Edit, Write, Read, Glob, Grep, Explore are ALL FORBIDDEN. To read any file (including docs), dispatch a sub-agent.
-3. **ALWAYS dispatch via Task tool** \u2014 one Task call per task. N tasks = N Task calls **in a single message** for parallel execution.
-4. **Sub-agents MUST run checkpoint with --files before replying** \u2014 \`echo 'summary' | node flow.js checkpoint <id> --files file1 file2\` is the LAST command before reply. MUST list all created/modified files. Skipping = protocol failure.
-
-### Requirement Decomposition
-1. Dispatch a sub-agent to read requirement docs and return a summary.
-2. Use /superpowers:brainstorming to brainstorm and produce a task list.
-3. Pipe into init using this **exact format**:
-\`\`\`bash
-cat <<'EOF' | node flow.js init
-1. [backend] Task title
-   Description of what to do
-2. [frontend] Another task (deps: 1)
-   Description here
-3. [general] Third task (deps: 1, 2)
-EOF
-\`\`\`
-Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, indented lines = description.
-
-### Execution Loop
-1. Run \`node flow.js next --batch\`. **NOTE: this command will REFUSE to return tasks if any previous task is still \`active\`. You must checkpoint or resume first.**
-2. The output already contains checkpoint commands per task. For **EVERY** task in batch, dispatch a sub-agent via Task tool. **ALL Task calls in one message.** Copy the ENTIRE task block (including checkpoint commands) into each sub-agent prompt verbatim.
-3. **After ALL sub-agents return**: run \`node flow.js status\`.
-   - If any task is still \`active\` \u2192 sub-agent failed to checkpoint. Run fallback: \`echo 'summary from sub-agent output' | node flow.js checkpoint <id> --files file1 file2\`
-   - **Do NOT call \`node flow.js next\` until zero active tasks remain** (the command will error anyway).
-4. Loop back to step 1.
-5. When \`next\` returns "\u5168\u90E8\u5B8C\u6210", enter **Finalization**.
-
-### Mid-Workflow Commands
-- \`node flow.js skip <id>\` \u2014 skip a stuck/unnecessary task (avoid skipping active tasks with running sub-agents)
-- \`node flow.js add <\u63CF\u8FF0> [--type frontend|backend|general]\` \u2014 inject a new task mid-workflow
-
-### Sub-Agent Prompt Template
-Each sub-agent prompt MUST contain these sections in order:
-1. Task block from \`next\` output (title, type, description, checkpoint commands, context)
-2. **Pre-analysis (MANDATORY)**: Before writing ANY code, **MUST** invoke /superpowers:brainstorming to perform multi-dimensional analysis (requirements, edge cases, architecture, risks). Skipping = protocol failure.
-3. **Skill routing**: type=frontend \u2192 **MUST** invoke /frontend-design, type=backend \u2192 **MUST** invoke /feature-dev, type=general \u2192 execute directly. **For ALL types, you MUST also check available skills and MCP tools; use any that match the task alongside the primary skill.**
-4. **Unfamiliar APIs \u2192 MUST query context7 MCP first. Never guess.**
-
-### Sub-Agent Checkpoint (Iron Rule #4 \u2014 most common violation)
-Sub-agent's LAST Bash command before replying MUST be:
-\`\`\`
-echo '\u4E00\u53E5\u8BDD\u6458\u8981' | node flow.js checkpoint <id> --files file1 file2 ...
-\`\`\`
-- \`--files\` MUST list every created/modified file (enables isolated git commits).
-- If task failed: \`echo 'FAILED' | node flow.js checkpoint <id>\`
-- If sub-agent replies WITHOUT running checkpoint \u2192 protocol failure. Main agent MUST run fallback checkpoint in step 3.
-
-### Security Rules (sub-agents MUST follow)
-- SQL: parameterized queries only. XSS: no unsanitized v-html/innerHTML.
-- Auth: secrets from env vars, bcrypt passwords, token expiry.
-- Input: validate at entry points. Never log passwords. Never commit .env.
-
-### Finalization (MANDATORY \u2014 skipping = protocol failure)
-1. Run \`node flow.js finish\` \u2014 runs verify (build/test/lint). If fail \u2192 dispatch sub-agent to fix \u2192 retry finish.
-2. When finish returns "\u9A8C\u8BC1\u901A\u8FC7\uFF0C\u8BF7\u6D3E\u5B50Agent\u6267\u884C code-review" \u2192 dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
-3. Run \`node flow.js review\` to mark code-review done.
-4. Run \`node flow.js finish\` again \u2014 verify passes + review done \u2192 final commit \u2192 idle.
-**Loop: finish(verify) \u2192 review(code-review) \u2192 fix \u2192 finish again. Both gates must pass.**
-
-<!-- flowpilot:end -->`;
+var BUILTIN_TEMPLATE = (0, import_fs.existsSync)((0, import_path.join)(__dirname, "..", "templates", "protocol.md")) ? (0, import_path.join)(__dirname, "..", "templates", "protocol.md") : (0, import_path.join)(__dirname, "templates", "protocol.md");
+async function loadProtocolTemplate(basePath) {
+  try {
+    const config = JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(basePath, ".workflow", "config.json"), "utf-8"));
+    if (config.protocolTemplate) {
+      return await (0, import_promises.readFile)((0, import_path.join)(basePath, config.protocolTemplate), "utf-8");
+    }
+  } catch {
+  }
+  return await (0, import_promises.readFile)(BUILTIN_TEMPLATE, "utf-8");
 }
 var FsWorkflowRepository = class {
   root;
@@ -393,7 +337,7 @@ var FsWorkflowRepository = class {
     const base = (0, import_path.join)(this.root, "..");
     const path = (0, import_path.join)(base, "CLAUDE.md");
     const marker = "<!-- flowpilot:start -->";
-    const block = generateClaudeMdBlock();
+    const block = (await loadProtocolTemplate(this.base)).trim();
     try {
       const content = await (0, import_promises.readFile)(path, "utf-8");
       if (content.includes(marker)) return false;
@@ -437,38 +381,71 @@ var FsWorkflowRepository = class {
   verify() {
     return runVerify(this.base);
   }
+  /** 清理注入的CLAUDE.md协议块和.claude/settings.json hooks */
+  async cleanupInjections() {
+    const mdPath = (0, import_path.join)(this.base, "CLAUDE.md");
+    try {
+      const content = await (0, import_promises.readFile)(mdPath, "utf-8");
+      const cleaned = content.replace(/\n*<!-- flowpilot:start -->[\s\S]*?<!-- flowpilot:end -->\n*/g, "\n");
+      if (cleaned !== content) await (0, import_promises.writeFile)(mdPath, cleaned.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n", "utf-8");
+    } catch {
+    }
+    const settingsPath = (0, import_path.join)(this.base, ".claude", "settings.json");
+    try {
+      const raw = await (0, import_promises.readFile)(settingsPath, "utf-8");
+      const settings = JSON.parse(raw);
+      const hooks = settings.hooks?.PreToolUse;
+      if (hooks) {
+        const flowpilotMatchers = /* @__PURE__ */ new Set(["TaskCreate", "TaskUpdate", "TaskList"]);
+        settings.hooks.PreToolUse = hooks.filter((h) => !flowpilotMatchers.has(h.matcher ?? ""));
+        if (!settings.hooks.PreToolUse.length) delete settings.hooks.PreToolUse;
+        if (!Object.keys(settings.hooks).length) delete settings.hooks;
+        await (0, import_promises.writeFile)(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+      }
+    } catch {
+    }
+  }
 };
 
 // src/domain/task-store.ts
+function buildIndex(tasks) {
+  const m = /* @__PURE__ */ new Map();
+  for (const t of tasks) m.set(t.id, t);
+  return m;
+}
 function makeTaskId(n) {
   return String(n).padStart(3, "0");
 }
 function cascadeSkip(tasks) {
+  let result = tasks.map((t) => ({ ...t }));
   let changed = true;
   while (changed) {
     changed = false;
-    for (const t of tasks) {
+    const idx = buildIndex(result);
+    for (let i = 0; i < result.length; i++) {
+      const t = result[i];
       if (t.status !== "pending") continue;
       const blocked = t.deps.some((d) => {
-        const dep = tasks.find((x) => x.id === d);
+        const dep = idx.get(d);
         return dep && (dep.status === "failed" || dep.status === "skipped");
       });
       if (blocked) {
-        t.status = "skipped";
-        t.summary = "\u4F9D\u8D56\u4EFB\u52A1\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7";
+        result[i] = { ...t, status: "skipped", summary: "\u4F9D\u8D56\u4EFB\u52A1\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7" };
         changed = true;
       }
     }
   }
+  return result;
 }
 function detectCycles(tasks) {
+  const idx = buildIndex(tasks);
   const visited = /* @__PURE__ */ new Set();
   const inStack = /* @__PURE__ */ new Set();
   const parent = /* @__PURE__ */ new Map();
   function dfs(id) {
     visited.add(id);
     inStack.add(id);
-    const task = tasks.find((t) => t.id === id);
+    const task = idx.get(id);
     if (task) {
       for (const dep of task.deps) {
         if (!visited.has(dep)) {
@@ -502,64 +479,61 @@ function findNextTask(tasks) {
   const pending = tasks.filter((t) => t.status === "pending");
   const cycle = detectCycles(pending);
   if (cycle) throw new Error(`\u5FAA\u73AF\u4F9D\u8D56: ${cycle.join(" -> ")}`);
-  cascadeSkip(tasks);
+  const idx = buildIndex(tasks);
   for (const t of tasks) {
     if (t.status !== "pending") continue;
-    const depsOk = t.deps.every((d) => {
-      const dep = tasks.find((x) => x.id === d);
-      return dep && dep.status === "done";
-    });
-    if (depsOk) return t;
+    if (t.deps.every((d) => idx.get(d)?.status === "done")) return t;
   }
   return null;
 }
 function completeTask(data, id, summary) {
-  const t = data.tasks.find((x) => x.id === id);
-  if (!t) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
-  t.status = "done";
-  t.summary = summary;
-  data.current = null;
+  const idx = buildIndex(data.tasks);
+  if (!idx.has(id)) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
+  return {
+    ...data,
+    current: null,
+    tasks: data.tasks.map((t) => t.id === id ? { ...t, status: "done", summary } : t)
+  };
 }
 function failTask(data, id) {
-  const t = data.tasks.find((x) => x.id === id);
-  if (!t) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
-  t.retries++;
-  if (t.retries >= 3) {
-    t.status = "failed";
-    data.current = null;
-    return "skip";
+  const idx = buildIndex(data.tasks);
+  if (!idx.has(id)) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
+  const old = idx.get(id);
+  const retries = old.retries + 1;
+  if (retries >= 3) {
+    return {
+      result: "skip",
+      data: { ...data, current: null, tasks: data.tasks.map((t) => t.id === id ? { ...t, retries, status: "failed" } : t) }
+    };
   }
-  t.status = "pending";
-  data.current = null;
-  return "retry";
+  return {
+    result: "retry",
+    data: { ...data, current: null, tasks: data.tasks.map((t) => t.id === id ? { ...t, retries, status: "pending" } : t) }
+  };
 }
 function resumeProgress(data) {
+  const hasActive = data.tasks.some((t) => t.status === "active");
+  if (!hasActive) {
+    return { data, resetId: data.status === "running" ? data.current : null };
+  }
   let firstId = null;
-  for (const t of data.tasks) {
+  const tasks = data.tasks.map((t) => {
     if (t.status === "active") {
-      t.status = "pending";
       if (!firstId) firstId = t.id;
+      return { ...t, status: "pending" };
     }
-  }
-  if (firstId) {
-    data.current = null;
-    data.status = "running";
-    return firstId;
-  }
-  if (data.status === "running") return data.current;
-  return null;
+    return t;
+  });
+  return { data: { ...data, current: null, status: "running", tasks }, resetId: firstId };
 }
 function findParallelTasks(tasks) {
   const pending = tasks.filter((t) => t.status === "pending");
   const cycle = detectCycles(pending);
   if (cycle) throw new Error(`\u5FAA\u73AF\u4F9D\u8D56: ${cycle.join(" -> ")}`);
-  cascadeSkip(tasks);
+  const idx = buildIndex(tasks);
   return tasks.filter((t) => {
     if (t.status !== "pending") return false;
-    return t.deps.every((d) => {
-      const dep = tasks.find((x) => x.id === d);
-      return dep && dep.status === "done";
-    });
+    return t.deps.every((d) => idx.get(d)?.status === "done");
   });
 }
 function isAllDone(tasks) {
@@ -608,6 +582,32 @@ function parseTasksMarkdown(markdown) {
     t.deps = t.deps.map((d) => numToId.get(d.padStart(3, "0")) || numToId.get(d) || makeTaskId(parseInt(d, 10))).filter(Boolean);
   }
   return { name, description, tasks };
+}
+
+// src/infrastructure/hooks.ts
+var import_promises2 = require("fs/promises");
+var import_child_process = require("child_process");
+var import_path2 = require("path");
+async function runLifecycleHook(hookName, basePath, env) {
+  const configPath = (0, import_path2.join)(basePath, ".workflow", "config.json");
+  let config;
+  try {
+    config = JSON.parse(await (0, import_promises2.readFile)(configPath, "utf-8"));
+  } catch {
+    return;
+  }
+  const cmd = config.hooks?.[hookName];
+  if (!cmd) return;
+  try {
+    (0, import_child_process.execSync)(cmd, {
+      cwd: basePath,
+      stdio: "pipe",
+      timeout: 3e4,
+      env: { ...process.env, ...env }
+    });
+  } catch (e) {
+    console.warn(`[FlowPilot] hook "${hookName}" failed: ${e.message}`);
+  }
 }
 
 // src/application/workflow-service.ts
@@ -659,14 +659,15 @@ ${def.description}
       if (active.length) {
         throw new Error(`\u6709 ${active.length} \u4E2A\u4EFB\u52A1\u4ECD\u4E3A active \u72B6\u6001\uFF08${active.map((t) => t.id).join(",")}\uFF09\uFF0C\u8BF7\u5148\u6267\u884C node flow.js status \u68C0\u67E5\u5E76\u8865 checkpoint\uFF0C\u6216 node flow.js resume \u91CD\u7F6E`);
       }
-      const task = findNextTask(data.tasks);
+      const cascaded = cascadeSkip(data.tasks);
+      const task = findNextTask(cascaded);
       if (!task) {
-        await this.repo.saveProgress(data);
+        await this.repo.saveProgress({ ...data, tasks: cascaded });
         return null;
       }
-      task.status = "active";
-      data.current = task.id;
-      await this.repo.saveProgress(data);
+      const activated = cascaded.map((t) => t.id === task.id ? { ...t, status: "active" } : t);
+      await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
+      await runLifecycleHook("onTaskStart", this.repo.projectRoot(), { TASK_ID: task.id, TASK_TITLE: task.title });
       const parts = [];
       const summary = await this.repo.loadSummary();
       if (summary) parts.push(summary);
@@ -689,14 +690,18 @@ ${def.description}
       if (active.length) {
         throw new Error(`\u6709 ${active.length} \u4E2A\u4EFB\u52A1\u4ECD\u4E3A active \u72B6\u6001\uFF08${active.map((t) => t.id).join(",")}\uFF09\uFF0C\u8BF7\u5148\u6267\u884C node flow.js status \u68C0\u67E5\u5E76\u8865 checkpoint\uFF0C\u6216 node flow.js resume \u91CD\u7F6E`);
       }
-      const tasks = findParallelTasks(data.tasks);
+      const cascaded = cascadeSkip(data.tasks);
+      const tasks = findParallelTasks(cascaded);
       if (!tasks.length) {
-        await this.repo.saveProgress(data);
+        await this.repo.saveProgress({ ...data, tasks: cascaded });
         return [];
       }
-      for (const t of tasks) t.status = "active";
-      data.current = tasks[0].id;
-      await this.repo.saveProgress(data);
+      const activeIds = new Set(tasks.map((t) => t.id));
+      const activated = cascaded.map((t) => activeIds.has(t.id) ? { ...t, status: "active" } : t);
+      await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
+      for (const t of tasks) {
+        await runLifecycleHook("onTaskStart", this.repo.projectRoot(), { TASK_ID: t.id, TASK_TITLE: t.title });
+      }
       const summary = await this.repo.loadSummary();
       const results = [];
       for (const task of tasks) {
@@ -724,22 +729,23 @@ ${def.description}
         throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u53EA\u6709 active \u72B6\u6001\u53EF\u4EE5 checkpoint`);
       }
       if (detail === "FAILED") {
-        const result = failTask(data, id);
-        await this.repo.saveProgress(data);
+        const { result, data: newData2 } = failTask(data, id);
+        await this.repo.saveProgress(newData2);
         return result === "retry" ? `\u4EFB\u52A1 ${id} \u5931\u8D25(\u7B2C${task.retries}\u6B21)\uFF0C\u5C06\u91CD\u8BD5` : `\u4EFB\u52A1 ${id} \u8FDE\u7EED\u5931\u8D253\u6B21\uFF0C\u5DF2\u8DF3\u8FC7`;
       }
       if (!detail.trim()) throw new Error(`\u4EFB\u52A1 ${id} checkpoint\u5185\u5BB9\u4E0D\u80FD\u4E3A\u7A7A`);
       const summaryLine = detail.split("\n")[0].slice(0, 80);
-      completeTask(data, id, summaryLine);
-      await this.repo.saveProgress(data);
+      const newData = completeTask(data, id, summaryLine);
+      await this.repo.saveProgress(newData);
       await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}
 
 ${detail}
 `);
-      await this.updateSummary(data);
+      await this.updateSummary(newData);
       const commitErr = this.repo.commit(id, task.title, summaryLine, files);
-      const doneCount = data.tasks.filter((t) => t.status === "done").length;
-      let msg = `\u4EFB\u52A1 ${id} \u5B8C\u6210 (${doneCount}/${data.tasks.length})`;
+      await runLifecycleHook("onTaskComplete", this.repo.projectRoot(), { TASK_ID: id, TASK_TITLE: task.title });
+      const doneCount = newData.tasks.filter((t) => t.status === "done").length;
+      let msg = `\u4EFB\u52A1 ${id} \u5B8C\u6210 (${doneCount}/${newData.tasks.length})`;
       if (commitErr) {
         msg += `
 [git\u63D0\u4EA4\u5931\u8D25] ${commitErr}
@@ -747,7 +753,7 @@ ${detail}
       } else {
         msg += " [\u5DF2\u81EA\u52A8\u63D0\u4EA4]";
       }
-      return isAllDone(data.tasks) ? msg + "\n\u5168\u90E8\u4EFB\u52A1\u5DF2\u5B8C\u6210\uFF0C\u8BF7\u6267\u884C node flow.js finish \u8FDB\u884C\u6536\u5C3E" : msg;
+      return isAllDone(newData.tasks) ? msg + "\n\u5168\u90E8\u4EFB\u52A1\u5DF2\u5B8C\u6210\uFF0C\u8BF7\u6267\u884C node flow.js finish \u8FDB\u884C\u6536\u5C3E" : msg;
     } finally {
       await this.repo.unlock();
     }
@@ -760,17 +766,17 @@ ${detail}
     if (data.status === "completed") return "\u5DE5\u4F5C\u6D41\u5DF2\u5168\u90E8\u5B8C\u6210";
     if (data.status === "finishing") return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${data.name}
 \u6B63\u5728\u6536\u5C3E\u9636\u6BB5\uFF0C\u8BF7\u6267\u884C node flow.js finish`;
-    const resetId = resumeProgress(data);
-    await this.repo.saveProgress(data);
+    const { data: newData, resetId } = resumeProgress(data);
+    await this.repo.saveProgress(newData);
     if (resetId) this.repo.cleanup();
-    const doneCount = data.tasks.filter((t) => t.status === "done").length;
-    const total = data.tasks.length;
+    const doneCount = newData.tasks.filter((t) => t.status === "done").length;
+    const total = newData.tasks.length;
     if (resetId) {
-      return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${data.name}
+      return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${newData.name}
 \u8FDB\u5EA6: ${doneCount}/${total}
 \u4E2D\u65AD\u4EFB\u52A1 ${resetId} \u5DF2\u91CD\u7F6E\uFF0C\u5C06\u91CD\u65B0\u6267\u884C`;
     }
-    return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${data.name}
+    return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${newData.name}
 \u8FDB\u5EA6: ${doneCount}/${total}
 \u7EE7\u7EED\u6267\u884C`;
   }
@@ -866,6 +872,8 @@ ${detail}
     const failed = data.tasks.filter((t) => t.status === "failed");
     const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : "", failed.length ? `${failed.length} failed` : ""].filter(Boolean).join(", ");
     const titles = done.map((t) => `- ${t.id}: ${t.title}`).join("\n");
+    await runLifecycleHook("onWorkflowFinish", this.repo.projectRoot(), { WORKFLOW_NAME: data.name });
+    await this.repo.cleanupInjections();
     const commitErr = this.repo.commit("finish", data.name || "\u5DE5\u4F5C\u6D41\u5B8C\u6210", `${stats}
 
 ${titles}`);
@@ -884,35 +892,89 @@ ${stats}
 \u5DF2\u63D0\u4EA4\u6700\u7EC8commit\uFF0C\u5DE5\u4F5C\u6D41\u56DE\u5230\u5F85\u547D\u72B6\u6001
 \u7B49\u5F85\u4E0B\u4E00\u4E2A\u9700\u6C42...`;
   }
+  /** abort: 中止工作流，清理 .workflow/ 目录 */
+  async abort() {
+    const data = await this.repo.loadProgress();
+    if (!data) return "\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41\uFF0C\u65E0\u9700\u4E2D\u6B62";
+    data.status = "aborted";
+    await this.repo.saveProgress(data);
+    await this.repo.cleanupInjections();
+    await this.repo.clearAll();
+    return `\u5DE5\u4F5C\u6D41 "${data.name}" \u5DF2\u4E2D\u6B62\uFF0C.workflow/ \u5DF2\u6E05\u7406`;
+  }
   /** status: 全局进度 */
   async status() {
     return this.repo.loadProgress();
   }
-  /** 滚动摘要：每次checkpoint追加，每10个任务压缩 */
+  /** 从文本中提取标记行 [DECISION]/[ARCHITECTURE]/[IMPORTANT] */
+  extractTaggedLines(text) {
+    const TAG_RE = /\[(?:DECISION|ARCHITECTURE|IMPORTANT)\]/i;
+    return text.split("\n").filter((l) => TAG_RE.test(l)).map((l) => l.trim());
+  }
+  /** 词袋 tokenize（兼容 CJK：连续非空白拉丁词 + 单个 CJK 字符） */
+  tokenize(text) {
+    const tokens = /* @__PURE__ */ new Set();
+    for (const m of text.toLowerCase().matchAll(/[a-z0-9_]+|[\u4e00-\u9fff]/g)) {
+      tokens.add(m[0]);
+    }
+    return tokens;
+  }
+  /** Jaccard 相似度 */
+  similarity(a, b) {
+    const sa = this.tokenize(a), sb = this.tokenize(b);
+    if (!sa.size || !sb.size) return 0;
+    let inter = 0;
+    for (const t of sa) if (sb.has(t)) inter++;
+    return inter / (sa.size + sb.size - inter);
+  }
+  /** 语义去重：相似度 > 0.8 的摘要合并 */
+  dedup(items) {
+    const result = [];
+    for (const item of items) {
+      if (!result.some((r) => this.similarity(r.text, item.text) > 0.8)) {
+        result.push(item);
+      }
+    }
+    return result;
+  }
+  /** 智能滚动摘要：保留关键决策 + 时间衰减 + 语义去重 */
   async updateSummary(data) {
     const done = data.tasks.filter((t) => t.status === "done");
     const lines = [`# ${data.name}
 `];
-    if (done.length > 10) {
-      const groups = /* @__PURE__ */ new Map();
-      for (const t of done) {
-        const arr = groups.get(t.type) || [];
-        arr.push(t.title);
-        groups.set(t.type, arr);
-      }
-      lines.push("## \u5DF2\u5B8C\u6210\u6A21\u5757");
-      for (const [type, titles] of groups) {
-        lines.push(`- [${type}] ${titles.length}\u9879: ${titles.slice(-3).join(", ")}${titles.length > 3 ? " \u7B49" : ""}`);
-      }
-    } else {
-      lines.push("## \u5DF2\u5B8C\u6210");
-      for (const t of done) {
-        lines.push(`- [${t.type}] ${t.title}: ${t.summary}`);
-      }
+    const taggedLines = [];
+    for (const t of done) {
+      const ctx = await this.repo.loadTaskContext(t.id);
+      if (ctx) taggedLines.push(...this.extractTaggedLines(ctx));
     }
+    const uniqueTagged = [...new Set(taggedLines)];
+    if (uniqueTagged.length) {
+      lines.push("## \u5173\u952E\u51B3\u7B56\n");
+      for (const l of uniqueTagged) lines.push(`- ${l}`);
+      lines.push("");
+    }
+    const recent = done.slice(-5);
+    const mid = done.slice(-10, -5);
+    const old = done.slice(0, -10);
+    const progressItems = [];
+    for (const t of old) {
+      progressItems.push({ label: `[${t.type}] ${t.title}`, text: t.title });
+    }
+    for (const t of mid) {
+      const firstLine = t.summary.split("\n")[0] || "";
+      const text = firstLine ? `${t.title}: ${firstLine}` : t.title;
+      progressItems.push({ label: `[${t.type}] ${text}`, text });
+    }
+    for (const t of recent) {
+      const text = t.summary ? `${t.title}: ${t.summary}` : t.title;
+      progressItems.push({ label: `[${t.type}] ${text}`, text });
+    }
+    const deduped = this.dedup(progressItems);
+    lines.push("## \u4EFB\u52A1\u8FDB\u5C55\n");
+    for (const item of deduped) lines.push(`- ${item.label}`);
     const pending = data.tasks.filter((t) => t.status !== "done" && t.status !== "skipped" && t.status !== "failed");
     if (pending.length) {
-      lines.push("\n## \u5F85\u5B8C\u6210");
+      lines.push("\n## \u5F85\u5B8C\u6210\n");
       for (const t of pending) lines.push(`- [${t.type}] ${t.title}`);
     }
     await this.repo.saveSummary(lines.join("\n") + "\n");
@@ -926,7 +988,7 @@ ${stats}
 
 // src/interfaces/cli.ts
 var import_fs2 = require("fs");
-var import_path2 = require("path");
+var import_path3 = require("path");
 
 // src/interfaces/formatter.ts
 var ICON = {
@@ -1054,8 +1116,8 @@ var CLI = class {
           }
         }
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
-          const filePath = (0, import_path2.resolve)(rest[fileIdx + 1]);
-          if ((0, import_path2.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
+          const filePath = (0, import_path3.resolve)(rest[fileIdx + 1]);
+          if ((0, import_path3.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
           detail = (0, import_fs2.readFileSync)(filePath, "utf-8");
         } else if (rest.length > 1 && fileIdx < 0 && filesIdx < 0) {
           detail = rest.slice(1).join(" ");
@@ -1080,6 +1142,8 @@ var CLI = class {
         return await s.finish();
       case "resume":
         return await s.resume();
+      case "abort":
+        return await s.abort();
       case "add": {
         const typeIdx = rest.indexOf("--type");
         const rawType = typeIdx >= 0 && rest[typeIdx + 1] || "general";
@@ -1103,6 +1167,7 @@ var USAGE = `\u7528\u6CD5: node flow.js <command>
   finish               \u667A\u80FD\u6536\u5C3E (\u9A8C\u8BC1+\u603B\u7ED3+\u56DE\u5230\u5F85\u547D\uFF0C\u9700\u5148review)
   status               \u67E5\u770B\u5168\u5C40\u8FDB\u5EA6
   resume               \u4E2D\u65AD\u6062\u590D
+  abort                \u4E2D\u6B62\u5DE5\u4F5C\u6D41\u5E76\u6E05\u7406 .workflow/ \u76EE\u5F55
   add <\u63CF\u8FF0>           \u8FFD\u52A0\u4EFB\u52A1 [--type frontend|backend|general]`;
 
 // src/main.ts
