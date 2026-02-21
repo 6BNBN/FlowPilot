@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile } from 'fs/promises';
+import { mkdtemp, rm, readFile, access } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { loadMemory, appendMemory, queryMemory, decayMemory, temporalDecayScore, compactMemory, rollbackMemory, detectLanguage, rrfFuse, type MemoryEntry } from './memory';
@@ -260,5 +260,34 @@ describe('rrfFuse', () => {
     const s3 = [{ entry: mkEntry('B'), score: 1 }];
     const fused = rrfFuse([s1, s2, s3]);
     expect(fused[0].entry.content).toBe('A');
+  });
+});
+
+describe('vector index', () => {
+  it('appendMemory creates vectors.json', async () => {
+    await appendMemory(dir, { content: 'PostgreSQL indexing strategy', source: 't1', timestamp: new Date().toISOString() });
+    const vectorPath = join(dir, '.flowpilot', 'vectors.json');
+    await expect(access(vectorPath)).resolves.toBeUndefined();
+  });
+
+  it('queryMemory RRF fusion returns relevant results', async () => {
+    const now = new Date().toISOString();
+    await appendMemory(dir, { content: 'PostgreSQL database indexing strategy', source: 't1', timestamp: now });
+    await appendMemory(dir, { content: 'React component lifecycle hooks', source: 't2', timestamp: now });
+    await appendMemory(dir, { content: 'PostgreSQL query optimization guide', source: 't3', timestamp: now });
+    const results = await queryMemory(dir, 'PostgreSQL database');
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results[0].content).toContain('PostgreSQL');
+  });
+
+  it('compactMemory rebuilds vectors.json with correct count', async () => {
+    const now = new Date().toISOString();
+    for (let i = 0; i < 5; i++) {
+      await appendMemory(dir, { content: `unique topic ${i} about ${['react','vue','angular','svelte','next'][i]}`, source: `t${i}`, timestamp: now });
+    }
+    await compactMemory(dir, 3);
+    const vectors = JSON.parse(await readFile(join(dir, '.flowpilot', 'vectors.json'), 'utf-8'));
+    const active = (await loadMemory(dir)).filter(e => !e.archived);
+    expect(vectors.length).toBe(active.length);
   });
 });

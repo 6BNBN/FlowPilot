@@ -80,6 +80,30 @@ describe('extractTechStack', () => {
   });
 });
 
+describe('extractAll LLM degradation', () => {
+  it('no ANTHROPIC_API_KEY falls back to rule engine', async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    const text = '[REMEMBER] Use React for frontend\n决定使用PostgreSQL';
+    const results = await extractAll(text, 's');
+    const tagged = extractTaggedKnowledge(text, 's');
+    const decisions = extractDecisionPatterns(text, 's');
+    // Rule engine should produce tagged + decisions (deduped)
+    const expected = [...tagged, ...decisions];
+    expect(results.length).toBe(expected.length);
+    for (const e of expected) {
+      expect(results.some(r => r.content === e.content)).toBe(true);
+    }
+  });
+
+  it('existingMemories param does not affect rule mode', async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    const text = '[DECISION] chose REST over GraphQL';
+    const withMem = await extractAll(text, 's', ['some existing memory']);
+    const withoutMem = await extractAll(text, 's');
+    expect(withMem).toEqual(withoutMem);
+  });
+});
+
 describe('extractAll', () => {
   it('combines tagged + decisions + tech, deduplicates', async () => {
     const text = '[REMEMBER] Use React for frontend\n决定使用PostgreSQL\nWe also use Docker';
