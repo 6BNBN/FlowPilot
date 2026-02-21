@@ -81,9 +81,9 @@ describe('extractTechStack', () => {
 });
 
 describe('extractAll', () => {
-  it('combines tagged + decisions + tech, deduplicates', () => {
+  it('combines tagged + decisions + tech, deduplicates', async () => {
     const text = '[REMEMBER] Use React for frontend\n决定使用PostgreSQL\nWe also use Docker';
-    const results = extractAll(text, 's');
+    const results = await extractAll(text, 's');
     // tagged: React line, decision: PostgreSQL line, tech: Docker (React already covered)
     expect(results.length).toBeGreaterThanOrEqual(2);
     // No duplicate content
@@ -91,9 +91,9 @@ describe('extractAll', () => {
     expect(new Set(contents).size).toBe(contents.length);
   });
 
-  it('tech stack filtered if already in tagged/decisions', () => {
+  it('tech stack filtered if already in tagged/decisions', async () => {
     const text = '[REMEMBER] Use React component pattern';
-    const results = extractAll(text, 's');
+    const results = await extractAll(text, 's');
     // React is in tagged content, so tech stack should not add it again
     expect(results.filter(r => r.content.includes('React'))).toHaveLength(1);
   });

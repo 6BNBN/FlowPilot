@@ -250,7 +250,7 @@ export class WorkflowService {
       await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
 
       // 智能提取知识写入永久记忆
-      for (const entry of extractAll(detail, `task-${id}`)) {
+      for (const entry of await extractAll(detail, `task-${id}`)) {
         await appendMemory(this.repo.projectRoot(), {
           content: entry.content,
           source: entry.source,
