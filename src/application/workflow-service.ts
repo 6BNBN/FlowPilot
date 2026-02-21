@@ -317,6 +317,7 @@ export class WorkflowService {
     const titles = done.map(t => `- ${t.id}: ${t.title}`).join('\n');
     await runLifecycleHook('onWorkflowFinish', this.repo.projectRoot(), { WORKFLOW_NAME: data.name });
     await this.repo.cleanupInjections();
+    this.repo.cleanTags();
     const commitErr = this.repo.commit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`);
     if (!commitErr) {
       await this.repo.clearAll();
