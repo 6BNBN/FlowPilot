@@ -5,14 +5,16 @@
 
 import { mkdir, readFile, writeFile, unlink, rm, rename } from 'fs/promises';
 import { join } from 'path';
-import { openSync, closeSync } from 'fs';
+import { openSync, closeSync, existsSync } from 'fs';
 import type { ProgressData, TaskEntry } from '../domain/types';
 import type { WorkflowRepository, VerifyResult } from '../domain/repository';
 import { autoCommit, gitCleanup } from './git';
 import { runVerify } from './verify';
 
-/** 内置模板路径：dev 时 src/infrastructure/ → ../templates/，打包后 dist/ → templates/ */
-const BUILTIN_TEMPLATE = join(__dirname, '..', 'templates', 'protocol.md');
+/** 内置模板路径：dev 时 __dirname=src/infrastructure/，打包后 __dirname=dist/ */
+const BUILTIN_TEMPLATE = existsSync(join(__dirname, '..', 'templates', 'protocol.md'))
+  ? join(__dirname, '..', 'templates', 'protocol.md')
+  : join(__dirname, 'templates', 'protocol.md');
 
 /** 读取协议模板：优先 .workflow/config.json 的 protocolTemplate，其次内置模板 */
 async function loadProtocolTemplate(basePath: string): Promise<string> {
