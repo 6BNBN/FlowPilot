@@ -291,11 +291,13 @@ export class WorkflowService {
   /** finish: 智能收尾 - 先verify，review后置 */
   async finish(): Promise<string> {
     const data = await this.requireProgress();
+    log.debug(`finish: status=${data.status}`);
     if (data.status === 'idle' || data.status === 'completed') return '工作流已完成，无需重复finish';
     if (!isAllDone(data.tasks)) throw new Error('还有未完成的任务，请先完成所有任务');
 
     // 1. 先验证（廉价操作）
     const result = this.repo.verify();
+    log.debug(`finish: verify passed=${result.passed}`);
     if (!result.passed) {
       return `验证失败: ${result.error}\n请修复后重新执行 node flow.js finish`;
     }
