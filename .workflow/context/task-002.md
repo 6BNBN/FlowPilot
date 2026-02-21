@@ -1,3 +1,3 @@
-# task-002: 多语言分词增强：日韩文 bigram + 语言检测
+# task-002: 可选 LLM 智能提取：Extract→Decide 优雅降级
 
-多语言分词增强：tokenize 扩展日韩文 CJK 范围(平假名/片假名/韩文) + bigram，新增 detectLanguage 导出函数
+LLM智能提取(Extract→Decide)优雅降级完成：callClaude/llmExtract/llmDecide + extractAll异步化 + 调用方await更新

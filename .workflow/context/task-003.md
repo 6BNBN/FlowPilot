@@ -1,3 +1,3 @@
-# task-003: CJK token 估算与智能截断工具
+# task-003: 集成测试 + 构建验证
 
-CJK token估算与智能截断工具：estimateCharsPerToken/truncateHeadTail/computeMaxChars 三函数实现，零依赖，tsc编译通过
+集成测试通过：memory.test.ts 新增3个向量索引测试，extractor.test.ts 新增2个LLM降级测试，全部138测试通过+tsc通过

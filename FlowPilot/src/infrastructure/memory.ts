@@ -278,11 +278,15 @@ export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'r
   });
 
   if (idx >= 0) {
+    const oldContent = entries[idx].content;
     const updated = entries.map((e, i) =>
       i === idx ? { ...e, content: entry.content, timestamp: entry.timestamp, source: entry.source } : e
     );
     log.debug(`memory: 更新已有条目 (相似度>0.8)`);
     await saveMemory(basePath, updated);
+    // 清除旧 content 的向量残留
+    const vectors = await loadVectors(basePath);
+    await saveVectors(basePath, vectors.filter(v => v.content !== oldContent));
   } else {
     const newEntries = [...entries, { ...entry, refs: 0, archived: false }];
     log.debug(`memory: 新增条目, 总计 ${newEntries.length}`);

@@ -39,6 +39,7 @@ async function callClaude(prompt: string, systemPrompt: string): Promise<string 
       res.on('data', (chunk: string) => data += chunk);
       res.on('end', () => {
         try {
+          if (res.statusCode !== 200) { resolve(null); return; }
           const json = JSON.parse(data);
           resolve(json.content?.[0]?.text ?? null);
         } catch { resolve(null); }
@@ -77,7 +78,7 @@ async function llmExtract(text: string): Promise<ExtractedEntry[] | null> {
   if (!result) return null;
 
   const arr = parseJsonArray(result);
-  return arr ? (arr as ExtractedEntry[]).filter(e => e.content && e.source) : null;
+  return arr ? (arr as ExtractedEntry[]).filter(e => typeof e.content === 'string' && typeof e.source === 'string') : null;
 }
 
 /** LLM 决策：对比已有记忆，决定 ADD/UPDATE/SKIP */
@@ -95,7 +96,7 @@ async function llmDecide(
   if (!result) return null;
 
   const arr = parseJsonArray(result);
-  return arr ? (arr as Array<ExtractedEntry & { action?: string }>).filter(e => e.content && e.action !== 'SKIP') : null;
+  return arr ? (arr as Array<ExtractedEntry & { action?: string }>).filter(e => typeof e.content === 'string' && e.action !== 'SKIP') : null;
 }
 
 /** 提取 [REMEMBER]/[DECISION]/[ARCHITECTURE]/[IMPORTANT] 标记行 */

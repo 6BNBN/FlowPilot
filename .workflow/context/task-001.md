@@ -1,3 +1,3 @@
-# task-001: BM25 替代 TF-IDF 检索算法
+# task-001: 文件级向量索引：激活 RRF 双源融合
 
-BM25替代TF-IDF：DfStats新增avgDocLen，rebuildDf计算平均文档长度，bm25Vector实现BM25公式(k1=1.2,b=0.75)，所有调用点已更新，编译通过
+文件级向量索引完成：新增 VectorEntry 类型 + loadVectors/saveVectors/vectorSearch/rebuildVectorIndex 函数，集成到 appendMemory（追加向量）和 compactMemory（重建向量），激活 queryMemory 的 RRF 双源融合（BM25 文本检索 + 向量余弦检索）
