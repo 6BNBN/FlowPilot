@@ -53,7 +53,7 @@ describe('memory system', () => {
   });
 
   it('decayMemory archives old unreferenced entries', async () => {
-    const oldDate = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
+    const oldDate = new Date(Date.now() - 100 * 24 * 60 * 60 * 1000).toISOString();
     await appendMemory(dir, { content: 'old entry', source: 'task-001', timestamp: oldDate });
     const count = await decayMemory(dir);
     expect(count).toBe(1);
@@ -62,7 +62,7 @@ describe('memory system', () => {
   });
 
   it('decayMemory does not archive entries with refs > 0', async () => {
-    const oldDate = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
+    const oldDate = new Date(Date.now() - 100 * 24 * 60 * 60 * 1000).toISOString();
     await appendMemory(dir, { content: 'referenced entry about databases', source: 'task-001', timestamp: oldDate });
     await queryMemory(dir, 'databases'); // increments refs
     const count = await decayMemory(dir);

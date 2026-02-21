@@ -10,11 +10,14 @@ import { makeTaskId, cascadeSkip, findNextTask, findParallelTasks, completeTask,
 import { runLifecycleHook } from '../infrastructure/hooks';
 import { log, setWorkflowName } from '../infrastructure/logger';
 import { collectStats, analyzeHistory } from '../infrastructure/history';
-import { appendMemory, queryMemory, decayMemory } from '../infrastructure/memory';
+import { appendMemory, queryMemory, decayMemory, compactMemory, loadMemory } from '../infrastructure/memory';
 import { extractAll } from '../infrastructure/extractor';
 import { detect as detectLoop, type LoopDetection } from '../infrastructure/loop-detector';
 
 export class WorkflowService {
+  /** 上次循环检测警告，注入到下次任务 context 后清空 */
+  private loopWarning: string | null = null;
+
   constructor(
     private readonly repo: WorkflowRepository,
     private readonly parse: (md: string) => WorkflowDefinition,
@@ -103,6 +106,12 @@ export class WorkflowService {
         parts.push('## 相关记忆\n\n' + memories.map(m => `- ${m.content}`).join('\n'));
       }
 
+      // 注入循环检测警告
+      if (this.loopWarning) {
+        parts.push(`## 循环检测警告\n\n${this.loopWarning}`);
+        this.loopWarning = null;
+      }
+
       return { task, context: parts.join('\n\n---\n\n') };
     } finally {
       await this.repo.unlock();
@@ -178,13 +187,21 @@ export class WorkflowService {
         // 检测重复失败模式
         const patternWarn = await this.detectFailurePattern(id, task);
 
+        // 循环检测
+        const loopResult = await detectLoop(this.repo.projectRoot(), id, detail, true);
+        if (loopResult) {
+          log.step('loop_detected', loopResult.message, { taskId: id, data: { strategy: loopResult.strategy } });
+          this.loopWarning = `[LOOP WARNING - ${loopResult.strategy}] ${loopResult.message}`;
+        }
+
         const { result, data: newData } = failTask(data, id);
         await this.repo.saveProgress(newData);
         log.debug(`checkpoint ${id}: failTask result=${result}, retries=${task.retries + 1}`);
         const msg = result === 'retry'
           ? `任务 ${id} 失败(第${task.retries + 1}次)，将重试`
           : `任务 ${id} 连续失败3次，已跳过`;
-        return patternWarn ? `${msg}\n${patternWarn}` : msg;
+        const warns = [patternWarn, loopResult ? `[LOOP] ${loopResult.message}` : null].filter(Boolean);
+        return warns.length ? `${msg}\n${warns.join('\n')}` : msg;
       }
 
       if (!detail.trim()) throw new Error(`任务 ${id} checkpoint内容不能为空`);
@@ -203,6 +220,13 @@ export class WorkflowService {
           source: entry.source,
           timestamp: new Date().toISOString(),
         });
+      }
+
+      // 循环检测（成功路径也记录，用于全局熔断统计）
+      const loopResult = await detectLoop(this.repo.projectRoot(), id, summaryLine, false);
+      if (loopResult) {
+        log.step('loop_detected', loopResult.message, { taskId: id, data: { strategy: loopResult.strategy } });
+        this.loopWarning = `[LOOP WARNING - ${loopResult.strategy}] ${loopResult.message}`;
       }
 
       await this.updateSummary(newData);
