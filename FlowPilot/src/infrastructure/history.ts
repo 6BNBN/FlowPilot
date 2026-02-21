@@ -39,7 +39,7 @@ export function collectStats(data: ProgressData): WorkflowStats {
     totalTasks: data.tasks.length,
     doneCount, skipCount, failCount, retryTotal,
     tasksByType, failsByType,
-    taskResults: data.tasks.map(t => ({ id: t.id, type: t.type, status: t.status, retries: t.retries })),
+    taskResults: data.tasks.map(t => ({ id: t.id, type: t.type, status: t.status, retries: t.retries, summary: t.summary || undefined })),
     startTime: data.startTime || new Date().toISOString(),
     endTime: new Date().toISOString(),
   };
@@ -101,7 +101,7 @@ export interface Experiment {
   observation: string;
   action: string;
   expected: string;
-  target: 'config' | 'protocol';
+  target: 'config' | 'protocol' | 'claude-md';
 }
 
 /** 反思报告 */
@@ -113,7 +113,7 @@ export interface ReflectReport {
 
 /** LLM 反思：调用 Claude 分析工作流统计 */
 async function llmReflect(stats: WorkflowStats): Promise<ReflectReport | null> {
-  const system = `你是工作流反思引擎。分析给定的工作流统计数据，找出失败模式和改进机会。返回 JSON: {"findings": ["发现1", ...], "experiments": [{"trigger":"触发原因","observation":"观察现象","action":"建议行动","expected":"预期效果","target":"config或protocol"}, ...]}。只返回 JSON，不要其他内容。`;
+  const system = `你是工作流反思引擎。分析给定的工作流统计数据，找出失败模式和改进机会。返回 JSON: {"findings": ["发现1", ...], "experiments": [{"trigger":"触发原因","observation":"观察现象","action":"建议行动","expected":"预期效果","target":"config或protocol或claude-md"}, ...]}。target=claude-md 表示修改 CLAUDE.md 协议区域。只返回 JSON，不要其他内容。`;
   const result = await callClaude(JSON.stringify(stats), system);
   if (!result) return null;
   try {
@@ -126,11 +126,85 @@ async function llmReflect(stats: WorkflowStats): Promise<ReflectReport | null> {
   return null;
 }
 
+/** 四维模式挖掘：从 checkpoint summary 中提取模式 */
+function fourDimensionAnalysis(stats: WorkflowStats): { findings: string[]; experiments: Experiment[] } {
+  const findings: string[] = [];
+  const experiments: Experiment[] = [];
+  const results = stats.taskResults ?? [];
+  const FAIL_RE = /fail|error|timeout|FAILED|异常|超时/i;
+
+  // friction: 失败任务 summary 中的失败原因模式
+  const failedWithSummary = results.filter(r => r.status === 'failed' && r.summary);
+  const frictionPatterns = new Map<string, number>();
+  for (const r of failedWithSummary) {
+    const matches = r.summary!.match(FAIL_RE);
+    if (matches) {
+      const key = matches[0].toLowerCase();
+      frictionPatterns.set(key, (frictionPatterns.get(key) ?? 0) + 1);
+    }
+  }
+  for (const [pattern, count] of frictionPatterns) {
+    if (count >= 2) {
+      findings.push(`[friction] 失败模式 "${pattern}" 出现 ${count} 次`);
+      experiments.push({
+        trigger: `重复失败模式: ${pattern}`, observation: `${count} 个任务因 "${pattern}" 失败`,
+        action: `在子Agent提示模板中添加 "${pattern}" 预防检查`, expected: '减少同类失败',
+        target: 'claude-md',
+      });
+    }
+  }
+
+  // delight: 一次通过、无重试的高效任务
+  const efficient = results.filter(r => r.status === 'done' && r.retries === 0);
+  if (efficient.length > 0 && stats.totalTasks > 0) {
+    const rate = ((efficient.length / stats.totalTasks) * 100).toFixed(0);
+    findings.push(`[delight] ${efficient.length}/${stats.totalTasks} 任务一次通过 (${rate}%)`);
+  }
+
+  // patterns: 任务类型分布 + summary 关键词
+  const typeEntries = Object.entries(stats.tasksByType);
+  if (typeEntries.length > 0) {
+    findings.push(`[patterns] 类型分布: ${typeEntries.map(([t, n]) => `${t}=${n}`).join(', ')}`);
+  }
+  const keywords = new Map<string, number>();
+  for (const r of results) {
+    if (!r.summary) continue;
+    for (const w of r.summary.split(/\s+/).filter(w => w.length > 2)) {
+      keywords.set(w, (keywords.get(w) ?? 0) + 1);
+    }
+  }
+  const topKw = [...keywords.entries()].filter(([, c]) => c >= 3).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  if (topKw.length) {
+    findings.push(`[patterns] 高频关键词: ${topKw.map(([w, c]) => `${w}(${c})`).join(', ')}`);
+  }
+
+  // gaps: 被跳过的任务 + 级联失败链
+  const skipped = results.filter(r => r.status === 'skipped');
+  if (skipped.length) {
+    findings.push(`[gaps] ${skipped.length} 个任务被跳过: ${skipped.map(r => r.id).join(',')}`);
+  }
+  let chain = 0, maxChain = 0;
+  for (const r of results) {
+    chain = r.status === 'failed' ? chain + 1 : 0;
+    maxChain = Math.max(maxChain, chain);
+  }
+  if (maxChain >= 2) {
+    findings.push(`[gaps] 最长连续失败链: ${maxChain} 个任务`);
+  }
+
+  return { findings, experiments };
+}
+
 /** 规则分析：从统计数据中提取 findings 和 experiments */
 function ruleReflect(stats: WorkflowStats): ReflectReport {
   const findings: string[] = [];
   const experiments: Experiment[] = [];
   const results = stats.taskResults ?? [];
+
+  // 四维模式挖掘
+  const fourD = fourDimensionAnalysis(stats);
+  findings.push(...fourD.findings);
+  experiments.push(...fourD.experiments);
 
   // 连续失败链检测
   let streak = 0;
@@ -254,6 +328,27 @@ async function loadLatestSnapshot(basePath: string): Promise<FilesSnapshot | nul
   } catch { return null; }
 }
 
+/** 追加 EXPERIMENTS.md 人类可读日志 */
+async function appendExperimentsMd(basePath: string, expLog: ExperimentLog, report: ReflectReport): Promise<void> {
+  const mdPath = join(basePath, '.flowpilot', 'EXPERIMENTS.md');
+  const existing = await safeRead(mdPath, '# Evolution Experiments\n');
+  const date = new Date().toISOString().slice(0, 10);
+  const applied = expLog.experiments.filter(e => e.applied);
+  if (!applied.length) return;
+
+  const entries = applied.map(e =>
+    `### [${date}] ${e.trigger}\n` +
+    `**触发**: ${e.trigger}\n` +
+    `**观察**: ${e.observation}\n` +
+    `**行动**: ${e.action} (target: ${e.target})\n` +
+    `**预期效果**: ${e.expected}\n` +
+    `**状态**: ${expLog.status}\n`
+  ).join('\n');
+
+  await mkdir(dirname(mdPath), { recursive: true });
+  await writeFile(mdPath, existing.trimEnd() + '\n\n' + entries, 'utf-8');
+}
+
 /** 实验引擎：基于反思报告自动调整配置和协议 */
 export async function experiment(
   report: ReflectReport,
@@ -264,15 +359,18 @@ export async function experiment(
 
   const configPath = join(basePath, '.flowpilot', 'config.json');
   const protocolPath = join(basePath, 'FlowPilot', 'src', 'templates', 'protocol.md');
+  const claudeMdPath = join(basePath, 'CLAUDE.md');
 
   // 预快照：实验前保存完整文件内容（参考 Memoh-v2 files_snapshot）
   const configSnapshot = await safeRead(configPath, '{}');
   const protocolSnapshot = await safeRead(protocolPath, '');
-  await saveSnapshot(basePath, { 'config.json': configSnapshot, 'protocol.md': protocolSnapshot });
+  const claudeMdSnapshot = await safeRead(claudeMdPath, '');
+  await saveSnapshot(basePath, { 'config.json': configSnapshot, 'protocol.md': protocolSnapshot, 'CLAUDE.md': claudeMdSnapshot });
 
   try {
     let configObj = JSON.parse(configSnapshot);
     let protocolContent = protocolSnapshot;
+    let claudeMdContent = claudeMdSnapshot;
 
     for (const exp of report.experiments) {
       const applied: AppliedExperiment = { ...exp, applied: false, snapshotBefore: '' };
@@ -289,6 +387,16 @@ export async function experiment(
           const appendix = `\n<!-- evolution: ${exp.trigger} -->\n> ${exp.action}\n`;
           protocolContent += appendix;
           applied.applied = true;
+        } else if (exp.target === 'claude-md') {
+          applied.snapshotBefore = claudeMdSnapshot;
+          // 只在 flowpilot 协议区域内追加
+          const endTag = '<!-- flowpilot:end -->';
+          const idx = claudeMdContent.indexOf(endTag);
+          if (idx >= 0) {
+            const insertion = `\n<!-- evolution: ${exp.trigger} -->\n> ${exp.action}\n`;
+            claudeMdContent = claudeMdContent.slice(0, idx) + insertion + claudeMdContent.slice(idx);
+            applied.applied = true;
+          }
         }
       } catch { /* 降级：applied 保持 false */ }
       log.experiments.push(applied);
@@ -303,6 +411,9 @@ export async function experiment(
       await mkdir(dirname(protocolPath), { recursive: true });
       await writeFile(protocolPath, protocolContent, 'utf-8');
     }
+    if (log.experiments.some(e => e.applied && e.target === 'claude-md')) {
+      await writeFile(claudeMdPath, claudeMdContent, 'utf-8');
+    }
   } catch {
     log.status = 'failed';
   }
@@ -314,6 +425,9 @@ export async function experiment(
   try { existing = JSON.parse(await readFile(logPath, 'utf-8')); } catch { /* 首次创建 */ }
   existing.push(log);
   await writeFile(logPath, JSON.stringify(existing, null, 2), 'utf-8');
+
+  // 追加 EXPERIMENTS.md 人类可读日志
+  await appendExperimentsMd(basePath, log, report);
 
   return log;
 }
@@ -342,6 +456,7 @@ export async function review(basePath: string): Promise<ReviewResult> {
   const historyDir = join(basePath, '.flowpilot', 'history');
   const configPath = join(basePath, '.flowpilot', 'config.json');
   const protocolPath = join(basePath, 'FlowPilot', 'src', 'templates', 'protocol.md');
+  const claudeMdPath = join(basePath, 'CLAUDE.md');
   const expPath = join(basePath, '.flowpilot', 'evolution', 'experiments.json');
 
   // 1. 加载历史（最近两轮）
@@ -404,6 +519,19 @@ export async function review(basePath: string): Promise<ReviewResult> {
     checks.push({ name: 'experiments.json', passed: true, detail: '文件不存在，跳过' });
   }
 
+  // CLAUDE.md 完整性：协议标记必须成对存在
+  const claudeMdRaw = await safeRead(claudeMdPath, '');
+  if (claudeMdRaw) {
+    const hasStart = claudeMdRaw.includes('<!-- flowpilot:start -->');
+    const hasEnd = claudeMdRaw.includes('<!-- flowpilot:end -->');
+    const intact = hasStart && hasEnd;
+    checks.push({ name: 'CLAUDE.md', passed: intact, detail: intact ? '协议标记完整' : '协议标记缺失或损坏' });
+    if (!intact && !rolledBack) {
+      rolledBack = true;
+      rollbackReason = 'CLAUDE.md 协议标记损坏';
+    }
+  }
+
   // 4. 自动回滚：从预快照精确恢复（而非 snapshotBefore）
   if (rolledBack) {
     try {
@@ -411,6 +539,7 @@ export async function review(basePath: string): Promise<ReviewResult> {
       if (snapshot) {
         if (snapshot.files['config.json']) await writeFile(configPath, snapshot.files['config.json'], 'utf-8');
         if (snapshot.files['protocol.md']) await writeFile(protocolPath, snapshot.files['protocol.md'], 'utf-8');
+        if (snapshot.files['CLAUDE.md']) await writeFile(claudeMdPath, snapshot.files['CLAUDE.md'], 'utf-8');
       }
       // 标记最近实验为 skipped
       const logs: ExperimentLog[] = JSON.parse(await readFile(expPath, 'utf-8'));
