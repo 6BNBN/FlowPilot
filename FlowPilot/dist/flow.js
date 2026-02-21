@@ -11,7 +11,7 @@ var import_node_child_process = require("child_process");
 var import_node_fs = require("fs");
 function getSubmodules() {
   if (!(0, import_node_fs.existsSync)(".gitmodules")) return [];
-  const out = (0, import_node_child_process.execSync)('git submodule --quiet foreach "echo $sm_path"', { stdio: "pipe", encoding: "utf-8" });
+  const out = (0, import_node_child_process.execFileSync)("git", ["submodule", "--quiet", "foreach", "echo $sm_path"], { stdio: "pipe", encoding: "utf-8" });
   return out.split("\n").filter(Boolean);
 }
 function groupBySubmodule(files, submodules) {
@@ -48,6 +48,41 @@ function gitCleanup() {
     const status = (0, import_node_child_process.execSync)("git status --porcelain", { stdio: "pipe", encoding: "utf-8" }).trim();
     if (status) {
       (0, import_node_child_process.execSync)('git stash push -m "flowpilot-resume: auto-stashed on interrupt recovery"', { stdio: "pipe" });
+    }
+  } catch {
+  }
+}
+function tagTask(taskId) {
+  try {
+    (0, import_node_child_process.execFileSync)("git", ["tag", `flowpilot/task-${taskId}`], { stdio: "pipe" });
+    return null;
+  } catch (e) {
+    return e.stderr?.toString?.() || e.message;
+  }
+}
+function rollbackToTask(taskId) {
+  const tag = `flowpilot/task-${taskId}`;
+  try {
+    (0, import_node_child_process.execFileSync)("git", ["rev-parse", tag], { stdio: "pipe" });
+    const log2 = (0, import_node_child_process.execFileSync)("git", ["log", "--oneline", `${tag}..HEAD`], { stdio: "pipe", encoding: "utf-8" }).trim();
+    if (!log2) return "\u6CA1\u6709\u9700\u8981\u56DE\u6EDA\u7684\u63D0\u4EA4";
+    (0, import_node_child_process.execFileSync)("git", ["revert", "--no-commit", `${tag}..HEAD`], { stdio: "pipe" });
+    (0, import_node_child_process.execFileSync)("git", ["commit", "-m", `rollback: revert to task-${taskId}`], { stdio: "pipe" });
+    return null;
+  } catch (e) {
+    try {
+      (0, import_node_child_process.execFileSync)("git", ["revert", "--abort"], { stdio: "pipe" });
+    } catch {
+    }
+    return e.stderr?.toString?.() || e.message;
+  }
+}
+function cleanTags() {
+  try {
+    const tags = (0, import_node_child_process.execFileSync)("git", ["tag", "-l", "flowpilot/*"], { stdio: "pipe", encoding: "utf-8" }).trim();
+    if (!tags) return;
+    for (const t of tags.split("\n")) {
+      if (t) (0, import_node_child_process.execFileSync)("git", ["tag", "-d", t], { stdio: "pipe" });
     }
   } catch {
   }
@@ -169,11 +204,11 @@ function detectCommands(cwd) {
 
 // src/infrastructure/fs-repository.ts
 var BUILTIN_TEMPLATE = (0, import_fs.existsSync)((0, import_path.join)(__dirname, "..", "templates", "protocol.md")) ? (0, import_path.join)(__dirname, "..", "templates", "protocol.md") : (0, import_path.join)(__dirname, "templates", "protocol.md");
-async function loadProtocolTemplate(basePath) {
+async function loadProtocolTemplate(basePath2) {
   try {
-    const config = JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(basePath, ".workflow", "config.json"), "utf-8"));
+    const config = JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(basePath2, ".workflow", "config.json"), "utf-8"));
     if (config.protocolTemplate) {
-      return await (0, import_promises.readFile)((0, import_path.join)(basePath, config.protocolTemplate), "utf-8");
+      return await (0, import_promises.readFile)((0, import_path.join)(basePath2, config.protocolTemplate), "utf-8");
     }
   } catch {
   }
@@ -182,11 +217,15 @@ async function loadProtocolTemplate(basePath) {
 var FsWorkflowRepository = class {
   root;
   ctxDir;
+  historyDir;
+  evolutionDir;
   base;
-  constructor(basePath) {
-    this.base = basePath;
-    this.root = (0, import_path.join)(basePath, ".workflow");
+  constructor(basePath2) {
+    this.base = basePath2;
+    this.root = (0, import_path.join)(basePath2, ".workflow");
     this.ctxDir = (0, import_path.join)(this.root, "context");
+    this.historyDir = (0, import_path.join)(basePath2, ".flowpilot", "history");
+    this.evolutionDir = (0, import_path.join)(basePath2, ".flowpilot", "evolution");
   }
   projectRoot() {
     return this.base;
@@ -234,6 +273,7 @@ var FsWorkflowRepository = class {
       "",
       `\u72B6\u6001: ${data.status}`,
       `\u5F53\u524D: ${data.current ?? "\u65E0"}`,
+      ...data.startTime ? [`\u5F00\u59CB: ${data.startTime}`] : [],
       "",
       "| ID | \u6807\u9898 | \u7C7B\u578B | \u4F9D\u8D56 | \u72B6\u6001 | \u91CD\u8BD5 | \u6458\u8981 | \u63CF\u8FF0 |",
       "|----|------|------|------|------|------|------|------|"
@@ -262,6 +302,7 @@ var FsWorkflowRepository = class {
     const name = (lines[0] ?? "").replace(/^#\s*/, "").trim();
     let status = "idle";
     let current = null;
+    let startTime;
     const tasks = [];
     for (const line of lines) {
       if (line.startsWith("\u72B6\u6001: ")) {
@@ -270,6 +311,7 @@ var FsWorkflowRepository = class {
       }
       if (line.startsWith("\u5F53\u524D: ")) current = line.slice(4).trim();
       if (current === "\u65E0") current = null;
+      if (line.startsWith("\u5F00\u59CB: ")) startTime = line.slice(4).trim();
       const m = line.match(/^\|\s*(\d{3,})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
       if (m) {
         const depsRaw = m[4].trim();
@@ -285,7 +327,7 @@ var FsWorkflowRepository = class {
         });
       }
     }
-    return { name, status, current, tasks };
+    return { name, status, current, tasks, ...startTime ? { startTime } : {} };
   }
   // --- context/ 任务详细产出 ---
   async clearContext() {
@@ -381,6 +423,40 @@ var FsWorkflowRepository = class {
   verify() {
     return runVerify(this.base);
   }
+  // --- .flowpilot/history/ 永久存储 ---
+  async saveHistory(stats) {
+    await this.ensure(this.historyDir);
+    const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+    const p = (0, import_path.join)(this.historyDir, `${ts}.json`);
+    await (0, import_promises.writeFile)(p, JSON.stringify(stats, null, 2), "utf-8");
+  }
+  async loadHistory() {
+    try {
+      const files = (await (0, import_promises.readdir)(this.historyDir)).filter((f) => f.endsWith(".json")).sort();
+      const results = [];
+      for (const f of files) {
+        try {
+          results.push(JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(this.historyDir, f), "utf-8")));
+        } catch {
+        }
+      }
+      return results;
+    } catch {
+      return [];
+    }
+  }
+  // --- .workflow/config.json ---
+  async loadConfig() {
+    try {
+      return JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(this.root, "config.json"), "utf-8"));
+    } catch {
+      return {};
+    }
+  }
+  async saveConfig(config) {
+    await this.ensure(this.root);
+    await (0, import_promises.writeFile)((0, import_path.join)(this.root, "config.json"), JSON.stringify(config, null, 2) + "\n", "utf-8");
+  }
   /** 清理注入的CLAUDE.md协议块和.claude/settings.json hooks */
   async cleanupInjections() {
     const mdPath = (0, import_path.join)(this.base, "CLAUDE.md");
@@ -403,6 +479,36 @@ var FsWorkflowRepository = class {
         await (0, import_promises.writeFile)(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
       }
     } catch {
+    }
+  }
+  tag(taskId) {
+    return tagTask(taskId);
+  }
+  rollback(taskId) {
+    return rollbackToTask(taskId);
+  }
+  cleanTags() {
+    cleanTags();
+  }
+  // --- .flowpilot/evolution/ 进化日志 ---
+  async saveEvolution(entry) {
+    await this.ensure(this.evolutionDir);
+    const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+    await (0, import_promises.writeFile)((0, import_path.join)(this.evolutionDir, `${ts}.json`), JSON.stringify(entry, null, 2), "utf-8");
+  }
+  async loadEvolutions() {
+    try {
+      const files = (await (0, import_promises.readdir)(this.evolutionDir)).filter((f) => f.endsWith(".json")).sort();
+      const results = [];
+      for (const f of files) {
+        try {
+          results.push(JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(this.evolutionDir, f), "utf-8")));
+        } catch {
+        }
+      }
+      return results;
+    } catch {
+      return [];
     }
   }
 };
@@ -587,9 +693,72 @@ function parseTasksMarkdown(markdown) {
 // src/infrastructure/hooks.ts
 var import_promises2 = require("fs/promises");
 var import_child_process = require("child_process");
+var import_path3 = require("path");
+
+// src/infrastructure/logger.ts
+var import_fs2 = require("fs");
 var import_path2 = require("path");
-async function runLifecycleHook(hookName, basePath, env) {
-  const configPath = (0, import_path2.join)(basePath, ".workflow", "config.json");
+var verbose = process.env.FLOWPILOT_VERBOSE === "1";
+var basePath = null;
+var workflowName = null;
+function enableVerbose() {
+  verbose = true;
+  process.env.FLOWPILOT_VERBOSE = "1";
+}
+function configureLogger(projectPath) {
+  basePath = projectPath;
+}
+function setWorkflowName(name) {
+  workflowName = name;
+}
+function logFilePath() {
+  if (!basePath || !workflowName) return null;
+  return (0, import_path2.join)(basePath, ".flowpilot", "logs", `${workflowName}.jsonl`);
+}
+function persist(entry) {
+  const p = logFilePath();
+  if (!p) return;
+  try {
+    (0, import_fs2.mkdirSync)((0, import_path2.dirname)(p), { recursive: true });
+    (0, import_fs2.appendFileSync)(p, JSON.stringify(entry) + "\n", "utf-8");
+  } catch {
+  }
+}
+var log = {
+  debug(msg) {
+    if (verbose) process.stderr.write(`[DEBUG] ${msg}
+`);
+  },
+  info(msg) {
+    process.stderr.write(`[INFO] ${msg}
+`);
+  },
+  warn(msg) {
+    process.stderr.write(`[WARN] ${msg}
+`);
+  },
+  /** 记录结构化日志条目 */
+  step(step, message, opts) {
+    const entry = {
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      step,
+      level: opts?.level ?? "info",
+      message,
+      ...opts?.taskId != null && { taskId: opts.taskId },
+      ...opts?.data != null && { data: opts.data },
+      ...opts?.durationMs != null && { durationMs: opts.durationMs }
+    };
+    persist(entry);
+    if (verbose) {
+      process.stderr.write(`[STEP:${step}] ${message}
+`);
+    }
+  }
+};
+
+// src/infrastructure/hooks.ts
+async function runLifecycleHook(hookName, basePath2, env) {
+  const configPath = (0, import_path3.join)(basePath2, ".workflow", "config.json");
   let config;
   try {
     config = JSON.parse(await (0, import_promises2.readFile)(configPath, "utf-8"));
@@ -599,8 +768,9 @@ async function runLifecycleHook(hookName, basePath, env) {
   const cmd = config.hooks?.[hookName];
   if (!cmd) return;
   try {
+    log.debug(`hook "${hookName}" executing: ${cmd}`);
     (0, import_child_process.execSync)(cmd, {
-      cwd: basePath,
+      cwd: basePath2,
       stdio: "pipe",
       timeout: 3e4,
       env: { ...process.env, ...env }
@@ -610,11 +780,519 @@ async function runLifecycleHook(hookName, basePath, env) {
   }
 }
 
+// src/infrastructure/history.ts
+function collectStats(data) {
+  const tasksByType = {};
+  const failsByType = {};
+  let retryTotal = 0, doneCount = 0, skipCount = 0, failCount = 0;
+  for (const t of data.tasks) {
+    tasksByType[t.type] = (tasksByType[t.type] ?? 0) + 1;
+    retryTotal += t.retries;
+    if (t.status === "done") doneCount++;
+    else if (t.status === "skipped") skipCount++;
+    else if (t.status === "failed") {
+      failCount++;
+      failsByType[t.type] = (failsByType[t.type] ?? 0) + 1;
+    }
+  }
+  return {
+    name: data.name,
+    totalTasks: data.tasks.length,
+    doneCount,
+    skipCount,
+    failCount,
+    retryTotal,
+    tasksByType,
+    failsByType,
+    startTime: data.startTime || (/* @__PURE__ */ new Date()).toISOString(),
+    endTime: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+function analyzeHistory(history) {
+  if (!history.length) return { suggestions: [], recommendedConfig: {} };
+  const suggestions = [];
+  const recommendedConfig = {};
+  const typeTotal = {};
+  const typeFails = {};
+  let totalRetries = 0, totalTasks = 0;
+  for (const h of history) {
+    totalTasks += h.totalTasks;
+    totalRetries += h.retryTotal;
+    for (const [t, n] of Object.entries(h.tasksByType)) {
+      typeTotal[t] = (typeTotal[t] ?? 0) + n;
+    }
+    for (const [t, n] of Object.entries(h.failsByType)) {
+      typeFails[t] = (typeFails[t] ?? 0) + n;
+    }
+  }
+  for (const [type, total] of Object.entries(typeTotal)) {
+    const fails = typeFails[type] ?? 0;
+    const rate = fails / total;
+    if (rate > 0.2 && total >= 3) {
+      suggestions.push(`${type} \u7C7B\u578B\u4EFB\u52A1\u5386\u53F2\u5931\u8D25\u7387 ${(rate * 100).toFixed(0)}%\uFF08${fails}/${total}\uFF09\uFF0C\u5EFA\u8BAE\u62C6\u5206\u66F4\u7EC6`);
+    }
+  }
+  if (totalTasks > 0) {
+    const avgRetry = totalRetries / totalTasks;
+    if (avgRetry > 1) {
+      suggestions.push(`\u5E73\u5747\u91CD\u8BD5\u6B21\u6570 ${avgRetry.toFixed(1)}\uFF0C\u5EFA\u8BAE\u589E\u52A0 retry \u4E0A\u9650`);
+      recommendedConfig.maxRetries = Math.min(Math.ceil(avgRetry) + 2, 8);
+    }
+  }
+  const totalSkips = history.reduce((s, h) => s + h.skipCount, 0);
+  if (totalTasks > 0 && totalSkips / totalTasks > 0.15) {
+    suggestions.push(`\u5386\u53F2\u8DF3\u8FC7\u7387 ${(totalSkips / totalTasks * 100).toFixed(0)}%\uFF0C\u5EFA\u8BAE\u51CF\u5C11\u4EFB\u52A1\u95F4\u4F9D\u8D56`);
+  }
+  return { suggestions, recommendedConfig };
+}
+
+// src/infrastructure/memory.ts
+var import_promises3 = require("fs/promises");
+var import_path4 = require("path");
+var MEMORY_FILE = "memory.json";
+var DF_FILE = "memory-df.json";
+var SNAPSHOT_FILE = "memory-snapshot.json";
+var EVERGREEN_SOURCES = ["architecture", "identity", "decision"];
+function temporalDecayScore(entry, halfLifeDays = 30) {
+  if (entry.evergreen || EVERGREEN_SOURCES.some((s) => entry.source.includes(s))) return 1;
+  const ageDays = (Date.now() - new Date(entry.timestamp).getTime()) / (24 * 60 * 60 * 1e3);
+  return Math.exp(-Math.LN2 / halfLifeDays * ageDays);
+}
+function memoryPath(basePath2) {
+  return (0, import_path4.join)(basePath2, ".flowpilot", MEMORY_FILE);
+}
+function dfPath(basePath2) {
+  return (0, import_path4.join)(basePath2, ".flowpilot", DF_FILE);
+}
+function snapshotPath(basePath2) {
+  return (0, import_path4.join)(basePath2, ".flowpilot", SNAPSHOT_FILE);
+}
+function tokenize(text) {
+  const lower = text.toLowerCase();
+  const tokens = [];
+  for (const m of lower.matchAll(/[a-z0-9_]{2,}|[a-z]/g)) {
+    tokens.push(m[0]);
+  }
+  const cjk = [...lower.matchAll(/[\u4e00-\u9fff\u3400-\u4dbf]/g)].map((m) => m[0]);
+  for (let i = 0; i < cjk.length; i++) {
+    tokens.push(cjk[i]);
+    if (i + 1 < cjk.length) tokens.push(cjk[i] + cjk[i + 1]);
+  }
+  return tokens;
+}
+function termFrequency(tokens) {
+  const tf = /* @__PURE__ */ new Map();
+  for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
+  return tf;
+}
+async function loadDf(basePath2) {
+  try {
+    return JSON.parse(await (0, import_promises3.readFile)(dfPath(basePath2), "utf-8"));
+  } catch {
+    return { docCount: 0, df: {} };
+  }
+}
+async function saveDf(basePath2, stats) {
+  const p = dfPath(basePath2);
+  await (0, import_promises3.mkdir)((0, import_path4.dirname)(p), { recursive: true });
+  await (0, import_promises3.writeFile)(p, JSON.stringify(stats), "utf-8");
+}
+function rebuildDf(entries) {
+  const active = entries.filter((e) => !e.archived);
+  const df = {};
+  for (const e of active) {
+    const unique = new Set(tokenize(e.content));
+    for (const t of unique) df[t] = (df[t] ?? 0) + 1;
+  }
+  return { docCount: active.length, df };
+}
+function tfidfVector(tokens, stats) {
+  const tf = termFrequency(tokens);
+  const vec = /* @__PURE__ */ new Map();
+  const N = Math.max(stats.docCount, 1);
+  for (const [term, freq] of tf) {
+    const docFreq = stats.df[term] ?? 0;
+    const idf = Math.log(1 + N / (1 + docFreq));
+    vec.set(term, freq * idf);
+  }
+  return vec;
+}
+function cosineSimilarity(a, b) {
+  let dot = 0, normA = 0, normB = 0;
+  for (const [k, v] of a) {
+    normA += v * v;
+    const bv = b.get(k);
+    if (bv !== void 0) dot += v * bv;
+  }
+  for (const v of b.values()) normB += v * v;
+  if (!normA || !normB) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+async function loadMemory(basePath2) {
+  try {
+    return JSON.parse(await (0, import_promises3.readFile)(memoryPath(basePath2), "utf-8"));
+  } catch {
+    return [];
+  }
+}
+async function saveMemory(basePath2, entries) {
+  const p = memoryPath(basePath2);
+  await (0, import_promises3.mkdir)((0, import_path4.dirname)(p), { recursive: true });
+  await (0, import_promises3.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
+}
+async function appendMemory(basePath2, entry) {
+  const entries = await loadMemory(basePath2);
+  const stats = rebuildDf(entries);
+  const queryTokens = tokenize(entry.content);
+  const queryVec = tfidfVector(queryTokens, stats);
+  const idx = entries.findIndex((e) => {
+    if (e.archived) return false;
+    const vec = tfidfVector(tokenize(e.content), stats);
+    return cosineSimilarity(queryVec, vec) > 0.8;
+  });
+  if (idx >= 0) {
+    const updated = entries.map(
+      (e, i) => i === idx ? { ...e, content: entry.content, timestamp: entry.timestamp, source: entry.source } : e
+    );
+    log.debug(`memory: \u66F4\u65B0\u5DF2\u6709\u6761\u76EE (\u76F8\u4F3C\u5EA6>0.8)`);
+    await saveMemory(basePath2, updated);
+  } else {
+    const newEntries = [...entries, { ...entry, refs: 0, archived: false }];
+    log.debug(`memory: \u65B0\u589E\u6761\u76EE, \u603B\u8BA1 ${newEntries.length}`);
+    await saveMemory(basePath2, newEntries);
+  }
+  await saveDf(basePath2, rebuildDf(await loadMemory(basePath2)));
+}
+function mmrRerank(candidates, k, lambda = 0.7) {
+  const selected = [];
+  const remaining = [...candidates];
+  while (selected.length < k && remaining.length > 0) {
+    let bestIdx = 0, bestScore = -Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const rel = remaining[i].score;
+      let maxSim = 0;
+      for (const s of selected) {
+        maxSim = Math.max(maxSim, cosineSimilarity(remaining[i].vec, s.vec));
+      }
+      const mmr = lambda * rel - (1 - lambda) * maxSim;
+      if (mmr > bestScore) {
+        bestScore = mmr;
+        bestIdx = i;
+      }
+    }
+    selected.push(remaining.splice(bestIdx, 1)[0]);
+  }
+  return selected.map((s) => ({ entry: s.entry, score: s.score }));
+}
+async function queryMemory(basePath2, taskDescription) {
+  const entries = await loadMemory(basePath2);
+  const active = entries.filter((e) => !e.archived);
+  if (!active.length) return [];
+  const stats = await loadDf(basePath2);
+  const fallback = stats.docCount > 0 ? stats : rebuildDf(entries);
+  const queryVec = tfidfVector(tokenize(taskDescription), fallback);
+  const candidates = active.map((e) => {
+    const vec = tfidfVector(tokenize(e.content), fallback);
+    return { entry: e, score: cosineSimilarity(queryVec, vec) * temporalDecayScore(e), vec };
+  }).filter((s) => s.score > 0.05);
+  const reranked = mmrRerank(candidates, 5);
+  if (reranked.length) {
+    const hitSet = new Set(reranked.map((s) => s.entry));
+    const updated = entries.map((e) => hitSet.has(e) ? { ...e, refs: e.refs + 1 } : e);
+    await saveMemory(basePath2, updated);
+    log.debug(`memory: \u67E5\u8BE2\u547D\u4E2D ${reranked.length} \u6761`);
+  }
+  return reranked.map((s) => ({ ...s.entry, refs: s.entry.refs + 1 }));
+}
+async function decayMemory(basePath2) {
+  const entries = await loadMemory(basePath2);
+  let count = 0;
+  const updated = entries.map((e) => {
+    if (!e.archived && e.refs === 0 && temporalDecayScore(e) < 0.1) {
+      count++;
+      return { ...e, archived: true };
+    }
+    return e;
+  });
+  if (count) {
+    await saveMemory(basePath2, updated);
+    log.debug(`memory: \u8870\u51CF\u5F52\u6863 ${count} \u6761`);
+  }
+  return count;
+}
+async function saveSnapshot(basePath2, entries) {
+  const p = snapshotPath(basePath2);
+  await (0, import_promises3.mkdir)((0, import_path4.dirname)(p), { recursive: true });
+  await (0, import_promises3.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
+}
+async function compactMemory(basePath2, targetCount) {
+  const entries = await loadMemory(basePath2);
+  const active = entries.filter((e) => !e.archived);
+  if (active.length <= 1) return 0;
+  await saveSnapshot(basePath2, entries);
+  const stats = rebuildDf(entries);
+  const vecs = active.map((e) => tfidfVector(tokenize(e.content), stats));
+  const merged = /* @__PURE__ */ new Set();
+  const result = [...entries.filter((e) => e.archived)];
+  for (let i = 0; i < active.length; i++) {
+    if (merged.has(i)) continue;
+    let current = active[i];
+    for (let j = i + 1; j < active.length; j++) {
+      if (merged.has(j)) continue;
+      if (cosineSimilarity(vecs[i], vecs[j]) > 0.7) {
+        const newer = new Date(active[j].timestamp) > new Date(current.timestamp) ? active[j] : current;
+        current = { ...newer, refs: Math.max(current.refs, active[j].refs) };
+        merged.add(j);
+      }
+    }
+    result.push(current);
+  }
+  const activeResult = result.filter((e) => !e.archived);
+  if (targetCount && activeResult.length > targetCount) {
+    const sorted = [...activeResult].sort(
+      (a, b) => a.refs !== b.refs ? a.refs - b.refs : new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+    const toRemove = new Set(sorted.slice(0, activeResult.length - targetCount));
+    const final = result.filter((e) => !toRemove.has(e));
+    await saveMemory(basePath2, final);
+    await saveDf(basePath2, rebuildDf(final));
+    log.debug(`memory: \u538B\u7F29 ${entries.length} \u2192 ${final.length} \u6761`);
+    return entries.length - final.length;
+  }
+  await saveMemory(basePath2, result);
+  await saveDf(basePath2, rebuildDf(result));
+  const removed = entries.length - result.length;
+  if (removed) log.debug(`memory: \u538B\u7F29\u5408\u5E76 ${removed} \u6761`);
+  return removed;
+}
+
+// src/infrastructure/extractor.ts
+function extractTaggedKnowledge(text, source) {
+  const TAG_RE = /\[(?:REMEMBER|DECISION|ARCHITECTURE|IMPORTANT)\]\s*(.+)/gi;
+  const results = [];
+  for (const line of text.split("\n")) {
+    const m = TAG_RE.exec(line);
+    if (m) results.push({ content: m[1].trim(), source });
+    TAG_RE.lastIndex = 0;
+  }
+  return results;
+}
+function extractDecisionPatterns(text, source) {
+  const patterns = [
+    /选择了(.+?)而非(.+)/g,
+    /因为(.+?)所以(.+)/g,
+    /决定使用(.+)/g,
+    /放弃(.+?)改用(.+)/g,
+    /chose\s+(.+?)\s+over\s+(.+)/gi,
+    /decided\s+to\s+use\s+(.+)/gi,
+    /switched\s+from\s+(.+?)\s+to\s+(.+)/gi
+  ];
+  const results = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const re of patterns) {
+    for (const m of text.matchAll(re)) {
+      const content = m[0].trim();
+      if (!seen.has(content)) {
+        seen.add(content);
+        results.push({ content, source });
+      }
+    }
+  }
+  return results;
+}
+function extractTechStack(text, source) {
+  const TECH_NAMES = [
+    "React",
+    "Vue",
+    "Angular",
+    "Svelte",
+    "Next\\.js",
+    "Nuxt",
+    "Express",
+    "Fastify",
+    "Koa",
+    "NestJS",
+    "Hono",
+    "PostgreSQL",
+    "MySQL",
+    "MongoDB",
+    "Redis",
+    "SQLite",
+    "TypeScript",
+    "GraphQL",
+    "Prisma",
+    "Drizzle",
+    "Sequelize",
+    "Tailwind",
+    "Vite",
+    "Webpack",
+    "esbuild",
+    "Rollup",
+    "Docker",
+    "Kubernetes",
+    "Terraform",
+    "AWS",
+    "Vitest",
+    "Jest"
+  ];
+  const techRe = new RegExp(`\\b(${TECH_NAMES.join("|")})\\b`, "gi");
+  const configRe = /\b[\w-]+\.config\b|\.\w+rc\b/g;
+  const results = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const m of text.matchAll(techRe)) {
+    const name = m[1];
+    if (!seen.has(name.toLowerCase())) {
+      seen.add(name.toLowerCase());
+      results.push({ content: `\u6280\u672F\u6808: ${name}`, source });
+    }
+  }
+  for (const m of text.matchAll(configRe)) {
+    const cfg = m[0];
+    if (!seen.has(cfg.toLowerCase())) {
+      seen.add(cfg.toLowerCase());
+      results.push({ content: `\u914D\u7F6E\u9879: ${cfg}`, source });
+    }
+  }
+  return results;
+}
+function extractAll(text, source) {
+  const tagged = extractTaggedKnowledge(text, source);
+  const decisions = extractDecisionPatterns(text, source);
+  const primary = [...tagged, ...decisions];
+  const primaryText = primary.map((e) => e.content).join(" ").toLowerCase();
+  const tech = extractTechStack(text, source).filter((e) => {
+    const keyword = e.content.replace(/^(技术栈|配置项): /i, "").toLowerCase();
+    return !primaryText.includes(keyword);
+  });
+  const seen = /* @__PURE__ */ new Set();
+  return [...primary, ...tech].filter((e) => {
+    if (seen.has(e.content)) return false;
+    seen.add(e.content);
+    return true;
+  });
+}
+
+// src/infrastructure/loop-detector.ts
+var import_promises4 = require("fs/promises");
+var import_path5 = require("path");
+var WINDOW_SIZE = 20;
+var STATE_FILE = "loop-state.json";
+function fnv1a(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = h * 16777619 >>> 0;
+  }
+  return h;
+}
+function tokenize2(text) {
+  const tokens = /* @__PURE__ */ new Set();
+  for (const m of text.toLowerCase().matchAll(/[a-z0-9_]+|[\u4e00-\u9fff]/g)) {
+    tokens.add(m[0]);
+  }
+  return tokens;
+}
+function similarity(a, b) {
+  const sa = tokenize2(a), sb = tokenize2(b);
+  if (!sa.size || !sb.size) return 0;
+  let inter = 0;
+  for (const t of sa) if (sb.has(t)) inter++;
+  return inter / (sa.size + sb.size - inter);
+}
+function statePath(basePath2) {
+  return (0, import_path5.join)(basePath2, ".workflow", STATE_FILE);
+}
+async function loadWindow(basePath2) {
+  try {
+    return JSON.parse(await (0, import_promises4.readFile)(statePath(basePath2), "utf-8"));
+  } catch {
+    return [];
+  }
+}
+async function saveWindow(basePath2, window) {
+  const p = statePath(basePath2);
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
+  await (0, import_promises4.writeFile)(p, JSON.stringify(window), "utf-8");
+}
+function repeatedNoProgress(window) {
+  if (window.length < 3) return null;
+  const last3 = window.slice(-3);
+  if (!last3.every((r) => r.status === "failed")) return null;
+  const sim01 = similarity(last3[0].summary, last3[1].summary);
+  const sim12 = similarity(last3[1].summary, last3[2].summary);
+  if (sim01 > 0.8 && sim12 > 0.8) {
+    return {
+      stuck: true,
+      strategy: "repeatedNoProgress",
+      message: `\u8FDE\u7EED3\u6B21\u76F8\u4F3C\u5931\u8D25\uFF08\u76F8\u4F3C\u5EA6 ${sim01.toFixed(2)}/${sim12.toFixed(2)}\uFF09\uFF0C\u4EFB\u52A1\u53EF\u80FD\u9677\u5165\u6B7B\u5FAA\u73AF`
+    };
+  }
+  return null;
+}
+function pingPong(window) {
+  if (window.length < 4) return null;
+  const last4 = window.slice(-4);
+  if (!last4.every((r) => r.status === "failed")) return null;
+  if (last4[0].taskId === last4[2].taskId && last4[1].taskId === last4[3].taskId && last4[0].taskId !== last4[1].taskId) {
+    return {
+      stuck: true,
+      strategy: "pingPong",
+      message: `\u4EFB\u52A1 ${last4[0].taskId} \u548C ${last4[1].taskId} \u4EA4\u66FF\u5931\u8D25\uFF0C\u7591\u4F3C\u4E52\u4E53\u5FAA\u73AF`
+    };
+  }
+  return null;
+}
+function globalCircuitBreaker(window) {
+  if (window.length < 5) return null;
+  const failCount = window.filter((r) => r.status === "failed").length;
+  const rate = failCount / window.length;
+  if (rate > 0.6) {
+    return {
+      stuck: true,
+      strategy: "globalCircuitBreaker",
+      message: `\u6ED1\u52A8\u7A97\u53E3\u5931\u8D25\u7387 ${(rate * 100).toFixed(0)}%\uFF08${failCount}/${window.length}\uFF09\uFF0C\u5EFA\u8BAE\u6682\u505C\u5DE5\u4F5C\u6D41\u6392\u67E5\u95EE\u9898`
+    };
+  }
+  return null;
+}
+async function detect(basePath2, taskId, summary, failed) {
+  const window = await loadWindow(basePath2);
+  const record = {
+    taskId,
+    summary,
+    status: failed ? "failed" : "done",
+    hash: fnv1a(summary),
+    timestamp: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  const updated = [...window, record].slice(-WINDOW_SIZE);
+  await saveWindow(basePath2, updated);
+  return repeatedNoProgress(updated) ?? pingPong(updated) ?? globalCircuitBreaker(updated);
+}
+
 // src/application/workflow-service.ts
+var import_promises5 = require("fs/promises");
+var import_path6 = require("path");
 var WorkflowService = class {
   constructor(repo2, parse) {
     this.repo = repo2;
     this.parse = parse;
+  }
+  loopWarningPath() {
+    return (0, import_path6.join)(this.repo.projectRoot(), ".workflow", "loop-warning.txt");
+  }
+  async saveLoopWarning(msg) {
+    const p = this.loopWarningPath();
+    await (0, import_promises5.mkdir)((0, import_path6.join)(this.repo.projectRoot(), ".workflow"), { recursive: true });
+    await (0, import_promises5.writeFile)(p, msg, "utf-8");
+  }
+  async loadAndClearLoopWarning() {
+    try {
+      const msg = await (0, import_promises5.readFile)(this.loopWarningPath(), "utf-8");
+      await (0, import_promises5.unlink)(this.loopWarningPath());
+      return msg || null;
+    } catch {
+      return null;
+    }
   }
   /** init: 解析任务markdown → 生成progress/tasks */
   async init(tasksMd, force = false) {
@@ -637,8 +1315,10 @@ var WorkflowService = class {
       name: def.name,
       status: "running",
       current: null,
-      tasks
+      tasks,
+      startTime: (/* @__PURE__ */ new Date()).toISOString()
     };
+    setWorkflowName(def.name);
     await this.repo.saveProgress(data);
     await this.repo.saveTasks(tasksMd);
     await this.repo.saveSummary(`# ${def.name}
@@ -647,6 +1327,12 @@ ${def.description}
 `);
     await this.repo.ensureClaudeMd();
     await this.repo.ensureHooks();
+    await this.applyHistoryInsights();
+    await decayMemory(this.repo.projectRoot());
+    const memories = await loadMemory(this.repo.projectRoot());
+    if (memories.filter((e) => !e.archived).length > 50) {
+      await compactMemory(this.repo.projectRoot());
+    }
     return data;
   }
   /** next: 获取下一个可执行任务（含依赖上下文） */
@@ -660,11 +1346,15 @@ ${def.description}
         throw new Error(`\u6709 ${active.length} \u4E2A\u4EFB\u52A1\u4ECD\u4E3A active \u72B6\u6001\uFF08${active.map((t) => t.id).join(",")}\uFF09\uFF0C\u8BF7\u5148\u6267\u884C node flow.js status \u68C0\u67E5\u5E76\u8865 checkpoint\uFF0C\u6216 node flow.js resume \u91CD\u7F6E`);
       }
       const cascaded = cascadeSkip(data.tasks);
+      const skippedByC = cascaded.filter((t, i) => t.status === "skipped" && data.tasks[i].status !== "skipped");
+      if (skippedByC.length) log.debug(`next: cascade skip ${skippedByC.map((t) => t.id).join(",")}`);
       const task = findNextTask(cascaded);
       if (!task) {
         await this.repo.saveProgress({ ...data, tasks: cascaded });
+        log.debug("next: \u65E0\u53EF\u6267\u884C\u4EFB\u52A1");
         return null;
       }
+      log.debug(`next: \u6FC0\u6D3B\u4EFB\u52A1 ${task.id} (deps: ${task.deps.join(",") || "\u65E0"})`);
       const activated = cascaded.map((t) => t.id === task.id ? { ...t, status: "active" } : t);
       await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
       await runLifecycleHook("onTaskStart", this.repo.projectRoot(), { TASK_ID: task.id, TASK_TITLE: task.title });
@@ -674,6 +1364,16 @@ ${def.description}
       for (const depId of task.deps) {
         const ctx = await this.repo.loadTaskContext(depId);
         if (ctx) parts.push(ctx);
+      }
+      const memories = await queryMemory(this.repo.projectRoot(), `${task.title} ${task.description}`);
+      if (memories.length) {
+        parts.push("## \u76F8\u5173\u8BB0\u5FC6\n\n" + memories.map((m) => `- ${m.content}`).join("\n"));
+      }
+      const loopWarning = await this.loadAndClearLoopWarning();
+      if (loopWarning) {
+        parts.push(`## \u5FAA\u73AF\u68C0\u6D4B\u8B66\u544A
+
+${loopWarning}`);
       }
       return { task, context: parts.join("\n\n---\n\n") };
     } finally {
@@ -694,8 +1394,10 @@ ${def.description}
       const tasks = findParallelTasks(cascaded);
       if (!tasks.length) {
         await this.repo.saveProgress({ ...data, tasks: cascaded });
+        log.debug("nextBatch: \u65E0\u53EF\u5E76\u884C\u4EFB\u52A1");
         return [];
       }
+      log.debug(`nextBatch: \u6FC0\u6D3B ${tasks.map((t) => t.id).join(",")}`);
       const activeIds = new Set(tasks.map((t) => t.id));
       const activated = cascaded.map((t) => activeIds.has(t.id) ? { ...t, status: "active" } : t);
       await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
@@ -703,6 +1405,7 @@ ${def.description}
         await runLifecycleHook("onTaskStart", this.repo.projectRoot(), { TASK_ID: t.id, TASK_TITLE: t.title });
       }
       const summary = await this.repo.loadSummary();
+      const loopWarning = await this.loadAndClearLoopWarning();
       const results = [];
       for (const task of tasks) {
         const parts = [];
@@ -710,6 +1413,15 @@ ${def.description}
         for (const depId of task.deps) {
           const ctx = await this.repo.loadTaskContext(depId);
           if (ctx) parts.push(ctx);
+        }
+        const memories = await queryMemory(this.repo.projectRoot(), `${task.title} ${task.description}`);
+        if (memories.length) {
+          parts.push("## \u76F8\u5173\u8BB0\u5FC6\n\n" + memories.map((m) => `- ${m.content}`).join("\n"));
+        }
+        if (loopWarning) {
+          parts.push(`## \u5FAA\u73AF\u68C0\u6D4B\u8B66\u544A
+
+${loopWarning}`);
         }
         results.push({ task, context: parts.join("\n\n---\n\n") });
       }
@@ -725,24 +1437,50 @@ ${def.description}
       const data = await this.requireProgress();
       const task = data.tasks.find((t) => t.id === id);
       if (!task) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
+      log.debug(`checkpoint ${id}: \u5F53\u524D\u72B6\u6001=${task.status}, retries=${task.retries}`);
       if (task.status !== "active") {
         throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u53EA\u6709 active \u72B6\u6001\u53EF\u4EE5 checkpoint`);
       }
       if (detail === "FAILED") {
+        await this.appendFailureContext(id, task, detail);
+        const patternWarn = await this.detectFailurePattern(id, task);
+        const loopResult2 = await detect(this.repo.projectRoot(), id, detail, true);
+        if (loopResult2) {
+          log.step("loop_detected", loopResult2.message, { taskId: id, data: { strategy: loopResult2.strategy } });
+          await this.saveLoopWarning(`[LOOP WARNING - ${loopResult2.strategy}] ${loopResult2.message}`);
+        }
         const { result, data: newData2 } = failTask(data, id);
         await this.repo.saveProgress(newData2);
-        return result === "retry" ? `\u4EFB\u52A1 ${id} \u5931\u8D25(\u7B2C${task.retries}\u6B21)\uFF0C\u5C06\u91CD\u8BD5` : `\u4EFB\u52A1 ${id} \u8FDE\u7EED\u5931\u8D253\u6B21\uFF0C\u5DF2\u8DF3\u8FC7`;
+        log.debug(`checkpoint ${id}: failTask result=${result}, retries=${task.retries + 1}`);
+        const msg2 = result === "retry" ? `\u4EFB\u52A1 ${id} \u5931\u8D25(\u7B2C${task.retries + 1}\u6B21)\uFF0C\u5C06\u91CD\u8BD5` : `\u4EFB\u52A1 ${id} \u8FDE\u7EED\u5931\u8D253\u6B21\uFF0C\u5DF2\u8DF3\u8FC7`;
+        const warns = [patternWarn, loopResult2 ? `[LOOP] ${loopResult2.message}` : null].filter(Boolean);
+        return warns.length ? `${msg2}
+${warns.join("\n")}` : msg2;
       }
       if (!detail.trim()) throw new Error(`\u4EFB\u52A1 ${id} checkpoint\u5185\u5BB9\u4E0D\u80FD\u4E3A\u7A7A`);
       const summaryLine = detail.split("\n")[0].slice(0, 80);
       const newData = completeTask(data, id, summaryLine);
+      log.debug(`checkpoint ${id}: \u5B8C\u6210, summary="${summaryLine}"`);
       await this.repo.saveProgress(newData);
       await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}
 
 ${detail}
 `);
+      for (const entry of extractAll(detail, `task-${id}`)) {
+        await appendMemory(this.repo.projectRoot(), {
+          content: entry.content,
+          source: entry.source,
+          timestamp: (/* @__PURE__ */ new Date()).toISOString()
+        });
+      }
+      const loopResult = await detect(this.repo.projectRoot(), id, summaryLine, false);
+      if (loopResult) {
+        log.step("loop_detected", loopResult.message, { taskId: id, data: { strategy: loopResult.strategy } });
+        await this.saveLoopWarning(`[LOOP WARNING - ${loopResult.strategy}] ${loopResult.message}`);
+      }
       await this.updateSummary(newData);
       const commitErr = this.repo.commit(id, task.title, summaryLine, files);
+      if (!commitErr) this.repo.tag(id);
       await runLifecycleHook("onTaskComplete", this.repo.projectRoot(), { TASK_ID: id, TASK_TITLE: task.title });
       const doneCount = newData.tasks.filter((t) => t.status === "done").length;
       let msg = `\u4EFB\u52A1 ${id} \u5B8C\u6210 (${doneCount}/${newData.tasks.length})`;
@@ -762,13 +1500,17 @@ ${detail}
   async resume() {
     const data = await this.repo.loadProgress();
     if (!data) return "\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41\uFF0C\u7B49\u5F85\u9700\u6C42\u8F93\u5165";
+    log.debug(`resume: status=${data.status}, current=${data.current}`);
     if (data.status === "idle") return "\u5DE5\u4F5C\u6D41\u5F85\u547D\u4E2D\uFF0C\u7B49\u5F85\u9700\u6C42\u8F93\u5165";
     if (data.status === "completed") return "\u5DE5\u4F5C\u6D41\u5DF2\u5168\u90E8\u5B8C\u6210";
     if (data.status === "finishing") return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${data.name}
 \u6B63\u5728\u6536\u5C3E\u9636\u6BB5\uFF0C\u8BF7\u6267\u884C node flow.js finish`;
     const { data: newData, resetId } = resumeProgress(data);
     await this.repo.saveProgress(newData);
-    if (resetId) this.repo.cleanup();
+    if (resetId) {
+      log.debug(`resume: \u91CD\u7F6E\u4EFB\u52A1 ${resetId}`);
+      this.repo.cleanup();
+    }
     const doneCount = newData.tasks.filter((t) => t.status === "done").length;
     const total = newData.tasks.length;
     if (resetId) {
@@ -787,7 +1529,7 @@ ${detail}
       const data = await this.requireProgress();
       const maxNum = data.tasks.reduce((m, t) => Math.max(m, parseInt(t.id, 10)), 0);
       const id = makeTaskId(maxNum + 1);
-      data.tasks.push({
+      const newTask = {
         id,
         title,
         description: "",
@@ -796,8 +1538,9 @@ ${detail}
         deps: [],
         summary: "",
         retries: 0
-      });
-      await this.repo.saveProgress(data);
+      };
+      const newTasks = [...data.tasks, newTask];
+      await this.repo.saveProgress({ ...data, tasks: newTasks });
       return `\u5DF2\u8FFD\u52A0\u4EFB\u52A1 ${id}: ${title} [${type}]`;
     } finally {
       await this.repo.unlock();
@@ -812,10 +1555,10 @@ ${detail}
       if (!task) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
       if (task.status === "done") return `\u4EFB\u52A1 ${id} \u5DF2\u5B8C\u6210\uFF0C\u65E0\u9700\u8DF3\u8FC7`;
       const warn = task.status === "active" ? "\uFF08\u8B66\u544A: \u8BE5\u4EFB\u52A1\u4E3A active \u72B6\u6001\uFF0C\u5B50Agent\u53EF\u80FD\u4ECD\u5728\u8FD0\u884C\uFF09" : "";
-      task.status = "skipped";
-      task.summary = "\u624B\u52A8\u8DF3\u8FC7";
-      data.current = null;
-      await this.repo.saveProgress(data);
+      const newTasks = data.tasks.map(
+        (t) => t.id === id ? { ...t, status: "skipped", summary: "\u624B\u52A8\u8DF3\u8FC7" } : t
+      );
+      await this.repo.saveProgress({ ...data, current: null, tasks: newTasks });
       return `\u5DF2\u8DF3\u8FC7\u4EFB\u52A1 ${id}: ${task.title}${warn}`;
     } finally {
       await this.repo.unlock();
@@ -850,16 +1593,17 @@ ${detail}
     const data = await this.requireProgress();
     if (!isAllDone(data.tasks)) throw new Error("\u8FD8\u6709\u672A\u5B8C\u6210\u7684\u4EFB\u52A1\uFF0C\u8BF7\u5148\u5B8C\u6210\u6240\u6709\u4EFB\u52A1");
     if (data.status === "finishing") return "\u5DF2\u5904\u4E8Ereview\u901A\u8FC7\u72B6\u6001\uFF0C\u53EF\u4EE5\u6267\u884C node flow.js finish";
-    data.status = "finishing";
-    await this.repo.saveProgress(data);
+    await this.repo.saveProgress({ ...data, status: "finishing" });
     return "\u4EE3\u7801\u5BA1\u67E5\u5DF2\u901A\u8FC7\uFF0C\u8BF7\u6267\u884C node flow.js finish \u5B8C\u6210\u6536\u5C3E";
   }
   /** finish: 智能收尾 - 先verify，review后置 */
   async finish() {
     const data = await this.requireProgress();
+    log.debug(`finish: status=${data.status}`);
     if (data.status === "idle" || data.status === "completed") return "\u5DE5\u4F5C\u6D41\u5DF2\u5B8C\u6210\uFF0C\u65E0\u9700\u91CD\u590Dfinish";
     if (!isAllDone(data.tasks)) throw new Error("\u8FD8\u6709\u672A\u5B8C\u6210\u7684\u4EFB\u52A1\uFF0C\u8BF7\u5148\u5B8C\u6210\u6240\u6709\u4EFB\u52A1");
     const result = this.repo.verify();
+    log.debug(`finish: verify passed=${result.passed}`);
     if (!result.passed) {
       return `\u9A8C\u8BC1\u5931\u8D25: ${result.error}
 \u8BF7\u4FEE\u590D\u540E\u91CD\u65B0\u6267\u884C node flow.js finish`;
@@ -873,7 +1617,23 @@ ${detail}
     const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : "", failed.length ? `${failed.length} failed` : ""].filter(Boolean).join(", ");
     const titles = done.map((t) => `- ${t.id}: ${t.title}`).join("\n");
     await runLifecycleHook("onWorkflowFinish", this.repo.projectRoot(), { WORKFLOW_NAME: data.name });
+    const wfStats = collectStats(data);
+    await this.repo.saveHistory(wfStats);
+    const configNow = await this.repo.loadConfig();
+    const evolutions = await this.repo.loadEvolutions();
+    const lastEvo = evolutions[evolutions.length - 1];
+    const configBefore = lastEvo?.configAfter ?? {};
+    if (JSON.stringify(configBefore) !== JSON.stringify(configNow)) {
+      await this.repo.saveEvolution({
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        workflowName: data.name,
+        configBefore,
+        configAfter: configNow,
+        suggestions: []
+      });
+    }
     await this.repo.cleanupInjections();
+    this.repo.cleanTags();
     const commitErr = this.repo.commit("finish", data.name || "\u5DE5\u4F5C\u6D41\u5B8C\u6210", `${stats}
 
 ${titles}`);
@@ -892,15 +1652,52 @@ ${stats}
 \u5DF2\u63D0\u4EA4\u6700\u7EC8commit\uFF0C\u5DE5\u4F5C\u6D41\u56DE\u5230\u5F85\u547D\u72B6\u6001
 \u7B49\u5F85\u4E0B\u4E00\u4E2A\u9700\u6C42...`;
   }
+  /** rollback: 回滚到指定任务的快照 */
+  async rollback(id) {
+    await this.repo.lock();
+    try {
+      const data = await this.requireProgress();
+      const task = data.tasks.find((t) => t.id === id);
+      if (!task) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
+      if (task.status !== "done") throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u53EA\u80FD\u56DE\u6EDA\u5DF2\u5B8C\u6210\u7684\u4EFB\u52A1`);
+      const err = this.repo.rollback(id);
+      if (err) return `\u56DE\u6EDA\u5931\u8D25: ${err}`;
+      const idx = parseInt(id, 10);
+      const newTasks = data.tasks.map(
+        (t) => parseInt(t.id, 10) >= idx && t.status === "done" ? { ...t, status: "pending", summary: "" } : t
+      );
+      await this.repo.saveProgress({ ...data, current: null, tasks: newTasks });
+      const resetCount = newTasks.filter((t, i) => t.status === "pending" && data.tasks[i].status === "done").length;
+      return `\u5DF2\u56DE\u6EDA\u5230\u4EFB\u52A1 ${id} \u4E4B\u524D\u7684\u72B6\u6001\uFF0C${resetCount} \u4E2A\u4EFB\u52A1\u91CD\u7F6E\u4E3A pending`;
+    } finally {
+      await this.repo.unlock();
+    }
+  }
   /** abort: 中止工作流，清理 .workflow/ 目录 */
   async abort() {
     const data = await this.repo.loadProgress();
     if (!data) return "\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41\uFF0C\u65E0\u9700\u4E2D\u6B62";
-    data.status = "aborted";
-    await this.repo.saveProgress(data);
+    await this.repo.saveProgress({ ...data, status: "aborted" });
     await this.repo.cleanupInjections();
     await this.repo.clearAll();
     return `\u5DE5\u4F5C\u6D41 "${data.name}" \u5DF2\u4E2D\u6B62\uFF0C.workflow/ \u5DF2\u6E05\u7406`;
+  }
+  /** rollbackEvolution: 从进化日志恢复历史 config */
+  async rollbackEvolution(index) {
+    const evolutions = await this.repo.loadEvolutions();
+    if (!evolutions.length) return "\u65E0\u8FDB\u5316\u65E5\u5FD7";
+    if (index < 0 || index >= evolutions.length) return `\u7D22\u5F15\u8D8A\u754C\uFF0C\u6709\u6548\u8303\u56F4: 0-${evolutions.length - 1}`;
+    const target = evolutions[index];
+    const configBefore = await this.repo.loadConfig();
+    await this.repo.saveConfig(target.configBefore);
+    await this.repo.saveEvolution({
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      workflowName: `rollback-to-${index}`,
+      configBefore,
+      configAfter: target.configBefore,
+      suggestions: ["\u624B\u52A8\u56DE\u6EDA"]
+    });
+    return `\u5DF2\u56DE\u6EDA\u5230\u8FDB\u5316\u70B9 ${index}\uFF08${target.timestamp}\uFF09`;
   }
   /** status: 全局进度 */
   async status() {
@@ -979,16 +1776,78 @@ ${stats}
     }
     await this.repo.saveSummary(lines.join("\n") + "\n");
   }
+  /** 读取历史经验，输出建议，自动写入 config.json（闭环进化） */
+  async applyHistoryInsights() {
+    const history = await this.repo.loadHistory();
+    if (!history.length) return;
+    const { suggestions, recommendedConfig } = analyzeHistory(history);
+    if (suggestions.length) {
+      log.info("[\u5386\u53F2\u7ECF\u9A8C\u5EFA\u8BAE]");
+      for (const s of suggestions) log.info(`  - ${s}`);
+    }
+    if (!Object.keys(recommendedConfig).length) return;
+    const configBefore = await this.repo.loadConfig();
+    const merged = { ...configBefore };
+    let changed = false;
+    for (const [k, v] of Object.entries(recommendedConfig)) {
+      if (!(k in merged)) {
+        merged[k] = v;
+        changed = true;
+      }
+    }
+    if (changed) {
+      await this.repo.saveConfig(merged);
+      await this.repo.saveEvolution({
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        workflowName: (await this.repo.loadProgress())?.name ?? "",
+        configBefore,
+        configAfter: merged,
+        suggestions
+      });
+      log.info("[\u5386\u53F2\u7ECF\u9A8C] \u5DF2\u57FA\u4E8E\u5386\u53F2\u6570\u636E\u81EA\u52A8\u8C03\u6574\u9ED8\u8BA4\u53C2\u6570");
+    }
+  }
+  /** 将失败原因追加到 context/task-{id}.md，标记 [FAILED] */
+  async appendFailureContext(id, task, detail) {
+    const existing = await this.repo.loadTaskContext(id) ?? "";
+    const entry = `
+## [FAILED] \u7B2C${task.retries + 1}\u6B21\u5931\u8D25
+
+${detail}
+`;
+    const content = existing ? existing.trimEnd() + "\n" + entry : `# task-${id}: ${task.title}
+${entry}`;
+    await this.repo.saveTaskContext(id, content);
+  }
+  /** 检测连续失败模式：3次FAILED且摘要相似(>60%)时输出警告 */
+  async detectFailurePattern(id, task) {
+    if (task.retries < 2) return null;
+    const ctx = await this.repo.loadTaskContext(id);
+    if (!ctx) return null;
+    const reasons = [...ctx.matchAll(/## \[FAILED\] .+?\n\n(.+?)(?=\n##|\n*$)/gs)].map((m) => m[1].trim());
+    if (reasons.length < 3) return null;
+    const last3 = reasons.slice(-3);
+    const sim01 = this.similarity(last3[0], last3[1]);
+    const sim12 = this.similarity(last3[1], last3[2]);
+    log.debug(`detectFailurePattern ${id}: sim01=${sim01.toFixed(2)}, sim12=${sim12.toFixed(2)}`);
+    if (sim01 > 0.6 && sim12 > 0.6) {
+      const msg = `[WARN] \u4EFB\u52A1 ${id} \u9677\u5165\u91CD\u590D\u5931\u8D25\u6A21\u5F0F\uFF0C\u5EFA\u8BAE skip \u6216\u4FEE\u6539\u4EFB\u52A1\u63CF\u8FF0`;
+      log.warn(msg);
+      return msg;
+    }
+    return null;
+  }
   async requireProgress() {
     const data = await this.repo.loadProgress();
     if (!data) throw new Error("\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41\uFF0C\u8BF7\u5148 node flow.js init");
+    setWorkflowName(data.name);
     return data;
   }
 };
 
 // src/interfaces/cli.ts
-var import_fs2 = require("fs");
-var import_path3 = require("path");
+var import_fs3 = require("fs");
+var import_path7 = require("path");
 
 // src/interfaces/formatter.ts
 var ICON = {
@@ -1067,6 +1926,11 @@ var CLI = class {
   }
   async run(argv) {
     const args = argv.slice(2);
+    const verboseIdx = args.indexOf("--verbose");
+    if (verboseIdx >= 0) {
+      enableVerbose();
+      args.splice(verboseIdx, 1);
+    }
     try {
       const output = await this.dispatch(args);
       process.stdout.write(output + "\n");
@@ -1116,9 +1980,9 @@ var CLI = class {
           }
         }
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
-          const filePath = (0, import_path3.resolve)(rest[fileIdx + 1]);
-          if ((0, import_path3.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
-          detail = (0, import_fs2.readFileSync)(filePath, "utf-8");
+          const filePath = (0, import_path7.resolve)(rest[fileIdx + 1]);
+          if ((0, import_path7.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
+          detail = (0, import_fs3.readFileSync)(filePath, "utf-8");
         } else if (rest.length > 1 && fileIdx < 0 && filesIdx < 0) {
           detail = rest.slice(1).join(" ");
         } else {
@@ -1144,6 +2008,11 @@ var CLI = class {
         return await s.resume();
       case "abort":
         return await s.abort();
+      case "rollback": {
+        const id = rest[0];
+        if (!id) throw new Error("\u9700\u8981\u4EFB\u52A1ID");
+        return await s.rollback(id);
+      }
       case "add": {
         const typeIdx = rest.indexOf("--type");
         const rawType = typeIdx >= 0 && rest[typeIdx + 1] || "general";
@@ -1158,7 +2027,7 @@ var CLI = class {
     }
   }
 };
-var USAGE = `\u7528\u6CD5: node flow.js <command>
+var USAGE = `\u7528\u6CD5: node flow.js [--verbose] <command>
   init [--force]       \u521D\u59CB\u5316\u5DE5\u4F5C\u6D41 (stdin\u4F20\u5165\u4EFB\u52A1markdown\uFF0C\u65E0stdin\u5219\u63A5\u7BA1\u9879\u76EE)
   next [--batch]       \u83B7\u53D6\u4E0B\u4E00\u4E2A\u5F85\u6267\u884C\u4EFB\u52A1 (--batch \u8FD4\u56DE\u6240\u6709\u53EF\u5E76\u884C\u4EFB\u52A1)
   checkpoint <id>      \u8BB0\u5F55\u4EFB\u52A1\u5B8C\u6210 [--file <path> | stdin | \u5185\u8054\u6587\u672C] [--files f1 f2 ...]
@@ -1168,9 +2037,14 @@ var USAGE = `\u7528\u6CD5: node flow.js <command>
   status               \u67E5\u770B\u5168\u5C40\u8FDB\u5EA6
   resume               \u4E2D\u65AD\u6062\u590D
   abort                \u4E2D\u6B62\u5DE5\u4F5C\u6D41\u5E76\u6E05\u7406 .workflow/ \u76EE\u5F55
-  add <\u63CF\u8FF0>           \u8FFD\u52A0\u4EFB\u52A1 [--type frontend|backend|general]`;
+  rollback <id>        \u56DE\u6EDA\u5230\u6307\u5B9A\u4EFB\u52A1\u7684\u5FEB\u7167 (git revert + \u91CD\u7F6E\u540E\u7EED\u4EFB\u52A1)
+  add <\u63CF\u8FF0>           \u8FFD\u52A0\u4EFB\u52A1 [--type frontend|backend|general]
+
+\u5168\u5C40\u9009\u9879:
+  --verbose            \u8F93\u51FA\u8C03\u8BD5\u65E5\u5FD7 (\u7B49\u540C FLOWPILOT_VERBOSE=1)`;
 
 // src/main.ts
+configureLogger(process.cwd());
 var repo = new FsWorkflowRepository(process.cwd());
 var service = new WorkflowService(repo, parseTasksMarkdown);
 var cli = new CLI(service);

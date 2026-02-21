@@ -1,23 +1,23 @@
-1. [general] 记忆检索升级：TF-IDF + 余弦相似度替代 Jaccard
-   重写 memory.ts 的检索引擎：1) 实现 TF-IDF 向量化（维护文档频率统计）2) 用余弦相似度替代 Jaccard 3) 改进 tokenize 支持多语言分词（参考 Memoh-v2 的 CJK+拉丁混合分词）4) 查询结果加 MMR 重排序保证多样性。保持零外部依赖。
+1. [backend] BM25 替代 TF-IDF 检索算法
+   将 memory.ts 的 TF-IDF 检索升级为 BM25 算法（k1=1.2, b=0.75），使用 FNV-1a 20-bit hash 做稀疏向量索引，参考 Memoh-v2 的 indexer.go 实现。保留现有 tokenize/cosineSimilarity/mmrRerank 函数，替换 tfidfVector 为 bm25Vector，新增 avgDocLen 统计到 DfStats。
 
-2. [general] 记忆自动提取：从 checkpoint summary 智能提取知识（无需 LLM）
-   参考 Memoh-v2 的 fact extraction，用规则引擎替代 LLM：1) 除 [REMEMBER] 外，自动识别 [DECISION]/[ARCHITECTURE]/[IMPORTANT] 标记内容写入永久记忆 2) 自动提取"选择了X而非Y"、"因为X所以Y"等决策模式 3) 提取技术栈关键词（框架名、库名、配置项）作为记忆条目
+2. [backend] 多语言分词增强：日韩文 bigram + 语言检测
+   增强 memory.ts 的 tokenize 函数，新增日文平假名/片假名（\u3040-\u30ff）和韩文（\uac00-\ud7af）的单字+bigram 支持。新增 detectLanguage 辅助函数用于 CJK 比例检测。
 
-3. [general] 记忆压缩与合并机制 (deps: 1)
-   参考 Memoh-v2 的 Compact：1) 新增 compactMemory 函数，合并语义相似(>0.7)的条目 2) 支持目标数量压缩（如从100条压缩到50条）3) 在 init 时当条目超过阈值自动触发压缩 4) 压缩前保存快照支持回滚
+3. [backend] CJK token 估算与智能截断工具 (deps: 2)
+   新建 src/infrastructure/truncation.ts，实现：1) estimateCharsPerToken(text) 基于 CJK 比例估算（1.5*cjkRatio + 3.5*(1-cjkRatio)）；2) truncateHeadTail(text, maxChars) 保留 head 70% + tail 20%；3) computeMaxChars(contextWindow) 公式 contextWindow × 0.3 × charsPerToken。参考 Memoh-v2 agent/src 的截断逻辑。
 
-4. [general] 时间衰减升级：指数衰减 + 常青豁免 (deps: 1)
-   参考 Memoh-v2 的 applyTemporalDecay：1) 将简单30天阈值改为指数衰减评分（可配半衰期，默认30天）2) 查询时将衰减分数纳入排序权重 3) 标记为 evergreen 的来源（如 architecture、identity）豁免衰减 4) 修复 decayMemory 中的 mutation 问题
+4. [backend] 记忆查询文件级缓存：SHA-256 + LRU (deps: 1)
+   在 memory.ts 新增查询缓存层：SHA-256 作为缓存键，LRU 淘汰策略（最大50条，超限裁剪10%最旧），缓存文件 .flowpilot/memory-cache.json。queryMemory 命中缓存直接返回，appendMemory/compactMemory 时清除缓存。
 
-5. [general] 历史进化引擎：自动应用建议 + startTime 修复 (deps: 1,2,3,4)
-   对齐 Memoh-v2 的 Heartbeat 自我进化：1) 修复 collectStats 的 startTime 为空问题 2) analyzeHistory 的建议自动写入 config.json（闭环）3) 新增 evolution-log：每次 finish 保存进化快照（config 变更前后对比）4) 支持回滚到历史进化点
+5. [backend] BM25 统计增强持久化 (deps: 1)
+   增强 DfStats 结构新增 avgDocLen 字段，appendMemory 时更新平均文档长度。saveDf 在每次 appendMemory/compactMemory 后自动调用。确保 rebuildDf 也计算 avgDocLen。
 
-6. [general] 结构化日志系统：step 类型 + trace 导出
-   参考 Memoh-v2 的 ProcessLog：1) 扩展 logger 支持结构化日志（step 类型：memory_searched/checkpoint_saved/task_started 等）2) 日志持久化到 .flowpilot/logs/ 3) 新增 trace 导出功能（按工作流/任务导出完整日志链）4) 保留 stderr 输出兼容现有 --verbose
+6. [backend] RRF 多源融合预留 + 智能截断集成 (deps: 1, 3)
+   在 memory.ts 新增 rrfFuse(sources: ScoredEntry[][]) 函数实现 Reciprocal Rank Fusion（k=60）。在 queryMemory 中预留双源融合入口（当前仅 BM25 单源，但架构支持扩展）。将 truncation.ts 的 truncateHeadTail 集成到 workflow-service.ts 的 updateSummary 方法中。
 
-7. [general] 工具级循环检测：三策略防护 (deps: 6)
-   对齐 Memoh-v2 的 loop-detection.ts 三策略：1) 在 checkpoint 中解析子Agent行为模式（从 summary 提取工具调用信息）2) 重复无进展检测：连续相似 summary 判定卡住 3) 乒乓检测：任务间交替失败模式 4) 全局熔断：滑动窗口内失败率超阈值暂停工作流 5) 检测到循环时注入提示到下次任务 context
+7. [backend] 心跳式自检机制 (deps: 1, 2)
+   在 workflow-service.ts 新增 healthCheck() 方法：检查活跃任务超时（>30分钟无 checkpoint 告警）、记忆膨胀检测（>100条触发自动压缩）、DF 统计一致性校验。在 next 命令中自动调用。
 
-8. [general] 测试补全 + 集成验证 (deps: 1,2,3,4,5,6,7)
-   为所有新增功能编写测试：1) TF-IDF 检索测试 2) 自动提取测试 3) 压缩合并测试 4) 指数衰减测试 5) 进化引擎测试 6) 结构化日志测试 7) 循环检测测试 8) 全量回归测试
+8. [general] 全量测试验证 (deps: 1, 2, 3, 4, 5, 6, 7)
+   为所有新增功能编写测试：BM25 评分正确性、多语言分词覆盖、CJK 估算精度、LRU 缓存命中/淘汰、RRF 融合排序、心跳自检触发条件。运行 npm test 确保全部通过。

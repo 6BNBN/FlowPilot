@@ -1,3 +1,3 @@
-# task-005: 历史进化引擎：自动应用建议 + startTime 修复
+# task-005: BM25 统计增强持久化
 
-历史进化引擎完成：修复startTime、config自动写入闭环、evolution log保存/回滚
+BM25统计增强持久化已完善：DfStats含avgDocLen、rebuildDf正确计算、loadDf默认值、appendMemory/compactMemory均调用saveDf、bm25Vector正确使用avgDocLen，编译通过

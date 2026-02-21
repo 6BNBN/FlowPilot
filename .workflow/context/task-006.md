@@ -1,3 +1,3 @@
-# task-006: 结构化日志系统：step 类型 + trace 导出
+# task-006: RRF 多源融合预留 + 智能截断集成
 
-结构化日志系统完成：扩展logger支持StepType+LogEntry+JSONL持久化+trace导出，保留stderr兼容
+RRF多源融合函数+queryMemory双源预留+updateSummary智能截断集成

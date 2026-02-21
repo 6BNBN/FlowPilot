@@ -1,3 +1,3 @@
-# task-001: 记忆检索升级：TF-IDF + 余弦相似度替代 Jaccard
+# task-001: BM25 替代 TF-IDF 检索算法
 
-TF-IDF+余弦相似度+MMR重排序替代Jaccard，DF持久化到memory-df.json，改进tokenize支持CJK双字gram，7个测试全通过
+BM25替代TF-IDF：DfStats新增avgDocLen，rebuildDf计算平均文档长度，bm25Vector实现BM25公式(k1=1.2,b=0.75)，所有调用点已更新，编译通过

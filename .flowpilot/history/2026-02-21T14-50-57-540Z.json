@@ -1,0 +1,15 @@
+{
+  "name": "",
+  "totalTasks": 8,
+  "doneCount": 8,
+  "skipCount": 0,
+  "failCount": 0,
+  "retryTotal": 0,
+  "tasksByType": {
+    "backend": 7,
+    "general": 1
+  },
+  "failsByType": {},
+  "startTime": "2026-02-21T14:34:40.085Z",
+  "endTime": "2026-02-21T14:50:57.539Z"
+}
