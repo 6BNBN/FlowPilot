@@ -5,7 +5,7 @@
 
 import type { WorkflowStats, ProgressData } from '../domain/types';
 import { callClaude } from './extractor';
-import { writeFile, mkdir } from 'fs/promises';
+import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 
 /** 分析结果 */
@@ -181,6 +181,18 @@ function ruleReflect(stats: WorkflowStats): ReflectReport {
   return { timestamp: new Date().toISOString(), findings, experiments };
 }
 
+/** 已应用的实验 */
+export interface AppliedExperiment extends Experiment {
+  applied: boolean;
+  snapshotBefore: string;
+}
+
+/** 实验日志 */
+export interface ExperimentLog {
+  timestamp: string;
+  experiments: AppliedExperiment[];
+}
+
 /** 反思引擎：分析工作流成败模式，输出结构化反思报告 */
 export async function reflect(stats: WorkflowStats, basePath: string): Promise<ReflectReport> {
   // 尝试 LLM 路径
@@ -194,4 +206,71 @@ export async function reflect(stats: WorkflowStats, basePath: string): Promise<R
   await writeFile(p, JSON.stringify(report, null, 2), 'utf-8');
 
   return report;
+}
+
+/** 安全读取文件，不存在返回 fallback */
+async function safeRead(p: string, fallback: string): Promise<string> {
+  try { return await readFile(p, 'utf-8'); } catch { return fallback; }
+}
+
+/** 已知 config 参数名 */
+const KNOWN_PARAMS = ['maxRetries', 'timeout', 'parallelLimit', 'verifyTimeout'] as const;
+
+/** 从 action 文本提取参数名和数值 */
+function parseConfigAction(action: string): { key: string; value: number } | null {
+  for (const k of KNOWN_PARAMS) {
+    if (action.includes(k)) {
+      const m = action.match(/(\d+)/);
+      if (m) return { key: k, value: Number(m[1]) };
+    }
+  }
+  return null;
+}
+
+/** 实验引擎：基于反思报告自动调整配置和协议 */
+export async function experiment(
+  report: ReflectReport,
+  basePath: string,
+): Promise<ExperimentLog> {
+  const log: ExperimentLog = { timestamp: new Date().toISOString(), experiments: [] };
+  if (!report.experiments.length) return log;
+
+  const configPath = join(basePath, '.flowpilot', 'config.json');
+  const protocolPath = join(basePath, 'FlowPilot', 'src', 'templates', 'protocol.md');
+
+  for (const exp of report.experiments) {
+    const applied: AppliedExperiment = { ...exp, applied: false, snapshotBefore: '' };
+    try {
+      if (exp.target === 'config') {
+        const raw = await safeRead(configPath, '{}');
+        applied.snapshotBefore = raw;
+        const parsed = parseConfigAction(exp.action);
+        if (parsed) {
+          const cfg = JSON.parse(raw);
+          cfg[parsed.key] = parsed.value;
+          await mkdir(dirname(configPath), { recursive: true });
+          await writeFile(configPath, JSON.stringify(cfg, null, 2), 'utf-8');
+          applied.applied = true;
+        }
+      } else if (exp.target === 'protocol') {
+        const content = await safeRead(protocolPath, '');
+        applied.snapshotBefore = content;
+        const appendix = `\n<!-- evolution: ${exp.trigger} -->\n> ${exp.action}\n`;
+        await mkdir(dirname(protocolPath), { recursive: true });
+        await writeFile(protocolPath, content + appendix, 'utf-8');
+        applied.applied = true;
+      }
+    } catch { /* 降级：applied 保持 false */ }
+    log.experiments.push(applied);
+  }
+
+  // 追加保存实验日志
+  const logPath = join(basePath, '.flowpilot', 'evolution', 'experiments.json');
+  await mkdir(dirname(logPath), { recursive: true });
+  let existing: ExperimentLog[] = [];
+  try { existing = JSON.parse(await readFile(logPath, 'utf-8')); } catch { /* 首次创建 */ }
+  existing.push(log);
+  await writeFile(logPath, JSON.stringify(existing, null, 2), 'utf-8');
+
+  return log;
 }
