@@ -174,6 +174,7 @@ export class WorkflowService {
       await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
       await this.updateSummary(newData);
       const commitErr = this.repo.commit(id, task.title, summaryLine, files);
+      if (!commitErr) this.repo.tag(id);
       await runLifecycleHook('onTaskComplete', this.repo.projectRoot(), { TASK_ID: id, TASK_TITLE: task.title });
 
       const doneCount = newData.tasks.filter(t => t.status === 'done').length;
