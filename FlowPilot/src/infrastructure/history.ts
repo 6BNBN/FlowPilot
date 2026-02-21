@@ -4,6 +4,9 @@
  */
 
 import type { WorkflowStats, ProgressData } from '../domain/types';
+import { callClaude } from './extractor';
+import { writeFile, mkdir } from 'fs/promises';
+import { join, dirname } from 'path';
 
 /** 分析结果 */
 export interface HistoryAnalysis {
@@ -35,6 +38,7 @@ export function collectStats(data: ProgressData): WorkflowStats {
     totalTasks: data.tasks.length,
     doneCount, skipCount, failCount, retryTotal,
     tasksByType, failsByType,
+    taskResults: data.tasks.map(t => ({ id: t.id, type: t.type, status: t.status, retries: t.retries })),
     startTime: data.startTime || new Date().toISOString(),
     endTime: new Date().toISOString(),
   };
@@ -88,4 +92,106 @@ export function analyzeHistory(history: WorkflowStats[]): HistoryAnalysis {
   }
 
   return { suggestions, recommendedConfig };
+}
+
+/** 实验建议 */
+export interface Experiment {
+  trigger: string;
+  observation: string;
+  action: string;
+  expected: string;
+  target: 'config' | 'protocol';
+}
+
+/** 反思报告 */
+export interface ReflectReport {
+  timestamp: string;
+  findings: string[];
+  experiments: Experiment[];
+}
+
+/** LLM 反思：调用 Claude 分析工作流统计 */
+async function llmReflect(stats: WorkflowStats): Promise<ReflectReport | null> {
+  const system = `你是工作流反思引擎。分析给定的工作流统计数据，找出失败模式和改进机会。返回 JSON: {"findings": ["发现1", ...], "experiments": [{"trigger":"触发原因","observation":"观察现象","action":"建议行动","expected":"预期效果","target":"config或protocol"}, ...]}。只返回 JSON，不要其他内容。`;
+  const result = await callClaude(JSON.stringify(stats), system);
+  if (!result) return null;
+  try {
+    const match = result.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(match ? match[0] : result);
+    if (Array.isArray(parsed.findings) && Array.isArray(parsed.experiments)) {
+      return { timestamp: new Date().toISOString(), findings: parsed.findings, experiments: parsed.experiments };
+    }
+  } catch { /* 降级到规则分析 */ }
+  return null;
+}
+
+/** 规则分析：从统计数据中提取 findings 和 experiments */
+function ruleReflect(stats: WorkflowStats): ReflectReport {
+  const findings: string[] = [];
+  const experiments: Experiment[] = [];
+  const results = stats.taskResults ?? [];
+
+  // 连续失败链检测
+  let streak = 0;
+  for (const r of results) {
+    streak = r.status === 'failed' ? streak + 1 : 0;
+    if (streak >= 2) {
+      findings.push(`连续失败链：从任务 ${results[results.indexOf(r) - 1].id} 开始连续失败`);
+      experiments.push({
+        trigger: '连续失败链', observation: `${streak} 个任务连续失败`,
+        action: '在失败任务间插入诊断步骤', expected: '打断失败传播', target: 'protocol',
+      });
+      break;
+    }
+  }
+
+  // 类型失败集中度
+  for (const [type, total] of Object.entries(stats.tasksByType)) {
+    const fails = stats.failsByType[type] ?? 0;
+    if (total > 0 && fails / total > 0.3) {
+      findings.push(`类型 ${type} 失败集中：${fails}/${total}`);
+      experiments.push({
+        trigger: '类型失败集中', observation: `${type} 失败率 ${((fails / total) * 100).toFixed(0)}%`,
+        action: `拆分 ${type} 任务为更小粒度`, expected: '降低单任务失败率', target: 'config',
+      });
+    }
+  }
+
+  // 重试热点
+  for (const r of results) {
+    if (r.retries > 2) {
+      findings.push(`重试热点：任务 ${r.id} 重试 ${r.retries} 次`);
+      experiments.push({
+        trigger: '重试热点', observation: `任务 ${r.id} 重试 ${r.retries} 次`,
+        action: '增加该任务的上下文或前置检查', expected: '减少重试次数', target: 'protocol',
+      });
+    }
+  }
+
+  // 跳过率过高
+  if (stats.totalTasks > 0 && stats.skipCount / stats.totalTasks > 0.2) {
+    const rate = ((stats.skipCount / stats.totalTasks) * 100).toFixed(0);
+    findings.push(`级联跳过严重：跳过率 ${rate}%`);
+    experiments.push({
+      trigger: '级联跳过', observation: `${stats.skipCount}/${stats.totalTasks} 任务被跳过`,
+      action: '减少任务间硬依赖，改用软依赖', expected: '降低跳过率至 10% 以下', target: 'config',
+    });
+  }
+
+  return { timestamp: new Date().toISOString(), findings, experiments };
+}
+
+/** 反思引擎：分析工作流成败模式，输出结构化反思报告 */
+export async function reflect(stats: WorkflowStats, basePath: string): Promise<ReflectReport> {
+  // 尝试 LLM 路径
+  const llmReport = await llmReflect(stats);
+  const report = llmReport ?? ruleReflect(stats);
+
+  // 保存反思报告
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  const p = join(basePath, '.flowpilot', 'evolution', `reflect-${ts}.json`);
+  await mkdir(dirname(p), { recursive: true });
+  await writeFile(p, JSON.stringify(report, null, 2), 'utf-8');
+
+  return report;
 }

@@ -13,7 +13,7 @@ export interface ExtractedEntry {
 }
 
 /** 调用 Claude API（零外部依赖，使用内置 https） */
-async function callClaude(prompt: string, systemPrompt: string): Promise<string | null> {
+export async function callClaude(prompt: string, systemPrompt: string): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
 

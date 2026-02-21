@@ -65,6 +65,8 @@ export interface WorkflowStats {
   tasksByType: Record<string, number>;
   /** 按类型统计失败数 */
   failsByType: Record<string, number>;
+  /** 每个任务的结果明细 */
+  taskResults: { id: string; type: TaskType; status: TaskStatus; retries: number }[];
   /** 工作流开始时间 ISO */
   startTime: string;
   /** 工作流结束时间 ISO */
