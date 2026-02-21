@@ -60,12 +60,17 @@ export class WorkflowService {
       }
 
       const cascaded = cascadeSkip(data.tasks);
+      const skippedByC = cascaded.filter((t, i) => t.status === 'skipped' && data.tasks[i].status !== 'skipped');
+      if (skippedByC.length) log.debug(`next: cascade skip ${skippedByC.map(t => t.id).join(',')}`);
+
       const task = findNextTask(cascaded);
       if (!task) {
         await this.repo.saveProgress({ ...data, tasks: cascaded });
+        log.debug('next: 无可执行任务');
         return null;
       }
 
+      log.debug(`next: 激活任务 ${task.id} (deps: ${task.deps.join(',') || '无'})`);
       const activated = cascaded.map(t => t.id === task.id ? { ...t, status: 'active' as const } : t);
       await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
       await runLifecycleHook('onTaskStart', this.repo.projectRoot(), { TASK_ID: task.id, TASK_TITLE: task.title });
