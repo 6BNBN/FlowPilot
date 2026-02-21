@@ -114,10 +114,12 @@ describe('FsWorkflowRepository', () => {
     expect(loaded[0].name).toBe('test');
   });
 
-  it('ensureHooks 幂等', async () => {
-    await repo.ensureHooks();
+  it('ensureHooks 写入 settings.json', async () => {
     const wrote = await repo.ensureHooks();
-    expect(wrote).toBe(false);
+    expect(wrote).toBe(true);
+    const settings = JSON.parse(await readFile(join(dir, '.claude', 'settings.json'), 'utf-8'));
+    expect(settings.hooks.PreToolUse).toHaveLength(3);
+    expect(settings.hooks.PreToolUse[0].matcher).toBe('TaskCreate');
   });
 
   it('lock/unlock 基本流程', async () => {

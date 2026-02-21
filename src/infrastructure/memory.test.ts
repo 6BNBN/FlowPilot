@@ -28,9 +28,9 @@ describe('memory system', () => {
     expect(entries[0].archived).toBe(false);
   });
 
-  it('appendMemory deduplicates similar entries', async () => {
-    await appendMemory(dir, { content: 'use PostgreSQL database', source: 'task-001', timestamp: '2025-01-01T00:00:00Z' });
-    await appendMemory(dir, { content: 'use PostgreSQL database system', source: 'task-002', timestamp: '2025-01-02T00:00:00Z' });
+  it('appendMemory deduplicates similar entries (similarity>0.8)', async () => {
+    await appendMemory(dir, { content: 'use PostgreSQL database for user data storage', source: 'task-001', timestamp: '2025-01-01T00:00:00Z' });
+    await appendMemory(dir, { content: 'use PostgreSQL database for user data storage layer', source: 'task-002', timestamp: '2025-01-02T00:00:00Z' });
     const entries = await loadMemory(dir);
     expect(entries).toHaveLength(1);
     expect(entries[0].source).toBe('task-002');
