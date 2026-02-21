@@ -208,8 +208,9 @@ Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, i
 ### Sub-Agent Prompt Template
 Each sub-agent prompt MUST contain these sections in order:
 1. Task block from \`next\` output (title, type, description, checkpoint commands, context)
-2. Search for matching Skills or MCP tools first. If found, MUST use them. Skill routing: type=frontend \u2192 /frontend-design, type=backend \u2192 /feature-dev, type=general \u2192 match or execute directly
-3. Unfamiliar APIs \u2192 query context7 MCP first. Never guess.
+2. **Pre-analysis (MANDATORY)**: Before writing ANY code, **MUST** invoke /superpowers:brainstorming to perform multi-dimensional analysis (requirements, edge cases, architecture, risks). Skipping = protocol failure.
+3. **Skill routing**: type=frontend \u2192 **MUST** invoke /frontend-design, type=backend \u2192 **MUST** invoke /feature-dev, type=general \u2192 execute directly. **For ALL types, you MUST also check available skills and MCP tools; use any that match the task alongside the primary skill.**
+4. **Unfamiliar APIs \u2192 MUST query context7 MCP first. Never guess.**
 
 ### Sub-Agent Checkpoint (Iron Rule #4 \u2014 most common violation)
 Sub-agent's LAST Bash command before replying MUST be:

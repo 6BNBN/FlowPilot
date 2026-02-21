@@ -178,9 +178,9 @@ claude --dangerously-skip-permissions --resume     # 从历史对话列表选择
   ├─ node flow.js next ──→ 返回任务 + 依赖上下文
   │
   ├─ 子Agent（Task工具派发）
-  │   ├─ frontend → /frontend-design 插件
-  │   ├─ backend  → /feature-dev 插件
-  │   └─ general  → 直接执行
+  │   ├─ frontend → /frontend-design 插件 + 其他匹配的 Skill/MCP
+  │   ├─ backend  → /feature-dev 插件 + 其他匹配的 Skill/MCP
+  │   └─ general  → 直接执行 + 其他匹配的 Skill/MCP
   │
   ├─ node flow.js checkpoint ──→ 记录产出 + git commit
   │
