@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import { WorkflowService } from './workflow-service';
 import { FsWorkflowRepository } from '../infrastructure/fs-repository';
 import { parseTasksMarkdown } from '../infrastructure/markdown-parser';
+import { loadMemory } from '../infrastructure/memory';
 
 let dir: string;
 let svc: WorkflowService;
@@ -131,5 +132,36 @@ describe('WorkflowService 集成测试', () => {
     await svc.init(TASKS_MD);
     const data = await svc.init(TASKS_MD, true);
     expect(data.status).toBe('running');
+  });
+
+  it('checkpoint提取[REMEMBER]标记写入永久记忆', async () => {
+    await svc.init(TASKS_MD);
+    await svc.next();
+    await svc.checkpoint('001', '完成设计\n[REMEMBER] PostgreSQL使用jsonb存储配置\n其他内容');
+    const entries = await loadMemory(dir);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].content).toBe('PostgreSQL使用jsonb存储配置');
+    expect(entries[0].source).toBe('task-001');
+  });
+
+  it('next注入相关永久记忆到context', async () => {
+    await svc.init(TASKS_MD);
+    await svc.next();
+    // 记忆内容包含"页面"关键词，与任务002"创建页面"匹配
+    await svc.checkpoint('001', '[REMEMBER] 创建页面时使用React组件模式');
+    const r = await svc.next();
+    expect(r?.context).toContain('相关记忆');
+    expect(r?.context).toContain('React组件模式');
+  });
+
+  it('nextBatch注入相关永久记忆到context', async () => {
+    const md = '# 记忆测试\n\n1. [backend] 数据库设计\n2. [frontend] 前端页面\n3. [general] 编写文档说明 (deps: 1,2)\n  编写数据库和前端页面的文档';
+    await svc.init(md);
+    const batch1 = await svc.nextBatch();
+    // 记忆内容包含"文档"关键词，与任务003匹配
+    await svc.checkpoint('001', '[REMEMBER] 编写文档时需要包含数据库说明');
+    await svc.checkpoint('002', '前端完成');
+    const batch2 = await svc.nextBatch();
+    expect(batch2[0]?.context).toContain('相关记忆');
   });
 });

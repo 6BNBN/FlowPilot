@@ -10,6 +10,7 @@ import { makeTaskId, cascadeSkip, findNextTask, findParallelTasks, completeTask,
 import { runLifecycleHook } from '../infrastructure/hooks';
 import { log } from '../infrastructure/logger';
 import { collectStats, analyzeHistory } from '../infrastructure/history';
+import { appendMemory, queryMemory, decayMemory } from '../infrastructure/memory';
 
 export class WorkflowService {
   constructor(
@@ -48,6 +49,9 @@ export class WorkflowService {
 
     // 历史经验分析：读取历史统计，输出建议，自动调整参数
     await this.applyHistoryInsights();
+
+    // 衰减归档过期记忆
+    await decayMemory(this.repo.projectRoot());
 
     return data;
   }
@@ -88,6 +92,12 @@ export class WorkflowService {
       for (const depId of task.deps) {
         const ctx = await this.repo.loadTaskContext(depId);
         if (ctx) parts.push(ctx);
+      }
+
+      // 注入相关永久记忆
+      const memories = await queryMemory(this.repo.projectRoot(), `${task.title} ${task.description}`);
+      if (memories.length) {
+        parts.push('## 相关记忆\n\n' + memories.map(m => `- ${m.content}`).join('\n'));
       }
 
       return { task, context: parts.join('\n\n---\n\n') };
@@ -134,6 +144,11 @@ export class WorkflowService {
           const ctx = await this.repo.loadTaskContext(depId);
           if (ctx) parts.push(ctx);
         }
+        // 注入相关永久记忆
+        const memories = await queryMemory(this.repo.projectRoot(), `${task.title} ${task.description}`);
+        if (memories.length) {
+          parts.push('## 相关记忆\n\n' + memories.map(m => `- ${m.content}`).join('\n'));
+        }
         results.push({ task, context: parts.join('\n\n---\n\n') });
       }
       return results;
@@ -177,6 +192,19 @@ export class WorkflowService {
 
       await this.repo.saveProgress(newData);
       await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
+
+      // 提取 [REMEMBER] 标记写入永久记忆
+      for (const line of detail.split('\n')) {
+        const m = line.match(/\[REMEMBER\]\s*(.+)/i);
+        if (m) {
+          await appendMemory(this.repo.projectRoot(), {
+            content: m[1].trim(),
+            source: `task-${id}`,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+
       await this.updateSummary(newData);
       const commitErr = this.repo.commit(id, task.title, summaryLine, files);
       if (!commitErr) this.repo.tag(id);
