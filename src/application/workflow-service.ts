@@ -107,9 +107,11 @@ export class WorkflowService {
       const tasks = findParallelTasks(cascaded);
       if (!tasks.length) {
         await this.repo.saveProgress({ ...data, tasks: cascaded });
+        log.debug('nextBatch: 无可并行任务');
         return [];
       }
 
+      log.debug(`nextBatch: 激活 ${tasks.map(t => t.id).join(',')}`);
       const activeIds = new Set(tasks.map(t => t.id));
       const activated = cascaded.map(t => activeIds.has(t.id) ? { ...t, status: 'active' as const } : t);
       await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
