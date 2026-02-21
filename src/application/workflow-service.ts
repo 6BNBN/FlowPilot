@@ -137,16 +137,24 @@ export class WorkflowService {
       const data = await this.requireProgress();
       const task = data.tasks.find(t => t.id === id);
       if (!task) throw new Error(`任务 ${id} 不存在`);
+      log.debug(`checkpoint ${id}: 当前状态=${task.status}, retries=${task.retries}`);
       if (task.status !== 'active') {
         throw new Error(`任务 ${id} 状态为 ${task.status}，只有 active 状态可以 checkpoint`);
       }
 
       if (detail === 'FAILED') {
+        // 记录失败原因到 context
+        await this.appendFailureContext(id, task, detail);
+        // 检测重复失败模式
+        const patternWarn = await this.detectFailurePattern(id, task);
+
         const { result, data: newData } = failTask(data, id);
         await this.repo.saveProgress(newData);
-        return result === 'retry'
-          ? `任务 ${id} 失败(第${task.retries}次)，将重试`
+        log.debug(`checkpoint ${id}: failTask result=${result}, retries=${task.retries + 1}`);
+        const msg = result === 'retry'
+          ? `任务 ${id} 失败(第${task.retries + 1}次)，将重试`
           : `任务 ${id} 连续失败3次，已跳过`;
+        return patternWarn ? `${msg}\n${patternWarn}` : msg;
       }
 
       if (!detail.trim()) throw new Error(`任务 ${id} checkpoint内容不能为空`);
