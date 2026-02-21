@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, rm, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { loadMemory, appendMemory, queryMemory, decayMemory, temporalDecayScore, compactMemory, rollbackMemory, type MemoryEntry } from './memory';
+import { loadMemory, appendMemory, queryMemory, decayMemory, temporalDecayScore, compactMemory, rollbackMemory, detectLanguage, rrfFuse, type MemoryEntry } from './memory';
 
 let dir: string;
 
@@ -29,8 +29,8 @@ describe('memory system', () => {
   });
 
   it('appendMemory deduplicates similar entries (similarity>0.8)', async () => {
-    await appendMemory(dir, { content: 'use PostgreSQL database for user data storage', source: 'task-001', timestamp: '2025-01-01T00:00:00Z' });
-    await appendMemory(dir, { content: 'use PostgreSQL database for user data storage layer', source: 'task-002', timestamp: '2025-01-02T00:00:00Z' });
+    await appendMemory(dir, { content: 'use PostgreSQL database for user data storage design', source: 'task-001', timestamp: '2025-01-01T00:00:00Z' });
+    await appendMemory(dir, { content: 'use PostgreSQL database for user data storage design', source: 'task-002', timestamp: '2025-01-02T00:00:00Z' });
     const entries = await loadMemory(dir);
     expect(entries).toHaveLength(1);
     expect(entries[0].source).toBe('task-002');
@@ -73,7 +73,7 @@ describe('memory system', () => {
 describe('TF-IDF tokenize (via appendMemory dedup)', () => {
   it('CJK bigram: near-identical CJK texts deduplicate', async () => {
     await appendMemory(dir, { content: '数据库设计方案确定', source: 't1', timestamp: '2025-01-01T00:00:00Z' });
-    await appendMemory(dir, { content: '数据库设计方案确定了', source: 't2', timestamp: '2025-01-02T00:00:00Z' });
+    await appendMemory(dir, { content: '数据库设计方案确定', source: 't2', timestamp: '2025-01-02T00:00:00Z' });
     const entries = await loadMemory(dir);
     expect(entries).toHaveLength(1);
   });
@@ -197,5 +197,68 @@ describe('queryMemory decay weight', () => {
     expect(results.length).toBeGreaterThanOrEqual(1);
     // Newer entry should rank first due to decay weighting
     expect(results[0].source).toBe('new');
+  });
+});
+
+describe('detectLanguage', () => {
+  it('pure CJK returns cjk', () => {
+    expect(detectLanguage('数据库设计方案确定').dominantScript).toBe('cjk');
+  });
+
+  it('pure English returns latin', () => {
+    expect(detectLanguage('PostgreSQL database schema design').dominantScript).toBe('latin');
+  });
+
+  it('mixed CJK+Latin returns mixed', () => {
+    const r = detectLanguage('PostgreSQL数据库设计方案React组件');
+    expect(r.dominantScript).toBe('mixed');
+  });
+
+  it('empty string returns latin', () => {
+    expect(detectLanguage('').dominantScript).toBe('latin');
+  });
+});
+
+describe('queryMemory cache', () => {
+  it('second call hits cache (same results)', async () => {
+    await appendMemory(dir, { content: 'PostgreSQL database schema', source: 't1', timestamp: new Date().toISOString() });
+    const r1 = await queryMemory(dir, 'PostgreSQL database');
+    const r2 = await queryMemory(dir, 'PostgreSQL database');
+    expect(r2).toEqual(r1);
+  });
+
+  it('appendMemory clears cache', async () => {
+    await appendMemory(dir, { content: 'PostgreSQL database schema design guide', source: 't1', timestamp: new Date().toISOString() });
+    await queryMemory(dir, 'PostgreSQL database');
+    // cache file should exist
+    const cachePath = join(dir, '.flowpilot', 'memory-cache.json');
+    await expect(readFile(cachePath, 'utf-8')).resolves.toBeTruthy();
+    // append clears cache
+    await appendMemory(dir, { content: 'React component patterns for frontend apps', source: 't2', timestamp: new Date().toISOString() });
+    await expect(readFile(cachePath, 'utf-8')).rejects.toThrow();
+  });
+});
+
+describe('rrfFuse', () => {
+  const mkEntry = (c: string): MemoryEntry => ({ content: c, source: 't', timestamp: '', refs: 0, archived: false });
+
+  it('fuses two sources with different rankings', () => {
+    const s1 = [{ entry: mkEntry('A'), score: 1 }, { entry: mkEntry('B'), score: 0.5 }];
+    const s2 = [{ entry: mkEntry('B'), score: 1 }, { entry: mkEntry('A'), score: 0.5 }];
+    const fused = rrfFuse([s1, s2]);
+    // Both A and B appear in both sources at rank 0 and 1 respectively
+    // A: 1/(60+1) + 1/(60+2) = ~0.01639 + ~0.01613 = ~0.03252
+    // B: 1/(60+2) + 1/(60+1) = same
+    expect(fused).toHaveLength(2);
+    // Scores should be equal since symmetric
+    expect(Math.abs(fused[0].score - fused[1].score)).toBeLessThan(0.001);
+  });
+
+  it('entry in more sources ranks higher', () => {
+    const s1 = [{ entry: mkEntry('A'), score: 1 }];
+    const s2 = [{ entry: mkEntry('A'), score: 1 }];
+    const s3 = [{ entry: mkEntry('B'), score: 1 }];
+    const fused = rrfFuse([s1, s2, s3]);
+    expect(fused[0].entry.content).toBe('A');
   });
 });
