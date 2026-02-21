@@ -3,12 +3,12 @@
  * @description 文件系统仓储 - 基于 .workflow/ 目录的分层记忆存储
  */
 
-import { mkdir, readFile, writeFile, unlink, rm, rename } from 'fs/promises';
+import { mkdir, readFile, writeFile, unlink, rm, rename, readdir } from 'fs/promises';
 import { join } from 'path';
 import { openSync, closeSync, existsSync } from 'fs';
-import type { ProgressData, TaskEntry } from '../domain/types';
+import type { ProgressData, TaskEntry, WorkflowStats } from '../domain/types';
 import type { WorkflowRepository, VerifyResult } from '../domain/repository';
-import { autoCommit, gitCleanup } from './git';
+import { autoCommit, gitCleanup, tagTask, rollbackToTask, cleanTags as gitCleanTags } from './git';
 import { runVerify } from './verify';
 
 /** 内置模板路径：dev 时 __dirname=src/infrastructure/，打包后 __dirname=dist/ */
@@ -30,13 +30,14 @@ async function loadProtocolTemplate(basePath: string): Promise<string> {
 export class FsWorkflowRepository implements WorkflowRepository {
   private readonly root: string;
   private readonly ctxDir: string;
-
+  private readonly historyDir: string;
   private readonly base: string;
 
   constructor(basePath: string) {
     this.base = basePath;
     this.root = join(basePath, '.workflow');
     this.ctxDir = join(this.root, 'context');
+    this.historyDir = join(basePath, '.flowpilot', 'history');
   }
 
   projectRoot(): string { return this.base; }
@@ -251,6 +252,45 @@ export class FsWorkflowRepository implements WorkflowRepository {
     return runVerify(this.base);
   }
 
+  // --- .flowpilot/history/ 永久存储 ---
+
+  async saveHistory(stats: WorkflowStats): Promise<void> {
+    await this.ensure(this.historyDir);
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const p = join(this.historyDir, `${ts}.json`);
+    await writeFile(p, JSON.stringify(stats, null, 2), 'utf-8');
+  }
+
+  async loadHistory(): Promise<WorkflowStats[]> {
+    try {
+      const files = (await readdir(this.historyDir)).filter(f => f.endsWith('.json')).sort();
+      const results: WorkflowStats[] = [];
+      for (const f of files) {
+        try {
+          results.push(JSON.parse(await readFile(join(this.historyDir, f), 'utf-8')));
+        } catch { /* 跳过损坏文件 */ }
+      }
+      return results;
+    } catch {
+      return [];
+    }
+  }
+
+  // --- .workflow/config.json ---
+
+  async loadConfig(): Promise<Record<string, unknown>> {
+    try {
+      return JSON.parse(await readFile(join(this.root, 'config.json'), 'utf-8'));
+    } catch {
+      return {};
+    }
+  }
+
+  async saveConfig(config: Record<string, unknown>): Promise<void> {
+    await this.ensure(this.root);
+    await writeFile(join(this.root, 'config.json'), JSON.stringify(config, null, 2) + '\n', 'utf-8');
+  }
+
   /** 清理注入的CLAUDE.md协议块和.claude/settings.json hooks */
   async cleanupInjections(): Promise<void> {
     // 1) 移除 CLAUDE.md 中 flowpilot:start/end 块
@@ -276,4 +316,8 @@ export class FsWorkflowRepository implements WorkflowRepository {
       }
     } catch {}
   }
+
+  tag(taskId: string): string | null { return tagTask(taskId); }
+  rollback(taskId: string): string | null { return rollbackToTask(taskId); }
+  cleanTags(): void { gitCleanTags(); }
 }

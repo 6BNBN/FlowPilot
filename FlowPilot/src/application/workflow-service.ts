@@ -8,6 +8,8 @@ import type { WorkflowDefinition } from '../domain/workflow';
 import type { WorkflowRepository } from '../domain/repository';
 import { makeTaskId, cascadeSkip, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
 import { runLifecycleHook } from '../infrastructure/hooks';
+import { log } from '../infrastructure/logger';
+import { collectStats, analyzeHistory } from '../infrastructure/history';
 
 export class WorkflowService {
   constructor(
@@ -43,6 +45,10 @@ export class WorkflowService {
     await this.repo.saveSummary(`# ${def.name}\n\n${def.description}\n`);
     await this.repo.ensureClaudeMd();
     await this.repo.ensureHooks();
+
+    // 历史经验分析：读取历史统计，输出建议，自动调整参数
+    await this.applyHistoryInsights();
+
     return data;
   }
 
@@ -59,12 +65,17 @@ export class WorkflowService {
       }
 
       const cascaded = cascadeSkip(data.tasks);
+      const skippedByC = cascaded.filter((t, i) => t.status === 'skipped' && data.tasks[i].status !== 'skipped');
+      if (skippedByC.length) log.debug(`next: cascade skip ${skippedByC.map(t => t.id).join(',')}`);
+
       const task = findNextTask(cascaded);
       if (!task) {
         await this.repo.saveProgress({ ...data, tasks: cascaded });
+        log.debug('next: 无可执行任务');
         return null;
       }
 
+      log.debug(`next: 激活任务 ${task.id} (deps: ${task.deps.join(',') || '无'})`);
       const activated = cascaded.map(t => t.id === task.id ? { ...t, status: 'active' as const } : t);
       await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
       await runLifecycleHook('onTaskStart', this.repo.projectRoot(), { TASK_ID: task.id, TASK_TITLE: task.title });
@@ -101,9 +112,11 @@ export class WorkflowService {
       const tasks = findParallelTasks(cascaded);
       if (!tasks.length) {
         await this.repo.saveProgress({ ...data, tasks: cascaded });
+        log.debug('nextBatch: 无可并行任务');
         return [];
       }
 
+      log.debug(`nextBatch: 激活 ${tasks.map(t => t.id).join(',')}`);
       const activeIds = new Set(tasks.map(t => t.id));
       const activated = cascaded.map(t => activeIds.has(t.id) ? { ...t, status: 'active' as const } : t);
       await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
@@ -136,27 +149,37 @@ export class WorkflowService {
       const data = await this.requireProgress();
       const task = data.tasks.find(t => t.id === id);
       if (!task) throw new Error(`任务 ${id} 不存在`);
+      log.debug(`checkpoint ${id}: 当前状态=${task.status}, retries=${task.retries}`);
       if (task.status !== 'active') {
         throw new Error(`任务 ${id} 状态为 ${task.status}，只有 active 状态可以 checkpoint`);
       }
 
       if (detail === 'FAILED') {
+        // 记录失败原因到 context
+        await this.appendFailureContext(id, task, detail);
+        // 检测重复失败模式
+        const patternWarn = await this.detectFailurePattern(id, task);
+
         const { result, data: newData } = failTask(data, id);
         await this.repo.saveProgress(newData);
-        return result === 'retry'
-          ? `任务 ${id} 失败(第${task.retries}次)，将重试`
+        log.debug(`checkpoint ${id}: failTask result=${result}, retries=${task.retries + 1}`);
+        const msg = result === 'retry'
+          ? `任务 ${id} 失败(第${task.retries + 1}次)，将重试`
           : `任务 ${id} 连续失败3次，已跳过`;
+        return patternWarn ? `${msg}\n${patternWarn}` : msg;
       }
 
       if (!detail.trim()) throw new Error(`任务 ${id} checkpoint内容不能为空`);
 
       const summaryLine = detail.split('\n')[0].slice(0, 80);
       const newData = completeTask(data, id, summaryLine);
+      log.debug(`checkpoint ${id}: 完成, summary="${summaryLine}"`);
 
       await this.repo.saveProgress(newData);
       await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
       await this.updateSummary(newData);
       const commitErr = this.repo.commit(id, task.title, summaryLine, files);
+      if (!commitErr) this.repo.tag(id);
       await runLifecycleHook('onTaskComplete', this.repo.projectRoot(), { TASK_ID: id, TASK_TITLE: task.title });
 
       const doneCount = newData.tasks.filter(t => t.status === 'done').length;
@@ -176,13 +199,17 @@ export class WorkflowService {
   async resume(): Promise<string> {
     const data = await this.repo.loadProgress();
     if (!data) return '无活跃工作流，等待需求输入';
+    log.debug(`resume: status=${data.status}, current=${data.current}`);
     if (data.status === 'idle') return '工作流待命中，等待需求输入';
     if (data.status === 'completed') return '工作流已全部完成';
     if (data.status === 'finishing') return `恢复工作流: ${data.name}\n正在收尾阶段，请执行 node flow.js finish`;
 
     const { data: newData, resetId } = resumeProgress(data);
     await this.repo.saveProgress(newData);
-    if (resetId) this.repo.cleanup();
+    if (resetId) {
+      log.debug(`resume: 重置任务 ${resetId}`);
+      this.repo.cleanup();
+    }
 
     const doneCount = newData.tasks.filter(t => t.status === 'done').length;
     const total = newData.tasks.length;
@@ -270,11 +297,13 @@ export class WorkflowService {
   /** finish: 智能收尾 - 先verify，review后置 */
   async finish(): Promise<string> {
     const data = await this.requireProgress();
+    log.debug(`finish: status=${data.status}`);
     if (data.status === 'idle' || data.status === 'completed') return '工作流已完成，无需重复finish';
     if (!isAllDone(data.tasks)) throw new Error('还有未完成的任务，请先完成所有任务');
 
     // 1. 先验证（廉价操作）
     const result = this.repo.verify();
+    log.debug(`finish: verify passed=${result.passed}`);
     if (!result.passed) {
       return `验证失败: ${result.error}\n请修复后重新执行 node flow.js finish`;
     }
@@ -292,7 +321,13 @@ export class WorkflowService {
 
     const titles = done.map(t => `- ${t.id}: ${t.title}`).join('\n');
     await runLifecycleHook('onWorkflowFinish', this.repo.projectRoot(), { WORKFLOW_NAME: data.name });
+
+    // 保存工作流历史统计到 .flowpilot/history/（永久存储，不随 clearAll 清理）
+    const wfStats = collectStats(data);
+    await this.repo.saveHistory(wfStats);
+
     await this.repo.cleanupInjections();
+    this.repo.cleanTags();
     const commitErr = this.repo.commit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`);
     if (!commitErr) {
       await this.repo.clearAll();
@@ -303,6 +338,33 @@ export class WorkflowService {
       return `验证通过: ${scripts}\n${stats}\n[git提交失败] ${commitErr}\n请根据错误修复后手动执行 git add -A && git commit`;
     }
     return `验证通过: ${scripts}\n${stats}\n已提交最终commit，工作流回到待命状态\n等待下一个需求...`;
+  }
+
+  /** rollback: 回滚到指定任务的快照 */
+  async rollback(id: string): Promise<string> {
+    await this.repo.lock();
+    try {
+      const data = await this.requireProgress();
+      const task = data.tasks.find(t => t.id === id);
+      if (!task) throw new Error(`任务 ${id} 不存在`);
+      if (task.status !== 'done') throw new Error(`任务 ${id} 状态为 ${task.status}，只能回滚已完成的任务`);
+
+      const err = this.repo.rollback(id);
+      if (err) return `回滚失败: ${err}`;
+
+      // 将该任务及其后续任务重置为 pending
+      const idx = parseInt(id, 10);
+      const newTasks = data.tasks.map(t =>
+        parseInt(t.id, 10) >= idx && t.status === 'done'
+          ? { ...t, status: 'pending' as const, summary: '' }
+          : t
+      );
+      await this.repo.saveProgress({ ...data, current: null, tasks: newTasks });
+      const resetCount = newTasks.filter((t, i) => t.status === 'pending' && data.tasks[i].status === 'done').length;
+      return `已回滚到任务 ${id} 之前的状态，${resetCount} 个任务重置为 pending`;
+    } finally {
+      await this.repo.unlock();
+    }
   }
 
   /** abort: 中止工作流，清理 .workflow/ 目录 */
@@ -410,9 +472,69 @@ export class WorkflowService {
     await this.repo.saveSummary(lines.join('\n') + '\n');
   }
 
+  /** 读取历史经验，输出建议，自动调整默认参数 */
+  private async applyHistoryInsights(): Promise<void> {
+    const history = await this.repo.loadHistory();
+    if (!history.length) return;
+
+    const { suggestions, recommendedConfig } = analyzeHistory(history);
+    if (suggestions.length) {
+      console.log('\n[历史经验建议]');
+      for (const s of suggestions) console.log(`  - ${s}`);
+    }
+
+    // 仅在用户未自定义时写入推荐参数
+    if (Object.keys(recommendedConfig).length) {
+      const config = await this.repo.loadConfig();
+      const verify = (config.verify ?? {}) as Record<string, unknown>;
+      let changed = false;
+      for (const [k, v] of Object.entries(recommendedConfig)) {
+        if (!(k in config) && !(k in verify)) {
+          verify[k] = v;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await this.repo.saveConfig({ ...config, verify });
+        console.log('[历史经验] 已基于历史数据自动调整默认参数');
+      }
+    }
+  }
+
+  /** 将失败原因追加到 context/task-{id}.md，标记 [FAILED] */
+  private async appendFailureContext(id: string, task: TaskEntry, detail: string): Promise<void> {
+    const existing = await this.repo.loadTaskContext(id) ?? '';
+    const entry = `\n## [FAILED] 第${task.retries + 1}次失败\n\n${detail}\n`;
+    const content = existing
+      ? existing.trimEnd() + '\n' + entry
+      : `# task-${id}: ${task.title}\n${entry}`;
+    await this.repo.saveTaskContext(id, content);
+  }
+
+  /** 检测连续失败模式：3次FAILED且摘要相似(>60%)时输出警告 */
+  private async detectFailurePattern(id: string, task: TaskEntry): Promise<string | null> {
+    if (task.retries < 2) return null;
+    const ctx = await this.repo.loadTaskContext(id);
+    if (!ctx) return null;
+    const reasons = [...ctx.matchAll(/## \[FAILED\] .+?\n\n(.+?)(?=\n##|\n*$)/gs)]
+      .map(m => m[1].trim());
+    if (reasons.length < 3) return null;
+    const last3 = reasons.slice(-3);
+    const sim01 = this.similarity(last3[0], last3[1]);
+    const sim12 = this.similarity(last3[1], last3[2]);
+    log.debug(`detectFailurePattern ${id}: sim01=${sim01.toFixed(2)}, sim12=${sim12.toFixed(2)}`);
+    if (sim01 > 0.6 && sim12 > 0.6) {
+      const msg = `[WARN] 任务 ${id} 陷入重复失败模式，建议 skip 或修改任务描述`;
+      log.warn(msg);
+      return msg;
+    }
+    return null;
+  }
+
   private async requireProgress(): Promise<ProgressData> {
     const data = await this.repo.loadProgress();
     if (!data) throw new Error('无活跃工作流，请先 node flow.js init');
     return data;
   }
+
 }
