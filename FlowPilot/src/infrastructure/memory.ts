@@ -1,6 +1,6 @@
 /**
  * @module infrastructure/memory
- * @description 永久记忆系统 - 跨工作流知识积累（TF-IDF + 余弦相似度 + MMR）
+ * @description 永久记忆系统 - 跨工作流知识积累（BM25 + 余弦相似度 + MMR）
  */
 
 import { readFile, writeFile, mkdir } from 'fs/promises';
@@ -21,7 +21,12 @@ export interface MemoryEntry {
 interface DfStats {
   docCount: number;
   df: Record<string, number>;
+  avgDocLen: number;
 }
+
+/** BM25 参数 */
+const BM25_K1 = 1.2;
+const BM25_B = 0.75;
 
 const MEMORY_FILE = 'memory.json';
 const DF_FILE = 'memory-df.json';
@@ -48,21 +53,31 @@ function snapshotPath(basePath: string): string {
   return join(basePath, '.flowpilot', SNAPSHOT_FILE);
 }
 
+/** CJK 全范围：中文 + 日文平假名/片假名 + 韩文 */
+const CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g;
+
 /** 多语言分词：CJK 单字+双字gram、拉丁词、数字、下划线标识符 */
 function tokenize(text: string): string[] {
   const lower = text.toLowerCase();
   const tokens: string[] = [];
-  // 拉丁词、数字、下划线标识符
   for (const m of lower.matchAll(/[a-z0-9_]{2,}|[a-z]/g)) {
     tokens.push(m[0]);
   }
-  // CJK 单字 + 双字 bigram
-  const cjk = [...lower.matchAll(/[\u4e00-\u9fff\u3400-\u4dbf]/g)].map(m => m[0]);
+  const cjk = [...lower.matchAll(CJK_RE)].map(m => m[0]);
   for (let i = 0; i < cjk.length; i++) {
     tokens.push(cjk[i]);
     if (i + 1 < cjk.length) tokens.push(cjk[i] + cjk[i + 1]);
   }
   return tokens;
+}
+
+/** 检测文本的 CJK 比例，返回 { cjkRatio, dominantScript } */
+export function detectLanguage(text: string): { cjkRatio: number; dominantScript: 'cjk' | 'latin' | 'mixed' } {
+  const sample = text.slice(0, 300);
+  if (!sample.length) return { cjkRatio: 0, dominantScript: 'latin' };
+  const cjkCount = (sample.match(CJK_RE) || []).length;
+  const cjkRatio = cjkCount / sample.length;
+  return { cjkRatio, dominantScript: cjkRatio > 0.5 ? 'cjk' : cjkRatio < 0.1 ? 'latin' : 'mixed' };
 }
 
 /** 计算词频向量 */
@@ -77,7 +92,7 @@ async function loadDf(basePath: string): Promise<DfStats> {
   try {
     return JSON.parse(await readFile(dfPath(basePath), 'utf-8'));
   } catch {
-    return { docCount: 0, df: {} };
+    return { docCount: 0, df: {}, avgDocLen: 0 };
   }
 }
 
@@ -88,26 +103,32 @@ async function saveDf(basePath: string, stats: DfStats): Promise<void> {
   await writeFile(p, JSON.stringify(stats), 'utf-8');
 }
 
-/** 从记忆条目重建 DF 统计 */
+/** 从记忆条目重建 DF 统计（含 avgDocLen） */
 function rebuildDf(entries: MemoryEntry[]): DfStats {
   const active = entries.filter(e => !e.archived);
   const df: Record<string, number> = {};
+  let totalLen = 0;
   for (const e of active) {
-    const unique = new Set(tokenize(e.content));
+    const tokens = tokenize(e.content);
+    totalLen += tokens.length;
+    const unique = new Set(tokens);
     for (const t of unique) df[t] = (df[t] ?? 0) + 1;
   }
-  return { docCount: active.length, df };
+  return { docCount: active.length, df, avgDocLen: active.length ? totalLen / active.length : 0 };
 }
 
-/** 生成 TF-IDF 向量 */
-function tfidfVector(tokens: string[], stats: DfStats): Map<string, number> {
+/** 生成 BM25 加权向量 (k1=1.2, b=0.75) */
+function bm25Vector(tokens: string[], stats: DfStats): Map<string, number> {
   const tf = termFrequency(tokens);
   const vec = new Map<string, number>();
   const N = Math.max(stats.docCount, 1);
+  const avgDl = stats.avgDocLen || 1;
+  const docLen = tokens.length;
   for (const [term, freq] of tf) {
-    const docFreq = stats.df[term] ?? 0;
-    const idf = Math.log(1 + N / (1 + docFreq));
-    vec.set(term, freq * idf);
+    const dfVal = stats.df[term] ?? 0;
+    const idf = Math.log(1 + (N - dfVal + 0.5) / (dfVal + 0.5));
+    const tfNorm = (freq * (BM25_K1 + 1)) / (freq + BM25_K1 * (1 - BM25_B + BM25_B * docLen / avgDl));
+    vec.set(term, tfNorm * idf);
   }
   return vec;
 }
@@ -140,16 +161,16 @@ async function saveMemory(basePath: string, entries: MemoryEntry[]): Promise<voi
   await writeFile(p, JSON.stringify(entries, null, 2), 'utf-8');
 }
 
-/** 追加记忆条目（TF-IDF 余弦相似度>0.8则更新而非新增） */
+/** 追加记忆条目（BM25 余弦相似度>0.8则更新而非新增） */
 export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'refs' | 'archived'>): Promise<void> {
   const entries = await loadMemory(basePath);
   const stats = rebuildDf(entries);
   const queryTokens = tokenize(entry.content);
-  const queryVec = tfidfVector(queryTokens, stats);
+  const queryVec = bm25Vector(queryTokens, stats);
 
   const idx = entries.findIndex(e => {
     if (e.archived) return false;
-    const vec = tfidfVector(tokenize(e.content), stats);
+    const vec = bm25Vector(tokenize(e.content), stats);
     return cosineSimilarity(queryVec, vec) > 0.8;
   });
 
@@ -191,7 +212,7 @@ function mmrRerank(
   return selected.map(s => ({ entry: s.entry, score: s.score }));
 }
 
-/** 查询与任务描述相关的记忆（TF-IDF + 余弦相似度 + MMR），命中条目 refs++ */
+/** 查询与任务描述相关的记忆（BM25 + 余弦相似度 + MMR），命中条目 refs++ */
 export async function queryMemory(basePath: string, taskDescription: string): Promise<MemoryEntry[]> {
   const entries = await loadMemory(basePath);
   const active = entries.filter(e => !e.archived);
@@ -199,10 +220,10 @@ export async function queryMemory(basePath: string, taskDescription: string): Pr
 
   const stats = await loadDf(basePath);
   const fallback = stats.docCount > 0 ? stats : rebuildDf(entries);
-  const queryVec = tfidfVector(tokenize(taskDescription), fallback);
+  const queryVec = bm25Vector(tokenize(taskDescription), fallback);
 
   const candidates = active.map(e => {
-    const vec = tfidfVector(tokenize(e.content), fallback);
+    const vec = bm25Vector(tokenize(e.content), fallback);
     return { entry: e, score: cosineSimilarity(queryVec, vec) * temporalDecayScore(e), vec };
   }).filter(s => s.score > 0.05);
 
@@ -252,7 +273,7 @@ export async function compactMemory(basePath: string, targetCount?: number): Pro
   await saveSnapshot(basePath, entries);
 
   const stats = rebuildDf(entries);
-  const vecs = active.map(e => tfidfVector(tokenize(e.content), stats));
+  const vecs = active.map(e => bm25Vector(tokenize(e.content), stats));
   const merged = new Set<number>();
   const result: MemoryEntry[] = [...entries.filter(e => e.archived)];
 
