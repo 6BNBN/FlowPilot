@@ -14,6 +14,7 @@ export interface MemoryEntry {
   timestamp: string;
   refs: number;
   archived: boolean;
+  evergreen?: boolean;
 }
 
 /** DF 统计持久化结构 */
@@ -24,6 +25,16 @@ interface DfStats {
 
 const MEMORY_FILE = 'memory.json';
 const DF_FILE = 'memory-df.json';
+const SNAPSHOT_FILE = 'memory-snapshot.json';
+const COMPACT_THRESHOLD = 50;
+const EVERGREEN_SOURCES = ['architecture', 'identity', 'decision'];
+
+/** 指数衰减评分：score = exp(-ln2/halfLife * ageDays)，evergreen 条目恒为 1 */
+export function temporalDecayScore(entry: MemoryEntry, halfLifeDays = 30): number {
+  if (entry.evergreen || EVERGREEN_SOURCES.some(s => entry.source.includes(s))) return 1;
+  const ageDays = (Date.now() - new Date(entry.timestamp).getTime()) / (24 * 60 * 60 * 1000);
+  return Math.exp(-Math.LN2 / halfLifeDays * ageDays);
+}
 
 function memoryPath(basePath: string): string {
   return join(basePath, '.flowpilot', MEMORY_FILE);
@@ -31,6 +42,10 @@ function memoryPath(basePath: string): string {
 
 function dfPath(basePath: string): string {
   return join(basePath, '.flowpilot', DF_FILE);
+}
+
+function snapshotPath(basePath: string): string {
+  return join(basePath, '.flowpilot', SNAPSHOT_FILE);
 }
 
 /** 多语言分词：CJK 单字+双字gram、拉丁词、数字、下划线标识符 */
@@ -188,7 +203,7 @@ export async function queryMemory(basePath: string, taskDescription: string): Pr
 
   const candidates = active.map(e => {
     const vec = tfidfVector(tokenize(e.content), fallback);
-    return { entry: e, score: cosineSimilarity(queryVec, vec), vec };
+    return { entry: e, score: cosineSimilarity(queryVec, vec) * temporalDecayScore(e), vec };
   }).filter(s => s.score > 0.05);
 
   const reranked = mmrRerank(candidates, 5);
@@ -202,20 +217,90 @@ export async function queryMemory(basePath: string, taskDescription: string): Pr
   return reranked.map(s => ({ ...s.entry, refs: s.entry.refs + 1 }));
 }
 
-/** 衰减归档：refs=0 且超过 30 天的条目标记 archived */
+/** 衰减归档：衰减系数 < 0.1 且 refs=0 的条目标记 archived（immutable） */
 export async function decayMemory(basePath: string): Promise<number> {
   const entries = await loadMemory(basePath);
-  const threshold = Date.now() - 30 * 24 * 60 * 60 * 1000;
   let count = 0;
-  for (const e of entries) {
-    if (!e.archived && e.refs === 0 && new Date(e.timestamp).getTime() < threshold) {
-      e.archived = true;
+  const updated = entries.map(e => {
+    if (!e.archived && e.refs === 0 && temporalDecayScore(e) < 0.1) {
       count++;
+      return { ...e, archived: true };
     }
-  }
+    return e;
+  });
   if (count) {
-    await saveMemory(basePath, entries);
+    await saveMemory(basePath, updated);
     log.debug(`memory: 衰减归档 ${count} 条`);
   }
   return count;
+}
+
+/** 保存记忆快照（压缩前备份） */
+async function saveSnapshot(basePath: string, entries: MemoryEntry[]): Promise<void> {
+  const p = snapshotPath(basePath);
+  await mkdir(dirname(p), { recursive: true });
+  await writeFile(p, JSON.stringify(entries, null, 2), 'utf-8');
+}
+
+/** 记忆压缩：合并语义相似(>0.7)条目，可选目标数量压缩 */
+export async function compactMemory(basePath: string, targetCount?: number): Promise<number> {
+  const entries = await loadMemory(basePath);
+  const active = entries.filter(e => !e.archived);
+  if (active.length <= 1) return 0;
+
+  // 压缩前保存快照
+  await saveSnapshot(basePath, entries);
+
+  const stats = rebuildDf(entries);
+  const vecs = active.map(e => tfidfVector(tokenize(e.content), stats));
+  const merged = new Set<number>();
+  const result: MemoryEntry[] = [...entries.filter(e => e.archived)];
+
+  for (let i = 0; i < active.length; i++) {
+    if (merged.has(i)) continue;
+    let current = active[i];
+    for (let j = i + 1; j < active.length; j++) {
+      if (merged.has(j)) continue;
+      if (cosineSimilarity(vecs[i], vecs[j]) > 0.7) {
+        // 合并策略：保留较新内容，refs 取较大值
+        const newer = new Date(active[j].timestamp) > new Date(current.timestamp) ? active[j] : current;
+        current = { ...newer, refs: Math.max(current.refs, active[j].refs) };
+        merged.add(j);
+      }
+    }
+    result.push(current);
+  }
+
+  // 目标数量压缩：按 refs 升序 + 时间升序 淘汰多余条目
+  const activeResult = result.filter(e => !e.archived);
+  if (targetCount && activeResult.length > targetCount) {
+    const sorted = [...activeResult].sort((a, b) =>
+      a.refs !== b.refs ? a.refs - b.refs : new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+    const toRemove = new Set(sorted.slice(0, activeResult.length - targetCount));
+    const final = result.filter(e => !toRemove.has(e));
+    await saveMemory(basePath, final);
+    await saveDf(basePath, rebuildDf(final));
+    log.debug(`memory: 压缩 ${entries.length} → ${final.length} 条`);
+    return entries.length - final.length;
+  }
+
+  await saveMemory(basePath, result);
+  await saveDf(basePath, rebuildDf(result));
+  const removed = entries.length - result.length;
+  if (removed) log.debug(`memory: 压缩合并 ${removed} 条`);
+  return removed;
+}
+
+/** 从快照回滚记忆 */
+export async function rollbackMemory(basePath: string): Promise<boolean> {
+  try {
+    const snapshot = JSON.parse(await readFile(snapshotPath(basePath), 'utf-8')) as MemoryEntry[];
+    await saveMemory(basePath, snapshot);
+    await saveDf(basePath, rebuildDf(snapshot));
+    log.debug(`memory: 从快照回滚 ${snapshot.length} 条`);
+    return true;
+  } catch {
+    return false;
+  }
 }
