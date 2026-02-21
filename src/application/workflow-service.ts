@@ -246,7 +246,7 @@ export class WorkflowService {
 
     lines.push('');
     if (wrote) lines.push('CLAUDE.md 已更新: 添加了工作流协议');
-    lines.push('用户说"开始"即可启动全自动开发');
+    lines.push('描述你的开发任务即可启动全自动开发');
     return lines.join('\n');
   }
 
