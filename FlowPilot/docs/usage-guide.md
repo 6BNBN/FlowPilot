@@ -4,7 +4,7 @@
 
 ## 这是什么
 
-一个 44KB 的单文件工具，让 Claude Code 变成全自动开发机器。
+一个 99KB 的单文件工具，让 Claude Code 变成全自动开发机器。
 复制一个文件到项目里，一句开发需求，它就会自动拆解需求、分配任务、写代码、提交 git、跑测试，直到全部完成。
 
 ## 前置条件
@@ -290,6 +290,72 @@ flow next --batch → 重新并行派发这3个任务
 | Java (Gradle) | build.gradle | gradle build |
 | C/C++ | CMakeLists.txt | cmake --build/ctest |
 | 通用 | Makefile | make build/test/lint |
+
+## 自我进化系统
+
+FlowPilot 内置三阶段自我进化循环，灵感来自 [Memoh-v2](https://github.com/Kxiandaoyan/Memoh-v2) 的有机进化架构。每轮工作流结束后自动反思和优化，无需手动触发。
+
+### 三阶段循环
+
+**Phase 1: Reflect（反思）** — `finish()` 末尾自动触发
+
+分析本轮工作流的成败模式：
+- 连续失败链检测（≥2 个连续失败任务）
+- 类型失败集中度（某类型失败率 > 30%）
+- 重试热点（重试次数 > 2 的任务）
+- 跳过率过高（> 20%）
+
+有 `ANTHROPIC_API_KEY` 时用 Claude Haiku 深度分析，无则用规则引擎。
+
+**Phase 2: Experiment（实验）** — `finish()` 末尾自动触发
+
+基于反思报告自动调整：
+- **config 参数**：`maxRetries`、`timeout`、`parallelLimit`、`verifyTimeout`
+- **协议模板**：在 protocol.md 末尾追加经验规则
+
+每次修改前保存完整快照，支持回滚。
+
+**Phase 3: Review（自愈）** — `init()` 开头自动触发
+
+验证上轮实验效果：
+- 对比最近两轮工作流的 failRate、skipRate、retryRate
+- 任一指标恶化超过 10 个百分点 → 自动回滚到实验前快照
+- 检查 config.json 合法性、protocol.md 完整性
+
+### 进化数据存储
+
+```
+.flowpilot/
+├── evolution/
+│   ├── reflect-2025-01-15T10-30-00.json   # 反思报告
+│   ├── experiments.json                     # 实验日志（追加模式）
+│   └── review-2025-01-16T09-00-00.json    # 审查结果
+├── history/
+│   ├── workflow-1.json                      # 工作流统计
+│   └── workflow-2.json                      # 跨轮对比数据
+└── config.json                              # 自动调优的配置
+```
+
+### 手动回滚
+
+如果自动进化导致问题，可以手动回滚：
+
+```bash
+# 查看进化历史
+cat .flowpilot/evolution/experiments.json
+
+# 通过 workflow-service 回滚（在代码中调用）
+rollbackEvolution(index)  # index 为进化日志索引
+```
+
+### 优雅降级
+
+| 环境 | 行为 |
+|------|------|
+| 有 ANTHROPIC_API_KEY | LLM 深度分析 + 规则引擎双路径 |
+| 无 API Key | 纯规则引擎（连续失败/类型集中/重试热点/跳过率） |
+| API 调用失败 | 静默降级到规则引擎，不中断工作流 |
+| 无历史数据 | 所有检查直接 pass，不做回滚 |
 
 ## 常见问题
 

@@ -21,7 +21,7 @@ FlowPilot：你是甲方——只说要什么，剩下的全自动。
 | 一次只能做一件事 | 多个子Agent并行开发，速度翻倍 |
 | 做到一半忘了之前的决策 | 三层记忆自动记录，100个任务也不迷路 |
 | 每次手动 git commit | 每完成一个任务自动提交，收尾自动跑测试 |
-| 换个项目要重新配置 | 44KB 单文件复制即用，Node/Rust/Go/Python/Java/C++/Makefile 通吃 |
+| 换个项目要重新配置 | 99KB 单文件复制即用，Node/Rust/Go/Python/Java/C++/Makefile 通吃 |
 
 ### 和主流方案的区别
 
@@ -116,9 +116,30 @@ CC 会自动：拆解任务 → 识别依赖 → 并行派发子Agent → 写代
 第三轮：精修 → 代码质量提升 → 收尾验证
 ```
 
-### 44KB 通吃一切 — 零依赖，复制即用
+### 自我进化 — 每跑一轮，下一轮更聪明
 
-- 单文件 `dist/flow.js`，44KB
+灵感来自 [Memoh-v2](https://github.com/Kxiandaoyan/Memoh-v2) 的三阶段有机进化循环，FlowPilot 在每轮工作流结束时自动反思和优化：
+
+```
+finish() 触发：
+  Reflect（反思）→ 分析本轮成败模式（失败链、重试热点、类型集中度）
+  Experiment（实验）→ 自动调整 config 参数和协议模板，保存完整快照
+
+init() 触发：
+  Review（自愈）→ 对比上轮实验前后指标，恶化则自动回滚
+```
+
+| 阶段 | 触发时机 | 做什么 |
+|------|---------|--------|
+| Reflect | finish 末尾 | LLM 或规则分析工作流统计，输出 findings + experiments |
+| Experiment | finish 末尾 | 自动调整 maxRetries/timeout 等参数，协议追加经验规则 |
+| Review | init 开头 | 对比指标，恶化自动回滚，检查配置完整性 |
+
+有 `ANTHROPIC_API_KEY` 时用 LLM 深度分析，没有则用规则引擎——零依赖约束下的优雅降级。
+
+### 99KB 通吃一切 — 零依赖，复制即用
+
+- 单文件 `dist/flow.js`，99KB
 - 零运行时依赖，只需 Node.js
 - 自动识别 8 种项目类型，收尾时自动跑对应的 build/test/lint
 
@@ -240,7 +261,9 @@ node flow.js init
                    ↓
               code-review ──→ flow review
                    ↓
-              flow finish ──→ 最终提交 → 清理 .workflow/ → idle
+              flow finish ──→ Reflect + Experiment（自动进化）
+                   ↓
+              最终提交 → 清理 .workflow/ → idle
 ```
 
 ## 错误处理
@@ -249,6 +272,9 @@ node flow.js init
 - **级联跳过** — 依赖了失败任务的后续任务自动标记 `skipped`
 - **中断恢复** — `active` 状态的任务重置为 `pending`，从头重做
 - **验证失败** — `flow finish` 报错后可派子Agent修复，再次 finish
+- **循环检测** — 三策略防护（重复失败/乒乓/全局熔断），自动注入警告到下一任务
+- **心跳自检** — 活跃任务超时（>30分钟）告警，记忆膨胀（>100条）自动压缩
+- **进化回滚** — 实验导致指标恶化时，下轮 init 自动回滚到实验前快照
 
 ## 开发
 
@@ -271,12 +297,19 @@ src/
 │   ├── workflow.ts                  # WorkflowDefinition 定义
 │   └── repository.ts               # 仓储接口
 ├── application/
-│   └── workflow-service.ts          # 核心用例（11个）
+│   └── workflow-service.ts          # 核心用例（16个）
 ├── infrastructure/
-│   ├── fs-repository.ts             # 文件系统实现 + CLAUDE.md协议嵌入 + Hooks注入
+│   ├── fs-repository.ts             # 文件系统 + 协议嵌入 + Hooks注入
 │   ├── markdown-parser.ts           # 任务Markdown解析
-│   ├── git.ts                       # 自动git提交
-│   └── verify.ts                    # 多语言项目验证
+│   ├── memory.ts                    # 智能记忆引擎（BM25 + 向量索引 + RRF + MMR + LRU缓存）
+│   ├── extractor.ts                 # 知识提取（LLM + 规则引擎降级）
+│   ├── truncation.ts                # CJK感知智能截断
+│   ├── loop-detector.ts             # 三策略循环检测
+│   ├── history.ts                   # 历史分析 + 三阶段自我进化（Reflect/Experiment/Review）
+│   ├── git.ts                       # 自动git提交（子模块感知）
+│   ├── verify.ts                    # 多语言项目验证（8种）
+│   ├── hooks.ts                     # 生命周期钩子
+│   └── logger.ts                    # 结构化日志（JSONL）
 └── interfaces/
     ├── cli.ts                       # 命令路由
     ├── formatter.ts                 # 输出格式化
@@ -289,4 +322,4 @@ src/
 interfaces → application → domain ← infrastructure
 ```
 
-运行时零外部依赖，只用 Node.js 内置模块（fs, path, child_process）。
+运行时零外部依赖，只用 Node.js 内置模块（fs, path, child_process, crypto, https）。LLM 智能提取和自我进化反思为可选功能，检测到 ANTHROPIC_API_KEY 时自动启用。

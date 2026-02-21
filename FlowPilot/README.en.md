@@ -21,7 +21,7 @@ FlowPilot: you're the client — just say what you want, everything else is auto
 | Can only do one thing at a time | Multiple sub-agents develop in parallel, double the speed |
 | Forget previous decisions halfway through | Three-layer memory auto-records, 100 tasks without getting lost |
 | Manual git commit every time | Auto-commit per task, auto-run tests at finalization |
-| Reconfigure for each project | 44KB single file, copy and use — Node/Rust/Go/Python/Java/C++/Makefile all supported |
+| Reconfigure for each project | 99KB single file, copy and use — Node/Rust/Go/Python/Java/C++/Makefile all supported |
 
 ### How It Compares
 
@@ -116,9 +116,30 @@ Round 2: Review → Find drift/defects → Auto-patch
 Round 3: Polish → Code quality improvement → Final verification
 ```
 
-### 44KB Does It All — Zero Dependencies, Copy and Use
+### Self-Evolution — Each Round Makes the Next Smarter
 
-- Single file `dist/flow.js`, 44KB
+Inspired by [Memoh-v2](https://github.com/Kxiandaoyan/Memoh-v2)'s three-phase organic evolution cycle, FlowPilot automatically reflects and optimizes after each workflow round:
+
+```
+finish() triggers:
+  Reflect → Analyze success/failure patterns (failure chains, retry hotspots, type concentration)
+  Experiment → Auto-adjust config params and protocol templates, save full snapshots
+
+init() triggers:
+  Review → Compare metrics before/after experiments, auto-rollback if degraded
+```
+
+| Phase | Trigger | What It Does |
+|-------|---------|-------------|
+| Reflect | End of finish | LLM or rule-based analysis of workflow stats → findings + experiments |
+| Experiment | End of finish | Auto-adjust maxRetries/timeout, append experience rules to protocol |
+| Review | Start of init | Compare metrics, auto-rollback if degraded, check config integrity |
+
+With `ANTHROPIC_API_KEY`: deep LLM analysis. Without: rule engine fallback — graceful degradation under zero-dependency constraints.
+
+### 99KB Does It All — Zero Dependencies, Copy and Use
+
+- Single file `dist/flow.js`, 99KB
 - Zero runtime dependencies, only needs Node.js
 - Auto-detects 8 project types, runs corresponding build/test/lint at finalization
 
@@ -240,7 +261,9 @@ node flow.js init
                    ↓
               code-review ──→ flow review
                    ↓
-              flow finish ──→ Final commit → Clean .workflow/ → idle
+              flow finish ──→ Reflect + Experiment (auto-evolution)
+                   ↓
+              Final commit → Clean .workflow/ → idle
 ```
 
 ## Error Handling
@@ -249,6 +272,9 @@ node flow.js init
 - **Cascade skip** — Downstream tasks depending on failed tasks auto-marked `skipped`
 - **Interruption recovery** — `active` tasks reset to `pending`, redo from scratch
 - **Verification failure** — `flow finish` reports error, dispatch sub-agent to fix, retry finish
+- **Loop detection** — Three-strategy defense (repeated failures/ping-pong/global circuit breaker), auto-injects warnings into next task
+- **Health check** — Active task timeout (>30min) alerts, memory bloat (>100 entries) auto-compaction
+- **Evolution rollback** — If experiments degrade metrics, next init auto-rolls back to pre-experiment snapshot
 
 ## Development
 
@@ -271,12 +297,19 @@ src/
 │   ├── workflow.ts                  # WorkflowDefinition
 │   └── repository.ts               # Repository interface
 ├── application/
-│   └── workflow-service.ts          # Core use cases (11)
+│   └── workflow-service.ts          # Core use cases (16)
 ├── infrastructure/
-│   ├── fs-repository.ts             # File system implementation + CLAUDE.md protocol embedding + Hooks injection
+│   ├── fs-repository.ts             # File system + protocol embedding + Hooks injection
 │   ├── markdown-parser.ts           # Task Markdown parser
-│   ├── git.ts                       # Auto git commits
-│   └── verify.ts                    # Multi-language project verification
+│   ├── memory.ts                    # Smart memory engine (BM25 + vector index + RRF + MMR + LRU cache)
+│   ├── extractor.ts                 # Knowledge extraction (LLM + rule engine fallback)
+│   ├── truncation.ts                # CJK-aware smart truncation
+│   ├── loop-detector.ts             # Three-strategy loop detection
+│   ├── history.ts                   # History analysis + three-phase self-evolution (Reflect/Experiment/Review)
+│   ├── git.ts                       # Auto git commits (submodule-aware)
+│   ├── verify.ts                    # Multi-language project verification (8 types)
+│   ├── hooks.ts                     # Lifecycle hooks
+│   └── logger.ts                    # Structured logging (JSONL)
 └── interfaces/
     ├── cli.ts                       # Command routing
     ├── formatter.ts                 # Output formatting
@@ -289,4 +322,4 @@ src/
 interfaces → application → domain ← infrastructure
 ```
 
-Zero runtime external dependencies, only Node.js built-in modules (fs, path, child_process).
+Zero runtime external dependencies, only Node.js built-in modules (fs, path, child_process, crypto, https). LLM smart extraction and self-evolution reflection are optional features, auto-enabled when ANTHROPIC_API_KEY is detected.

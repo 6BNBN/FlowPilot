@@ -1067,10 +1067,10 @@ function ruleReflect(stats) {
   const experiments = [];
   const results = stats.taskResults ?? [];
   let streak = 0;
-  for (const r of results) {
-    streak = r.status === "failed" ? streak + 1 : 0;
+  for (let i = 0; i < results.length; i++) {
+    streak = results[i].status === "failed" ? streak + 1 : 0;
     if (streak >= 2) {
-      findings.push(`\u8FDE\u7EED\u5931\u8D25\u94FE\uFF1A\u4ECE\u4EFB\u52A1 ${results[results.indexOf(r) - 1].id} \u5F00\u59CB\u8FDE\u7EED\u5931\u8D25`);
+      findings.push(`\u8FDE\u7EED\u5931\u8D25\u94FE\uFF1A\u4ECE\u4EFB\u52A1 ${results[i - streak + 1].id} \u5F00\u59CB\u8FDE\u7EED\u5931\u8D25`);
       experiments.push({
         trigger: "\u8FDE\u7EED\u5931\u8D25\u94FE",
         observation: `${streak} \u4E2A\u4EFB\u52A1\u8FDE\u7EED\u5931\u8D25`,
@@ -1138,10 +1138,9 @@ async function safeRead(p, fallback) {
 var KNOWN_PARAMS = ["maxRetries", "timeout", "parallelLimit", "verifyTimeout"];
 function parseConfigAction(action) {
   for (const k of KNOWN_PARAMS) {
-    if (action.includes(k)) {
-      const m = action.match(/(\d+)/);
-      if (m) return { key: k, value: Number(m[1]) };
-    }
+    const re = new RegExp(k + "\\D*(\\d+)");
+    const m = action.match(re);
+    if (m) return { key: k, value: Number(m[1]) };
   }
   return null;
 }
@@ -1150,34 +1149,40 @@ async function experiment(report, basePath2) {
   if (!report.experiments.length) return log2;
   const configPath = (0, import_path4.join)(basePath2, ".flowpilot", "config.json");
   const protocolPath = (0, import_path4.join)(basePath2, "FlowPilot", "src", "templates", "protocol.md");
+  const configSnapshot = await safeRead(configPath, "{}");
+  const protocolSnapshot = await safeRead(protocolPath, "");
+  let configObj = JSON.parse(configSnapshot);
+  let protocolContent = protocolSnapshot;
   for (const exp of report.experiments) {
     const applied = { ...exp, applied: false, snapshotBefore: "" };
     try {
       if (exp.target === "config") {
-        const raw = await safeRead(configPath, "{}");
-        applied.snapshotBefore = raw;
+        applied.snapshotBefore = configSnapshot;
         const parsed = parseConfigAction(exp.action);
         if (parsed) {
-          const cfg = JSON.parse(raw);
-          cfg[parsed.key] = parsed.value;
-          await (0, import_promises3.mkdir)((0, import_path4.dirname)(configPath), { recursive: true });
-          await (0, import_promises3.writeFile)(configPath, JSON.stringify(cfg, null, 2), "utf-8");
+          configObj = { ...configObj, [parsed.key]: parsed.value };
           applied.applied = true;
         }
       } else if (exp.target === "protocol") {
-        const content = await safeRead(protocolPath, "");
-        applied.snapshotBefore = content;
+        applied.snapshotBefore = protocolSnapshot;
         const appendix = `
 <!-- evolution: ${exp.trigger} -->
 > ${exp.action}
 `;
-        await (0, import_promises3.mkdir)((0, import_path4.dirname)(protocolPath), { recursive: true });
-        await (0, import_promises3.writeFile)(protocolPath, content + appendix, "utf-8");
+        protocolContent += appendix;
         applied.applied = true;
       }
     } catch {
     }
     log2.experiments.push(applied);
+  }
+  if (log2.experiments.some((e) => e.applied && e.target === "config")) {
+    await (0, import_promises3.mkdir)((0, import_path4.dirname)(configPath), { recursive: true });
+    await (0, import_promises3.writeFile)(configPath, JSON.stringify(configObj, null, 2), "utf-8");
+  }
+  if (log2.experiments.some((e) => e.applied && e.target === "protocol")) {
+    await (0, import_promises3.mkdir)((0, import_path4.dirname)(protocolPath), { recursive: true });
+    await (0, import_promises3.writeFile)(protocolPath, protocolContent, "utf-8");
   }
   const logPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
   await (0, import_promises3.mkdir)((0, import_path4.dirname)(logPath), { recursive: true });
@@ -1264,11 +1269,10 @@ async function review(basePath2) {
       const logs = JSON.parse(await (0, import_promises3.readFile)(expPath, "utf-8"));
       const last = logs[logs.length - 1];
       if (last) {
-        for (const exp of last.experiments) {
-          if (!exp.applied || !exp.snapshotBefore) continue;
-          const target = exp.target === "config" ? configPath : protocolPath;
-          await (0, import_promises3.writeFile)(target, exp.snapshotBefore, "utf-8");
-        }
+        const firstConfig = last.experiments.find((e) => e.applied && e.target === "config");
+        const firstProtocol = last.experiments.find((e) => e.applied && e.target === "protocol");
+        if (firstConfig?.snapshotBefore) await (0, import_promises3.writeFile)(configPath, firstConfig.snapshotBefore, "utf-8");
+        if (firstProtocol?.snapshotBefore) await (0, import_promises3.writeFile)(protocolPath, firstProtocol.snapshotBefore, "utf-8");
       }
     } catch {
     }
@@ -1773,12 +1777,12 @@ var WorkflowService = class {
   }
   /** init: 解析任务markdown → 生成progress/tasks */
   async init(tasksMd, force = false) {
-    const reviewResult = await review(this.repo.projectRoot());
-    if (reviewResult.rolledBack) {
-      log.info(`[\u81EA\u6108] \u5DF2\u56DE\u6EDA\u4E0A\u8F6E\u5B9E\u9A8C: ${reviewResult.rollbackReason}`);
-    }
-    for (const check of reviewResult.checks.filter((c) => !c.passed)) {
-      log.info(`[\u81EA\u6108] \u68C0\u67E5\u672A\u901A\u8FC7: ${check.name} - ${check.detail}`);
+    try {
+      const reviewResult = await review(this.repo.projectRoot());
+      if (reviewResult.rolledBack) log.info(`[\u81EA\u6108] \u5DF2\u56DE\u6EDA: ${reviewResult.rollbackReason}`);
+      for (const c of reviewResult.checks.filter((c2) => !c2.passed)) log.info(`[\u81EA\u6108] ${c.name}: ${c.detail}`);
+    } catch (e) {
+      log.debug(`[\u81EA\u6108] review \u8DF3\u8FC7: ${e}`);
     }
     const existing = await this.repo.loadProgress();
     if (existing && existing.status === "running" && !force) {

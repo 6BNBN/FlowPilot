@@ -4,7 +4,7 @@
 
 ## What Is This
 
-A 44KB single-file tool that turns Claude Code into a fully automated development machine.
+A 99KB single-file tool that turns Claude Code into a fully automated development machine.
 Copy one file into your project, describe one requirement, and it will automatically decompose requirements, assign tasks, write code, commit to git, run tests, until everything is done.
 
 ## Prerequisites
@@ -313,3 +313,57 @@ During development, committing is recommended so team members can see task progr
 
 **Q: Will summaries get too long with many tasks?**
 No. After 10+ completed tasks, summaries auto-compress by type, keeping only the 3 most recent task names per group.
+
+## Self-Evolution System
+
+FlowPilot includes a three-phase self-evolution cycle, inspired by [Memoh-v2](https://github.com/Kxiandaoyan/Memoh-v2)'s organic evolution architecture. Automatically reflects and optimizes after each workflow round — no manual trigger needed.
+
+### Three-Phase Cycle
+
+**Phase 1: Reflect** — Auto-triggered at end of `finish()`
+
+Analyzes the current workflow's success/failure patterns:
+- Consecutive failure chain detection (≥2 consecutive failed tasks)
+- Type failure concentration (>30% fail rate for a type)
+- Retry hotspots (tasks with >2 retries)
+- High skip rate (>20%)
+
+Uses Claude Haiku for deep analysis when `ANTHROPIC_API_KEY` is available, falls back to rule engine otherwise.
+
+**Phase 2: Experiment** — Auto-triggered at end of `finish()`
+
+Auto-adjusts based on reflect report:
+- **Config params**: `maxRetries`, `timeout`, `parallelLimit`, `verifyTimeout`
+- **Protocol template**: Appends experience rules to protocol.md
+
+Full snapshot saved before each modification for rollback support.
+
+**Phase 3: Review** — Auto-triggered at start of `init()`
+
+Validates previous experiment results:
+- Compares failRate, skipRate, retryRate between last two workflow rounds
+- Any metric worsened by >10 percentage points → auto-rollback to pre-experiment snapshot
+- Checks config.json validity and protocol.md integrity
+
+### Evolution Data Storage
+
+```
+.flowpilot/
+├── evolution/
+│   ├── reflect-2025-01-15T10-30-00.json   # Reflect report
+│   ├── experiments.json                     # Experiment log (append mode)
+│   └── review-2025-01-16T09-00-00.json    # Review result
+├── history/
+│   ├── workflow-1.json                      # Workflow statistics
+│   └── workflow-2.json                      # Cross-round comparison data
+└── config.json                              # Auto-tuned configuration
+```
+
+### Graceful Degradation
+
+| Environment | Behavior |
+|-------------|----------|
+| ANTHROPIC_API_KEY present | LLM deep analysis + rule engine dual path |
+| No API Key | Pure rule engine (failure chains/type concentration/retry hotspots/skip rate) |
+| API call fails | Silent fallback to rule engine, workflow uninterrupted |
+| No history data | All checks pass, no rollback |
