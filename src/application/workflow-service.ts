@@ -501,6 +501,36 @@ export class WorkflowService {
     }
   }
 
+  /** 将失败原因追加到 context/task-{id}.md，标记 [FAILED] */
+  private async appendFailureContext(id: string, task: TaskEntry, detail: string): Promise<void> {
+    const existing = await this.repo.loadTaskContext(id) ?? '';
+    const entry = `\n## [FAILED] 第${task.retries + 1}次失败\n\n${detail}\n`;
+    const content = existing
+      ? existing.trimEnd() + '\n' + entry
+      : `# task-${id}: ${task.title}\n${entry}`;
+    await this.repo.saveTaskContext(id, content);
+  }
+
+  /** 检测连续失败模式：3次FAILED且摘要相似(>60%)时输出警告 */
+  private async detectFailurePattern(id: string, task: TaskEntry): Promise<string | null> {
+    if (task.retries < 2) return null;
+    const ctx = await this.repo.loadTaskContext(id);
+    if (!ctx) return null;
+    const reasons = [...ctx.matchAll(/## \[FAILED\] .+?\n\n(.+?)(?=\n##|\n*$)/gs)]
+      .map(m => m[1].trim());
+    if (reasons.length < 3) return null;
+    const last3 = reasons.slice(-3);
+    const sim01 = this.similarity(last3[0], last3[1]);
+    const sim12 = this.similarity(last3[1], last3[2]);
+    log.debug(`detectFailurePattern ${id}: sim01=${sim01.toFixed(2)}, sim12=${sim12.toFixed(2)}`);
+    if (sim01 > 0.6 && sim12 > 0.6) {
+      const msg = `[WARN] 任务 ${id} 陷入重复失败模式，建议 skip 或修改任务描述`;
+      log.warn(msg);
+      return msg;
+    }
+    return null;
+  }
+
   private async requireProgress(): Promise<ProgressData> {
     const data = await this.repo.loadProgress();
     if (!data) throw new Error('无活跃工作流，请先 node flow.js init');
