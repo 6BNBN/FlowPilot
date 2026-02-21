@@ -235,6 +235,7 @@ export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'r
     await saveMemory(basePath, newEntries);
   }
   await saveDf(basePath, rebuildDf(await loadMemory(basePath)));
+  await clearCache(basePath);
 }
 
 /** MMR 重排序：平衡相关性与多样性 (lambda=0.7) */
@@ -361,12 +362,14 @@ export async function compactMemory(basePath: string, targetCount?: number): Pro
     const final = result.filter(e => !toRemove.has(e));
     await saveMemory(basePath, final);
     await saveDf(basePath, rebuildDf(final));
+    await clearCache(basePath);
     log.debug(`memory: 压缩 ${entries.length} → ${final.length} 条`);
     return entries.length - final.length;
   }
 
   await saveMemory(basePath, result);
   await saveDf(basePath, rebuildDf(result));
+  await clearCache(basePath);
   const removed = entries.length - result.length;
   if (removed) log.debug(`memory: 压缩合并 ${removed} 条`);
   return removed;
