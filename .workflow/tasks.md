@@ -1,29 +1,23 @@
-1. [general] 修复不可变性 + 依赖查找性能优化
-   修复 task-store.ts 中的可变性问题：cascadeSkip() 和 completeTask() 必须返回新对象而非原地修改。findNextTask/findParallelTasks 用 Map<id, TaskEntry> 索引替代 O(n²) 的 tasks.find()。修复 findNextTask 的副作用（不应内部调用 cascadeSkip）。
+1. [general] 记忆检索升级：TF-IDF + 余弦相似度替代 Jaccard
+   重写 memory.ts 的检索引擎：1) 实现 TF-IDF 向量化（维护文档频率统计）2) 用余弦相似度替代 Jaccard 3) 改进 tokenize 支持多语言分词（参考 Memoh-v2 的 CJK+拉丁混合分词）4) 查询结果加 MMR 重排序保证多样性。保持零外部依赖。
 
-2. [general] 清理机制：finish 后清理 CLAUDE.md 协议块和 hooks
-   在 fs-repository.ts 中新增 cleanup() 方法：1) 移除 CLAUDE.md 中 flowpilot:start/end 之间的内容 2) 移除 .claude/settings.json 中注入的 PreToolUse hooks。在 workflow-service.ts 的 finish() 成功后调用 cleanup()。
+2. [general] 记忆自动提取：从 checkpoint summary 智能提取知识（无需 LLM）
+   参考 Memoh-v2 的 fact extraction，用规则引擎替代 LLM：1) 除 [REMEMBER] 外，自动识别 [DECISION]/[ARCHITECTURE]/[IMPORTANT] 标记内容写入永久记忆 2) 自动提取"选择了X而非Y"、"因为X所以Y"等决策模式 3) 提取技术栈关键词（框架名、库名、配置项）作为记忆条目
 
-3. [general] 智能 summary 压缩：保留关键决策 + 时间衰减
-   改进 workflow-service.ts 的 updateSummary()：1) 识别并保留 [DECISION]/[ARCHITECTURE]/[IMPORTANT] 标记的内容不压缩 2) 实现时间衰减权重——最近完成的任务保留完整摘要，早期任务只保留标题 3) 语义去重——相似摘要合并
+3. [general] 记忆压缩与合并机制 (deps: 1)
+   参考 Memoh-v2 的 Compact：1) 新增 compactMemory 函数，合并语义相似(>0.7)的条目 2) 支持目标数量压缩（如从100条压缩到50条）3) 在 init 时当条目超过阈值自动触发压缩 4) 压缩前保存快照支持回滚
 
-4. [general] 快照回滚系统：git tag + rollback 命令 (deps: 1)
-   1) checkpoint 成功后在 autoCommit 之后打轻量 tag flowpilot/task-{id} 2) 新增 rollback <id> 命令：git revert 到指定任务的 tag 3) resume 时基于 --files 记录精确处理而非 stash 全部。需要修改 git.ts、workflow-service.ts、cli.ts。
+4. [general] 时间衰减升级：指数衰减 + 常青豁免 (deps: 1)
+   参考 Memoh-v2 的 applyTemporalDecay：1) 将简单30天阈值改为指数衰减评分（可配半衰期，默认30天）2) 查询时将衰减分数纳入排序权重 3) 标记为 evergreen 的来源（如 architecture、identity）豁免衰减 4) 修复 decayMemory 中的 mutation 问题
 
-5. [general] Verify 可配置化 + abort 命令
-   1) 支持 .workflow/config.json 自定义 verify 命令（覆盖自动检测）2) 新增 abort 命令：将工作流标记为 aborted，清理 .workflow/ 目录 3) verify timeout 可配置（默认仍为 300s）。修改 verify.ts、workflow-service.ts、cli.ts。
+5. [general] 历史进化引擎：自动应用建议 + startTime 修复 (deps: 1,2,3,4)
+   对齐 Memoh-v2 的 Heartbeat 自我进化：1) 修复 collectStats 的 startTime 为空问题 2) analyzeHistory 的建议自动写入 config.json（闭环）3) 新增 evolution-log：每次 finish 保存进化快照（config 变更前后对比）4) 支持回滚到历史进化点
 
-6. [general] Protocol 模板外置 + 插件钩子
-   1) 将 fs-repository.ts 中硬编码的 CLAUDE.md 协议块提取为 templates/protocol.md 模板文件 2) 支持用户自定义协议模板路径 3) 在任务生命周期中暴露 onTaskStart/onTaskComplete/onWorkflowFinish 钩子点（通过 .workflow/config.json 配置 shell 命令）
+6. [general] 结构化日志系统：step 类型 + trace 导出
+   参考 Memoh-v2 的 ProcessLog：1) 扩展 logger 支持结构化日志（step 类型：memory_searched/checkpoint_saved/task_started 等）2) 日志持久化到 .flowpilot/logs/ 3) 新增 trace 导出功能（按工作流/任务导出完整日志链）4) 保留 stderr 输出兼容现有 --verbose
 
-7. [general] 自我进化引擎：历史统计 + 参数自调整 (deps: 1, 3, 5)
-   1) 新增 .flowpilot/history/ 永久目录（不随 .workflow/ 清理），每次 finish 保存工作流统计（任务数、retry率、skip率、失败率、耗时分布、类型分布）2) init 时读取历史经验，输出建议（如"backend 类型任务历史失败率 30%，建议拆分更细"）3) 基于历史自动调整默认参数（retry次数、verify timeout）
+7. [general] 工具级循环检测：三策略防护 (deps: 6)
+   对齐 Memoh-v2 的 loop-detection.ts 三策略：1) 在 checkpoint 中解析子Agent行为模式（从 summary 提取工具调用信息）2) 重复无进展检测：连续相似 summary 判定卡住 3) 乒乓检测：任务间交替失败模式 4) 全局熔断：滑动窗口内失败率超阈值暂停工作流 5) 检测到循环时注入提示到下次任务 context
 
-8. [general] 永久记忆系统：跨工作流知识积累 (deps: 7)
-   借鉴 Memoh-v2 三层记忆架构，实现 FlowPilot 永久记忆：1) .flowpilot/memory.md 存储跨工作流的关键知识（架构决策、技术选型、踩坑记录）2) checkpoint 时自动提取 [REMEMBER] 标记的内容写入永久记忆 3) init/next 时将相关永久记忆注入子 Agent context 4) 记忆条目带时间戳和引用计数，长期未引用的自动衰减归档
-
-9. [general] 循环检测与防护机制 (deps: 1)
-   借鉴 Memoh-v2 的三策略防护：1) 在 checkpoint 中检测连续 FAILED 模式（当前已有 retry 3 次，增加模式识别日志）2) 新增 --verbose 模式输出调试日志 3) 任务失败时记录失败原因到 context/task-xxx.md，供后续任务参考
-
-10. [general] 测试补全 + 集成验证 (deps: 1, 2, 3, 4, 5, 6, 7, 8, 9)
-    为所有新增功能编写测试：1) 不可变性测试 2) cleanup 测试 3) 智能 summary 测试 4) rollback 测试 5) config 测试 6) 历史统计测试 7) 永久记忆测试 8) 运行全量测试确保无回归
+8. [general] 测试补全 + 集成验证 (deps: 1,2,3,4,5,6,7)
+   为所有新增功能编写测试：1) TF-IDF 检索测试 2) 自动提取测试 3) 压缩合并测试 4) 指数衰减测试 5) 进化引擎测试 6) 结构化日志测试 7) 循环检测测试 8) 全量回归测试

@@ -1,3 +1,3 @@
-# task-005: Verify 可配置化 + abort 命令
+# task-005: 历史进化引擎：自动应用建议 + startTime 修复
 
-Verify可配置化(config.json覆盖自动检测+timeout可配) + abort命令(标记aborted并清理.workflow/) + CLI路由
+历史进化引擎完成：修复startTime、config自动写入闭环、evolution log保存/回滚

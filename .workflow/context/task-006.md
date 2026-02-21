@@ -1,3 +1,3 @@
-# task-006: Protocol 模板外置 + 插件钩子
+# task-006: 结构化日志系统：step 类型 + trace 导出
 
-Protocol模板外置+生命周期钩子完成，37测试全通过
+结构化日志系统完成：扩展logger支持StepType+LogEntry+JSONL持久化+trace导出，保留stderr兼容

@@ -1,3 +1,3 @@
-# task-004: 快照回滚系统：git tag + rollback 命令
+# task-004: 时间衰减升级：指数衰减 + 常青豁免
 
-快照回滚系统完成：git.ts 新增 tagTask/rollbackToTask/cleanTags，workflow-service checkpoint 后自动打 tag、finish 时清理 tags、新增 rollback 方法，cli.ts 新增 rollback 命令
+时间衰减升级完成：指数衰减函数temporalDecayScore + evergreen豁免 + queryMemory排序权重集成 + decayMemory immutable重写

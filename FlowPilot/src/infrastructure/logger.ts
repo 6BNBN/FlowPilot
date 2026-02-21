@@ -4,7 +4,7 @@
  */
 
 import { appendFileSync, mkdirSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
 
 /** 日志步骤类型枚举 */
 export type StepType =
@@ -67,7 +67,7 @@ function persist(entry: LogEntry): void {
   const p = logFilePath();
   if (!p) return;
   try {
-    mkdirSync(join(basePath!, '.flowpilot', 'logs'), { recursive: true });
+    mkdirSync(dirname(p), { recursive: true });
     appendFileSync(p, JSON.stringify(entry) + '\n', 'utf-8');
   } catch { /* 日志写入失败不应中断主流程 */ }
 }

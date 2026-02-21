@@ -141,13 +141,11 @@ export async function detect(
     timestamp: new Date().toISOString(),
   };
 
-  window.push(record);
-  // 保持滑动窗口大小
-  while (window.length > WINDOW_SIZE) window.shift();
-  await saveWindow(basePath, window);
+  const updated = [...window, record].slice(-WINDOW_SIZE);
+  await saveWindow(basePath, updated);
 
   // 按优先级依次检测
-  return repeatedNoProgress(window)
-    ?? pingPong(window)
-    ?? globalCircuitBreaker(window);
+  return repeatedNoProgress(updated)
+    ?? pingPong(updated)
+    ?? globalCircuitBreaker(updated);
 }

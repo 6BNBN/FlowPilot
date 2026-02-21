@@ -1,3 +1,3 @@
-# task-008: 永久记忆系统：跨工作流知识积累
+# task-008: 测试补全 + 集成验证
 
-上次中断，需重新执行
+测试补全完成: 新增44个测试(67→111), 覆盖memory/extractor/logger/loop-detector/history/workflow-service全部模块

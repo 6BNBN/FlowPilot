@@ -1,3 +1,3 @@
-# task-001: 修复不可变性 + 依赖查找性能优化
+# task-001: 记忆检索升级：TF-IDF + 余弦相似度替代 Jaccard
 
-不可变性重构完成：cascadeSkip/completeTask/failTask/resumeProgress 均返回新对象；findNextTask/findParallelTasks 移除内部 cascadeSkip 副作用；全部查找改用 Map 索引 O(1)；workflow-service 适配新 API；17 个单元测试全部通过，TypeScript 编译无错误
+TF-IDF+余弦相似度+MMR重排序替代Jaccard，DF持久化到memory-df.json，改进tokenize支持CJK双字gram，7个测试全通过

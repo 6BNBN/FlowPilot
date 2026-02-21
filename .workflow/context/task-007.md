@@ -1,3 +1,3 @@
-# task-007: 自我进化引擎：历史统计 + 参数自调整
+# task-007: 工具级循环检测：三策略防护
 
-自我进化引擎完成：新增 WorkflowStats 类型、history.ts 分析模块、.flowpilot/history/ 永久存储，finish() 保存统计，init() 读取历史输出建议并自动调整参数
+工具级循环检测：新建 loop-detector.ts（三策略：repeatedNoProgress/pingPong/globalCircuitBreaker），集成到 workflow-service.ts checkpoint，检测到循环时 log.step + 注入下次任务 context

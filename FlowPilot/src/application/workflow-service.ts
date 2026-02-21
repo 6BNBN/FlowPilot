@@ -13,15 +13,32 @@ import { collectStats, analyzeHistory } from '../infrastructure/history';
 import { appendMemory, queryMemory, decayMemory, compactMemory, loadMemory } from '../infrastructure/memory';
 import { extractAll } from '../infrastructure/extractor';
 import { detect as detectLoop, type LoopDetection } from '../infrastructure/loop-detector';
+import { writeFile, readFile, unlink, mkdir } from 'fs/promises';
+import { join } from 'path';
 
 export class WorkflowService {
-  /** 上次循环检测警告，注入到下次任务 context 后清空 */
-  private loopWarning: string | null = null;
-
   constructor(
     private readonly repo: WorkflowRepository,
     private readonly parse: (md: string) => WorkflowDefinition,
   ) {}
+
+  private loopWarningPath(): string {
+    return join(this.repo.projectRoot(), '.workflow', 'loop-warning.txt');
+  }
+
+  private async saveLoopWarning(msg: string): Promise<void> {
+    const p = this.loopWarningPath();
+    await mkdir(join(this.repo.projectRoot(), '.workflow'), { recursive: true });
+    await writeFile(p, msg, 'utf-8');
+  }
+
+  private async loadAndClearLoopWarning(): Promise<string | null> {
+    try {
+      const msg = await readFile(this.loopWarningPath(), 'utf-8');
+      await unlink(this.loopWarningPath());
+      return msg || null;
+    } catch { return null; }
+  }
 
   /** init: 解析任务markdown → 生成progress/tasks */
   async init(tasksMd: string, force = false): Promise<ProgressData> {
@@ -114,9 +131,9 @@ export class WorkflowService {
       }
 
       // 注入循环检测警告
-      if (this.loopWarning) {
-        parts.push(`## 循环检测警告\n\n${this.loopWarning}`);
-        this.loopWarning = null;
+      const loopWarning = await this.loadAndClearLoopWarning();
+      if (loopWarning) {
+        parts.push(`## 循环检测警告\n\n${loopWarning}`);
       }
 
       return { task, context: parts.join('\n\n---\n\n') };
@@ -154,6 +171,7 @@ export class WorkflowService {
       }
 
       const summary = await this.repo.loadSummary();
+      const loopWarning = await this.loadAndClearLoopWarning();
       const results: { task: TaskEntry; context: string }[] = [];
 
       for (const task of tasks) {
@@ -169,13 +187,11 @@ export class WorkflowService {
           parts.push('## 相关记忆\n\n' + memories.map(m => `- ${m.content}`).join('\n'));
         }
         // 注入循环检测警告
-        if (this.loopWarning) {
-          parts.push(`## 循环检测警告\n\n${this.loopWarning}`);
+        if (loopWarning) {
+          parts.push(`## 循环检测警告\n\n${loopWarning}`);
         }
         results.push({ task, context: parts.join('\n\n---\n\n') });
       }
-      // 注入后清空（批量任务共享同一警告）
-      this.loopWarning = null;
       return results;
     } finally {
       await this.repo.unlock();
@@ -204,7 +220,7 @@ export class WorkflowService {
         const loopResult = await detectLoop(this.repo.projectRoot(), id, detail, true);
         if (loopResult) {
           log.step('loop_detected', loopResult.message, { taskId: id, data: { strategy: loopResult.strategy } });
-          this.loopWarning = `[LOOP WARNING - ${loopResult.strategy}] ${loopResult.message}`;
+          await this.saveLoopWarning(`[LOOP WARNING - ${loopResult.strategy}] ${loopResult.message}`);
         }
 
         const { result, data: newData } = failTask(data, id);
@@ -239,7 +255,7 @@ export class WorkflowService {
       const loopResult = await detectLoop(this.repo.projectRoot(), id, summaryLine, false);
       if (loopResult) {
         log.step('loop_detected', loopResult.message, { taskId: id, data: { strategy: loopResult.strategy } });
-        this.loopWarning = `[LOOP WARNING - ${loopResult.strategy}] ${loopResult.message}`;
+        await this.saveLoopWarning(`[LOOP WARNING - ${loopResult.strategy}] ${loopResult.message}`);
       }
 
       await this.updateSummary(newData);
@@ -572,8 +588,8 @@ export class WorkflowService {
 
     const { suggestions, recommendedConfig } = analyzeHistory(history);
     if (suggestions.length) {
-      console.log('\n[历史经验建议]');
-      for (const s of suggestions) console.log(`  - ${s}`);
+      log.info('[历史经验建议]');
+      for (const s of suggestions) log.info(`  - ${s}`);
     }
 
     if (!Object.keys(recommendedConfig).length) return;
@@ -591,7 +607,7 @@ export class WorkflowService {
         workflowName: (await this.repo.loadProgress())?.name ?? '',
         configBefore, configAfter: merged, suggestions,
       });
-      console.log('[历史经验] 已基于历史数据自动调整默认参数');
+      log.info('[历史经验] 已基于历史数据自动调整默认参数');
     }
   }
 
