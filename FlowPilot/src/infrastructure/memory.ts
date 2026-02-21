@@ -3,8 +3,9 @@
  * @description 永久记忆系统 - 跨工作流知识积累（BM25 + 余弦相似度 + MMR）
  */
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, writeFile, mkdir, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
+import { createHash } from 'crypto';
 import { log } from './logger';
 
 /** 记忆条目 */
@@ -33,6 +34,54 @@ const DF_FILE = 'memory-df.json';
 const SNAPSHOT_FILE = 'memory-snapshot.json';
 const COMPACT_THRESHOLD = 50;
 const EVERGREEN_SOURCES = ['architecture', 'identity', 'decision'];
+
+/** 查询缓存条目 */
+interface CacheEntry {
+  results: MemoryEntry[];
+  timestamp: string;
+}
+/** 查询缓存结构 */
+interface QueryCache {
+  entries: Record<string, CacheEntry>;
+}
+const CACHE_FILE = 'memory-cache.json';
+const CACHE_MAX = 50;
+const CACHE_PRUNE_RATIO = 0.1;
+
+function sha256(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
+}
+
+function cachePath(basePath: string): string {
+  return join(basePath, '.flowpilot', CACHE_FILE);
+}
+
+async function loadCache(basePath: string): Promise<QueryCache> {
+  try {
+    return JSON.parse(await readFile(cachePath(basePath), 'utf-8'));
+  } catch {
+    return { entries: {} };
+  }
+}
+
+async function saveCache(basePath: string, cache: QueryCache): Promise<void> {
+  const p = cachePath(basePath);
+  await mkdir(dirname(p), { recursive: true });
+  // LRU 淘汰
+  const keys = Object.keys(cache.entries);
+  if (keys.length > CACHE_MAX) {
+    const sorted = keys.sort((a, b) =>
+      cache.entries[a].timestamp.localeCompare(cache.entries[b].timestamp)
+    );
+    const pruneCount = Math.ceil(keys.length * CACHE_PRUNE_RATIO);
+    for (const k of sorted.slice(0, pruneCount)) delete cache.entries[k];
+  }
+  await writeFile(p, JSON.stringify(cache), 'utf-8');
+}
+
+async function clearCache(basePath: string): Promise<void> {
+  try { await unlink(cachePath(basePath)); } catch { /* ignore */ }
+}
 
 /** 指数衰减评分：score = exp(-ln2/halfLife * ageDays)，evergreen 条目恒为 1 */
 export function temporalDecayScore(entry: MemoryEntry, halfLifeDays = 30): number {
@@ -212,8 +261,15 @@ function mmrRerank(
   return selected.map(s => ({ entry: s.entry, score: s.score }));
 }
 
-/** 查询与任务描述相关的记忆（BM25 + 余弦相似度 + MMR），命中条目 refs++ */
+/** 查询与任务描述相关的记忆（BM25 + 余弦相似度 + MMR），命中条目 refs++，含 SHA-256 + LRU 缓存 */
 export async function queryMemory(basePath: string, taskDescription: string): Promise<MemoryEntry[]> {
+  const cacheKey = sha256(taskDescription);
+  const cache = await loadCache(basePath);
+  if (cache.entries[cacheKey]) {
+    log.debug('memory: 缓存命中');
+    return cache.entries[cacheKey].results;
+  }
+
   const entries = await loadMemory(basePath);
   const active = entries.filter(e => !e.archived);
   if (!active.length) return [];
@@ -235,7 +291,10 @@ export async function queryMemory(basePath: string, taskDescription: string): Pr
     await saveMemory(basePath, updated);
     log.debug(`memory: 查询命中 ${reranked.length} 条`);
   }
-  return reranked.map(s => ({ ...s.entry, refs: s.entry.refs + 1 }));
+  const results = reranked.map(s => ({ ...s.entry, refs: s.entry.refs + 1 }));
+  cache.entries[cacheKey] = { results, timestamp: new Date().toISOString() };
+  await saveCache(basePath, cache);
+  return results;
 }
 
 /** 衰减归档：衰减系数 < 0.1 且 refs=0 的条目标记 archived（immutable） */
