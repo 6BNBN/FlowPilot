@@ -193,13 +193,17 @@ export class WorkflowService {
   async resume(): Promise<string> {
     const data = await this.repo.loadProgress();
     if (!data) return '无活跃工作流，等待需求输入';
+    log.debug(`resume: status=${data.status}, current=${data.current}`);
     if (data.status === 'idle') return '工作流待命中，等待需求输入';
     if (data.status === 'completed') return '工作流已全部完成';
     if (data.status === 'finishing') return `恢复工作流: ${data.name}\n正在收尾阶段，请执行 node flow.js finish`;
 
     const { data: newData, resetId } = resumeProgress(data);
     await this.repo.saveProgress(newData);
-    if (resetId) this.repo.cleanup();
+    if (resetId) {
+      log.debug(`resume: 重置任务 ${resetId}`);
+      this.repo.cleanup();
+    }
 
     const doneCount = newData.tasks.filter(t => t.status === 'done').length;
     const total = newData.tasks.length;
