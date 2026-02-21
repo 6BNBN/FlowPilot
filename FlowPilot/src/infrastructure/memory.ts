@@ -183,7 +183,7 @@ function vectorSearch(
 async function rebuildVectorIndex(basePath: string, active: MemoryEntry[], stats: DfStats): Promise<void> {
   const vectors: VectorEntry[] = active.map(e => ({
     content: e.content,
-    vector: Object.fromEntries(bm25Vector(tokenize(e.content), stats)),
+    vector: Object.fromEntries(bm25Vector(tokenize(e.content), stats, detectLangCode(e.content))),
   }));
   await saveVectors(basePath, vectors);
 }
@@ -304,15 +304,20 @@ export function rebuildDf(entries: MemoryEntry[]): DfStats {
   return { docCount: active.length, df, avgDocLen: active.length ? totalLen / active.length : 0 };
 }
 
+/** 查找 DF 值：优先 {lang}:{term}，回退无前缀（兼容旧数据） */
+function lookupDf(stats: DfStats, term: string, lang: string): number {
+  return stats.df[`${lang}:${term}`] ?? stats.df[term] ?? 0;
+}
+
 /** 生成 BM25 文档向量：完整 BM25 公式（TF-IDF），维度用 FNV-1a 20-bit hash */
-function bm25Vector(tokens: string[], stats: DfStats): Map<number, number> {
+function bm25Vector(tokens: string[], stats: DfStats, lang = 'en'): Map<number, number> {
   const tf = termFrequency(tokens);
   const vec = new Map<number, number>();
   const N = Math.max(stats.docCount, 1);
   const avgDl = stats.avgDocLen || 1;
   const docLen = tokens.length;
   for (const [term, freq] of tf) {
-    const dfVal = stats.df[term] ?? 0;
+    const dfVal = lookupDf(stats, term, lang);
     const idf = Math.log(1 + (N - dfVal + 0.5) / (dfVal + 0.5));
     const tfNorm = (freq * (BM25_K1 + 1)) / (freq + BM25_K1 * (1 - BM25_B + BM25_B * docLen / avgDl));
     const w = tfNorm * idf;
@@ -324,11 +329,11 @@ function bm25Vector(tokens: string[], stats: DfStats): Map<number, number> {
 }
 
 /** 生成 BM25 查询向量：raw TF 无 IDF，跳过语料库中不存在的 term */
-function bm25QueryVector(tokens: string[], stats: DfStats): Map<number, number> {
+function bm25QueryVector(tokens: string[], stats: DfStats, lang = 'en'): Map<number, number> {
   const tf = termFrequency(tokens);
   const vec = new Map<number, number>();
   for (const [term, freq] of tf) {
-    if ((stats.df[term] ?? 0) === 0) continue;
+    if (lookupDf(stats, term, lang) === 0) continue;
     const idx = termHash(term);
     vec.set(idx, (vec.get(idx) ?? 0) + freq);
   }
@@ -367,12 +372,13 @@ async function saveMemory(basePath: string, entries: MemoryEntry[]): Promise<voi
 export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'refs' | 'archived'>): Promise<void> {
   const entries = await loadMemory(basePath);
   const stats = rebuildDf(entries);
+  const entryLang = detectLangCode(entry.content);
   const queryTokens = tokenize(entry.content);
-  const queryVec = bm25Vector(queryTokens, stats);
+  const queryVec = bm25Vector(queryTokens, stats, entryLang);
 
   const idx = entries.findIndex(e => {
     if (e.archived) return false;
-    const vec = bm25Vector(tokenize(e.content), stats);
+    const vec = bm25Vector(tokenize(e.content), stats, detectLangCode(e.content));
     return cosineSimilarity(queryVec, vec) > 0.8;
   });
 
@@ -400,7 +406,7 @@ export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'r
   await saveDf(basePath, newStats);
 
   // 向量索引：追加/更新当前条目的 BM25 向量
-  const vec = bm25Vector(tokenize(entry.content), newStats);
+  const vec = bm25Vector(tokenize(entry.content), newStats, entryLang);
   const vecRecord: Record<number, number> = Object.fromEntries(vec);
   const vectors = await loadVectors(basePath);
   const vi = vectors.findIndex(v => v.content === entry.content);
@@ -482,11 +488,12 @@ export async function queryMemory(basePath: string, taskDescription: string): Pr
 
   const stats = await loadDf(basePath);
   const fallback = stats.docCount > 0 ? stats : rebuildDf(entries);
-  const queryVec = bm25QueryVector(tokenize(taskDescription), fallback);
+  const queryLang = detectLangCode(taskDescription);
+  const queryVec = bm25QueryVector(tokenize(taskDescription), fallback, queryLang);
 
   // Source 1: BM25 + 余弦相似度 + 时间衰减
   const source1 = active.map(e => {
-    const vec = bm25Vector(tokenize(e.content), fallback);
+    const vec = bm25Vector(tokenize(e.content), fallback, detectLangCode(e.content));
     return { entry: e, score: cosineSimilarity(queryVec, vec) * temporalDecayScore(e), vec };
   }).filter(s => s.score > 0.05);
 
@@ -515,7 +522,7 @@ export async function queryMemory(basePath: string, taskDescription: string): Pr
 
   // 从 fused 结果恢复 vec 用于 MMR 重排序
   const candidates = fused.map(f => {
-    const vec = bm25Vector(tokenize(f.entry.content), fallback);
+    const vec = bm25Vector(tokenize(f.entry.content), fallback, detectLangCode(f.entry.content));
     return { entry: f.entry, score: f.score, vec };
   });
 
@@ -586,7 +593,7 @@ export async function compactMemory(basePath: string, targetCount?: number): Pro
   await saveSnapshot(basePath, entries);
 
   const stats = rebuildDf(entries);
-  const vecs = active.map(e => bm25Vector(tokenize(e.content), stats));
+  const vecs = active.map(e => bm25Vector(tokenize(e.content), stats, detectLangCode(e.content)));
   const merged = new Set<number>();
   const result: MemoryEntry[] = [...entries.filter(e => e.archived)];
 
