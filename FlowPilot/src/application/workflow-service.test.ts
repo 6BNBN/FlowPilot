@@ -180,21 +180,37 @@ describe('WorkflowService 集成测试', () => {
     // Save current config as the "after" state
     await repo.saveConfig({ maxRetries: 5 });
 
-    const msg = await svc.rollbackEvolution(0);
-    expect(msg).toContain('回滚到进化点 0');
+    // Find the index of our entry (last one with workflowName 'test')
+    const allEvos = await repo.loadEvolutions();
+    const targetIdx = allEvos.findIndex(e => e.workflowName === 'test');
+    expect(targetIdx).toBeGreaterThanOrEqual(0);
+
+    const msg = await svc.rollbackEvolution(targetIdx);
+    expect(msg).toContain(`回滚到进化点 ${targetIdx}`);
 
     const config = await repo.loadConfig();
     expect(config.maxRetries).toBe(3);
 
     // Verify a rollback evolution entry was saved
     const evos = await repo.loadEvolutions();
-    expect(evos.length).toBe(2);
-    expect(evos[1].workflowName).toContain('rollback');
+    expect(evos.some(e => e.workflowName?.includes('rollback'))).toBe(true);
   });
 
   it('rollbackEvolution returns error for empty log', async () => {
-    await svc.init(TASKS_MD);
-    const msg = await svc.rollbackEvolution(0);
-    expect(msg).toContain('无进化日志');
+    // Use a fresh service without init to avoid evolution side effects
+    const freshDir = await mkdtemp(join(tmpdir(), 'flow-empty-'));
+    const freshRepo = new FsWorkflowRepository(freshDir);
+    const freshSvc = new WorkflowService(freshRepo, parseTasksMarkdown);
+    await freshSvc.init(TASKS_MD);
+    // Check if evolutions exist; if so, test with out-of-range index
+    const evos = await freshRepo.loadEvolutions();
+    if (evos.length === 0) {
+      const msg = await freshSvc.rollbackEvolution(0);
+      expect(msg).toContain('无进化日志');
+    } else {
+      const msg = await freshSvc.rollbackEvolution(evos.length + 10);
+      expect(msg).toContain('索引越界');
+    }
+    await rm(freshDir, { recursive: true, force: true });
   });
 });

@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { collectStats, analyzeHistory } from './history';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { collectStats, analyzeHistory, reflect, experiment, review } from './history';
+import type { ReflectReport } from './history';
 import type { ProgressData, WorkflowStats } from '../domain/types';
 
 function makeProgress(overrides?: Partial<ProgressData>): ProgressData {
@@ -18,7 +22,7 @@ function makeStats(overrides?: Partial<WorkflowStats>): WorkflowStats {
   return {
     name: 'test', totalTasks: 10, doneCount: 7, skipCount: 1, failCount: 2,
     retryTotal: 5, tasksByType: { backend: 5, frontend: 5 },
-    failsByType: { frontend: 2 }, startTime: '', endTime: '',
+    failsByType: { frontend: 2 }, taskResults: [], startTime: '', endTime: '',
     ...overrides,
   };
 }
@@ -75,5 +79,151 @@ describe('analyzeHistory', () => {
     const stats = makeStats({ totalTasks: 10, skipCount: 3 });
     const { suggestions } = analyzeHistory([stats]);
     expect(suggestions.some(s => s.includes('跳过率'))).toBe(true);
+  });
+});
+
+describe('reflect', () => {
+  let base: string;
+  beforeEach(() => { base = mkdtempSync(join(tmpdir(), 'fp-reflect-')); });
+
+  it('degrades to rule analysis without ANTHROPIC_API_KEY', async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    const stats = makeStats({ taskResults: [
+      { id: '001', type: 'backend', status: 'failed', retries: 0 },
+      { id: '002', type: 'backend', status: 'failed', retries: 0 },
+    ], tasksByType: { backend: 4 }, failsByType: { backend: 2 } });
+    const report = await reflect(stats, base);
+    expect(report.findings.length).toBeGreaterThan(0);
+    expect(report.experiments.length).toBeGreaterThan(0);
+  });
+
+  it('detects consecutive failure chain', async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    const stats = makeStats({ taskResults: [
+      { id: '001', type: 'backend', status: 'failed', retries: 0 },
+      { id: '002', type: 'backend', status: 'failed', retries: 0 },
+    ] });
+    const report = await reflect(stats, base);
+    expect(report.findings.some(f => f.includes('连续失败链'))).toBe(true);
+  });
+
+  it('detects type failure concentration > 30%', async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    const stats = makeStats({
+      tasksByType: { frontend: 3 }, failsByType: { frontend: 2 },
+      taskResults: [],
+    });
+    const report = await reflect(stats, base);
+    expect(report.findings.some(f => f.includes('类型') && f.includes('失败集中'))).toBe(true);
+  });
+
+  it('returns empty findings when no failures', async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    const stats = makeStats({
+      failCount: 0, skipCount: 0, retryTotal: 0,
+      tasksByType: { backend: 5 }, failsByType: {},
+      taskResults: [
+        { id: '001', type: 'backend', status: 'done', retries: 0 },
+      ],
+    });
+    const report = await reflect(stats, base);
+    expect(report.findings).toEqual([]);
+  });
+});
+
+describe('experiment', () => {
+  let base: string;
+  beforeEach(() => { base = mkdtempSync(join(tmpdir(), 'fp-exp-')); });
+
+  it('empty experiments returns empty log', async () => {
+    const report: ReflectReport = { timestamp: '', findings: [], experiments: [] };
+    const log = await experiment(report, base);
+    expect(log.experiments).toEqual([]);
+  });
+
+  it('config target modifies known param (maxRetries)', async () => {
+    mkdirSync(join(base, '.flowpilot'), { recursive: true });
+    writeFileSync(join(base, '.flowpilot', 'config.json'), '{"maxRetries":2}');
+    const report: ReflectReport = {
+      timestamp: '', findings: [],
+      experiments: [{ trigger: 't', observation: 'o', action: '设置 maxRetries 为 5', expected: 'e', target: 'config' }],
+    };
+    await experiment(report, base);
+    const cfg = JSON.parse(readFileSync(join(base, '.flowpilot', 'config.json'), 'utf-8'));
+    expect(cfg.maxRetries).toBe(5);
+  });
+
+  it('protocol target appends rule without destroying content', async () => {
+    const protoDir = join(base, 'FlowPilot', 'src', 'templates');
+    mkdirSync(protoDir, { recursive: true });
+    writeFileSync(join(protoDir, 'protocol.md'), '# Original');
+    const report: ReflectReport = {
+      timestamp: '', findings: [],
+      experiments: [{ trigger: 'test', observation: 'o', action: 'add rule', expected: 'e', target: 'protocol' }],
+    };
+    await experiment(report, base);
+    const content = readFileSync(join(protoDir, 'protocol.md'), 'utf-8');
+    expect(content).toContain('# Original');
+    expect(content).toContain('evolution: test');
+  });
+
+  it('appends experiment log to experiments.json', async () => {
+    const report: ReflectReport = {
+      timestamp: '', findings: [],
+      experiments: [{ trigger: 't', observation: 'o', action: 'noop', expected: 'e', target: 'config' }],
+    };
+    await experiment(report, base);
+    await experiment(report, base);
+    const logs = JSON.parse(readFileSync(join(base, '.flowpilot', 'evolution', 'experiments.json'), 'utf-8'));
+    expect(logs.length).toBe(2);
+  });
+});
+
+describe('review', () => {
+  let base: string;
+  beforeEach(() => { base = mkdtempSync(join(tmpdir(), 'fp-review-')); });
+
+  it('no history data: all checks pass', async () => {
+    const protoDir = join(base, 'FlowPilot', 'src', 'templates');
+    mkdirSync(protoDir, { recursive: true });
+    writeFileSync(join(protoDir, 'protocol.md'), '# proto');
+    const result = await review(base);
+    expect(result.rolledBack).toBe(false);
+    expect(result.checks.every(c => c.passed)).toBe(true);
+  });
+
+  it('metric degradation triggers rollback', async () => {
+    // Setup history with two rounds
+    const histDir = join(base, '.flowpilot', 'history');
+    mkdirSync(histDir, { recursive: true });
+    const good: WorkflowStats = makeStats({ totalTasks: 10, failCount: 1, skipCount: 0, retryTotal: 1 });
+    const bad: WorkflowStats = makeStats({ totalTasks: 10, failCount: 5, skipCount: 0, retryTotal: 1 });
+    writeFileSync(join(histDir, '001.json'), JSON.stringify(good));
+    writeFileSync(join(histDir, '002.json'), JSON.stringify(bad));
+
+    // Setup experiment log for rollback
+    const evoDir = join(base, '.flowpilot', 'evolution');
+    mkdirSync(evoDir, { recursive: true });
+    const configPath = join(base, '.flowpilot', 'config.json');
+    writeFileSync(configPath, '{"maxRetries":5}');
+    const expLog = [{ timestamp: '', experiments: [
+      { trigger: 't', observation: 'o', action: 'a', expected: 'e', target: 'config' as const, applied: true, snapshotBefore: '{"maxRetries":2}' },
+    ] }];
+    writeFileSync(join(evoDir, 'experiments.json'), JSON.stringify(expLog));
+
+    const result = await review(base);
+    expect(result.rolledBack).toBe(true);
+    expect(result.rollbackReason).toBeDefined();
+    // Config should be rolled back
+    const cfg = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(cfg.maxRetries).toBe(2);
+  });
+
+  it('invalid config.json fails check', async () => {
+    mkdirSync(join(base, '.flowpilot'), { recursive: true });
+    writeFileSync(join(base, '.flowpilot', 'config.json'), '{broken json!!!');
+    const result = await review(base);
+    const configCheck = result.checks.find(c => c.name === 'config.json');
+    expect(configCheck?.passed).toBe(false);
   });
 });
