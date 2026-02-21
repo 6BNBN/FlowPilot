@@ -483,27 +483,6 @@ function buildIndex(tasks) {
 function makeTaskId(n) {
   return String(n).padStart(3, "0");
 }
-function cascadeSkip(tasks) {
-  let result = tasks.map((t) => ({ ...t }));
-  let changed = true;
-  while (changed) {
-    changed = false;
-    const idx = buildIndex(result);
-    for (let i = 0; i < result.length; i++) {
-      const t = result[i];
-      if (t.status !== "pending") continue;
-      const blocked = t.deps.some((d) => {
-        const dep = idx.get(d);
-        return dep && (dep.status === "failed" || dep.status === "skipped");
-      });
-      if (blocked) {
-        result[i] = { ...t, status: "skipped", summary: "\u4F9D\u8D56\u4EFB\u52A1\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7" };
-        changed = true;
-      }
-    }
-  }
-  return result;
-}
 function detectCycles(tasks) {
   const idx = buildIndex(tasks);
   const visited = /* @__PURE__ */ new Set();
@@ -597,13 +576,10 @@ function findParallelTasks(tasks) {
   const pending = tasks.filter((t) => t.status === "pending");
   const cycle = detectCycles(pending);
   if (cycle) throw new Error(`\u5FAA\u73AF\u4F9D\u8D56: ${cycle.join(" -> ")}`);
-  cascadeSkip(tasks);
+  const idx = buildIndex(tasks);
   return tasks.filter((t) => {
     if (t.status !== "pending") return false;
-    return t.deps.every((d) => {
-      const dep = tasks.find((x) => x.id === d);
-      return dep && dep.status === "done";
-    });
+    return t.deps.every((d) => idx.get(d)?.status === "done");
   });
 }
 function isAllDone(tasks) {
@@ -929,6 +905,15 @@ ${stats}
 \u5DF2\u63D0\u4EA4\u6700\u7EC8commit\uFF0C\u5DE5\u4F5C\u6D41\u56DE\u5230\u5F85\u547D\u72B6\u6001
 \u7B49\u5F85\u4E0B\u4E00\u4E2A\u9700\u6C42...`;
   }
+  /** abort: 中止工作流，清理 .workflow/ 目录 */
+  async abort() {
+    const data = await this.repo.loadProgress();
+    if (!data) return "\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41\uFF0C\u65E0\u9700\u4E2D\u6B62";
+    data.status = "aborted";
+    await this.repo.saveProgress(data);
+    await this.repo.clearAll();
+    return `\u5DE5\u4F5C\u6D41 "${data.name}" \u5DF2\u4E2D\u6B62\uFF0C.workflow/ \u5DF2\u6E05\u7406`;
+  }
   /** status: 全局进度 */
   async status() {
     return this.repo.loadProgress();
@@ -1169,6 +1154,8 @@ var CLI = class {
         return await s.finish();
       case "resume":
         return await s.resume();
+      case "abort":
+        return await s.abort();
       case "add": {
         const typeIdx = rest.indexOf("--type");
         const rawType = typeIdx >= 0 && rest[typeIdx + 1] || "general";

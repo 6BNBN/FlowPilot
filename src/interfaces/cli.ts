@@ -102,6 +102,9 @@ export class CLI {
       case 'resume':
         return await s.resume();
 
+      case 'abort':
+        return await s.abort();
+
       case 'add': {
         const typeIdx = rest.indexOf('--type');
         const rawType = (typeIdx >= 0 && rest[typeIdx + 1]) || 'general';
