@@ -3,10 +3,9 @@
  * @description 文件系统仓储 - 基于 .workflow/ 目录的分层记忆存储
  */
 
-import { mkdir, readFile, writeFile, unlink, rm, rename } from 'fs/promises';
+import { mkdir, readFile, writeFile, unlink, rm, rename, readdir } from 'fs/promises';
 import { join } from 'path';
 import { openSync, closeSync, existsSync } from 'fs';
-import { readdir } from 'fs/promises';
 import type { ProgressData, TaskEntry, WorkflowStats } from '../domain/types';
 import type { WorkflowRepository, VerifyResult } from '../domain/repository';
 import { autoCommit, gitCleanup } from './git';
