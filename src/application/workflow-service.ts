@@ -161,6 +161,7 @@ export class WorkflowService {
 
       const summaryLine = detail.split('\n')[0].slice(0, 80);
       const newData = completeTask(data, id, summaryLine);
+      log.debug(`checkpoint ${id}: 完成, summary="${summaryLine}"`);
 
       await this.repo.saveProgress(newData);
       await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
