@@ -60,6 +60,7 @@ const EVERGREEN_SOURCES = ['architecture', 'identity', 'decision'];
 interface CacheEntry {
   results: MemoryEntry[];
   timestamp: string;
+  createdAt: number;
 }
 /** 查询缓存结构 */
 interface QueryCache {
@@ -67,7 +68,10 @@ interface QueryCache {
 }
 const CACHE_FILE = 'memory-cache.json';
 const CACHE_MAX = 50;
-const CACHE_PRUNE_RATIO = 0.1;
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+
+/** DF dirty flag — set on update, cleared on save */
+let dfDirty = false;
 
 function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');
@@ -79,7 +83,13 @@ function cachePath(basePath: string): string {
 
 async function loadCache(basePath: string): Promise<QueryCache> {
   try {
-    return JSON.parse(await readFile(cachePath(basePath), 'utf-8'));
+    const cache: QueryCache = JSON.parse(await readFile(cachePath(basePath), 'utf-8'));
+    // TTL 过滤：删除过期条目
+    const now = Date.now();
+    for (const k of Object.keys(cache.entries)) {
+      if (now - (cache.entries[k].createdAt ?? 0) > CACHE_TTL_MS) delete cache.entries[k];
+    }
+    return cache;
   } catch {
     return { entries: {} };
   }
@@ -88,13 +98,18 @@ async function loadCache(basePath: string): Promise<QueryCache> {
 async function saveCache(basePath: string, cache: QueryCache): Promise<void> {
   const p = cachePath(basePath);
   await mkdir(dirname(p), { recursive: true });
-  // LRU 淘汰
+  const now = Date.now();
+  // Phase 1: 淘汰过期条目
+  for (const k of Object.keys(cache.entries)) {
+    if (now - (cache.entries[k].createdAt ?? 0) > CACHE_TTL_MS) delete cache.entries[k];
+  }
+  // Phase 2: 仍超限则删最旧 25%
   const keys = Object.keys(cache.entries);
   if (keys.length > CACHE_MAX) {
     const sorted = keys.sort((a, b) =>
-      cache.entries[a].timestamp.localeCompare(cache.entries[b].timestamp)
+      (cache.entries[a].createdAt ?? 0) - (cache.entries[b].createdAt ?? 0)
     );
-    const pruneCount = Math.ceil(keys.length * CACHE_PRUNE_RATIO);
+    const pruneCount = Math.ceil(keys.length * 0.25);
     for (const k of sorted.slice(0, pruneCount)) delete cache.entries[k];
   }
   await writeFile(p, JSON.stringify(cache), 'utf-8');
@@ -251,6 +266,20 @@ export async function saveDf(basePath: string, stats: DfStats): Promise<void> {
   const p = dfPath(basePath);
   await mkdir(dirname(p), { recursive: true });
   await writeFile(p, JSON.stringify(stats), 'utf-8');
+  dfDirty = false;
+}
+
+/** 周期性 DF 刷盘：每 interval ms 检查 dirty flag，脏则写入磁盘 */
+let _lastDfStats: DfStats | null = null;
+export function startPeriodicDfSave(basePath: string, interval = 30_000): () => void {
+  const timer = setInterval(async () => {
+    if (!dfDirty || !_lastDfStats) return;
+    try {
+      await saveDf(basePath, _lastDfStats);
+      log.debug('memory: periodic DF save');
+    } catch { /* ignore write errors */ }
+  }, interval);
+  return () => clearInterval(timer);
 }
 
 /** 从记忆条目重建 DF 统计（含 avgDocLen） */
@@ -356,6 +385,8 @@ export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'r
   }
   const saved = await loadMemory(basePath);
   const newStats = rebuildDf(saved);
+  dfDirty = true;
+  _lastDfStats = newStats;
   await saveDf(basePath, newStats);
 
   // 向量索引：追加/更新当前条目的 BM25 向量
@@ -462,9 +493,27 @@ export async function queryMemory(basePath: string, taskDescription: string): Pr
     log.debug(`memory: 查询命中 ${reranked.length} 条`);
   }
   const results = reranked.map(s => ({ ...s.entry, refs: s.entry.refs + 1 }));
-  cache.entries[cacheKey] = { results, timestamp: new Date().toISOString() };
+  cache.entries[cacheKey] = { results, timestamp: new Date().toISOString(), createdAt: Date.now() };
   await saveCache(basePath, cache);
   return results;
+}
+
+/** 稀疏向量诊断：Top-K bucket 分布 + CDF 累积贡献曲线（参考 Memoh-v2 computeSparseVectorStats） */
+export function sparseVectorStats(vec: Map<number, number>): {
+  topK: { dim: number; weight: number }[];
+  cdf: { k: number; cumWeight: number }[];
+} {
+  if (!vec.size) return { topK: [], cdf: [] };
+  const buckets = [...vec.entries()]
+    .map(([dim, weight]) => ({ dim, weight }))
+    .sort((a, b) => b.weight - a.weight);
+  const total = buckets.reduce((s, b) => s + b.weight, 0);
+  let cum = 0;
+  const cdf = buckets.map((b, i) => {
+    cum += b.weight;
+    return { k: i + 1, cumWeight: Math.round(Math.min(total ? cum / total : 0, 1) * 10000) / 10000 };
+  });
+  return { topK: buckets.slice(0, 10), cdf };
 }
 
 /** 衰减归档：衰减系数 < 0.1 且 refs=0 的条目标记 archived（immutable） */
@@ -531,6 +580,7 @@ export async function compactMemory(basePath: string, targetCount?: number): Pro
     const final = result.filter(e => !toRemove.has(e));
     await saveMemory(basePath, final);
     const finalStats = rebuildDf(final);
+    dfDirty = true; _lastDfStats = finalStats;
     await saveDf(basePath, finalStats);
     await rebuildVectorIndex(basePath, final.filter(e => !e.archived), finalStats);
     await clearCache(basePath);
@@ -540,6 +590,7 @@ export async function compactMemory(basePath: string, targetCount?: number): Pro
 
   await saveMemory(basePath, result);
   const resultStats = rebuildDf(result);
+  dfDirty = true; _lastDfStats = resultStats;
   await saveDf(basePath, resultStats);
   await rebuildVectorIndex(basePath, result.filter(e => !e.archived), resultStats);
   await clearCache(basePath);
@@ -553,7 +604,9 @@ export async function rollbackMemory(basePath: string): Promise<boolean> {
   try {
     const snapshot = JSON.parse(await readFile(snapshotPath(basePath), 'utf-8')) as MemoryEntry[];
     await saveMemory(basePath, snapshot);
-    await saveDf(basePath, rebuildDf(snapshot));
+    const snapStats = rebuildDf(snapshot);
+    dfDirty = true; _lastDfStats = snapStats;
+    await saveDf(basePath, snapStats);
     log.debug(`memory: 从快照回滚 ${snapshot.length} 条`);
     return true;
   } catch {
