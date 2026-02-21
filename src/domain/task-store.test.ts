@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { makeTaskId, cascadeSkip, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from './task-store';
+import { makeTaskId, cascadeSkip, detectCycles, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from './task-store';
 import type { TaskEntry, ProgressData } from './types';
 
 /** 快速创建任务 */
@@ -129,6 +129,39 @@ describe('resumeProgress', () => {
     const data = prog([t('001', 'done')]);
     const { resetId } = resumeProgress(data);
     expect(resetId).toBeNull();
+  });
+});
+
+describe('detectCycles', () => {
+  it('无循环返回null', () => {
+    expect(detectCycles([t('001'), t('002', 'pending', ['001'])])).toBeNull();
+  });
+
+  it('检测直接循环', () => {
+    const tasks = [t('001', 'pending', ['002']), t('002', 'pending', ['001'])];
+    expect(detectCycles(tasks)).not.toBeNull();
+  });
+
+  it('检测间接循环', () => {
+    const tasks = [t('001', 'pending', ['003']), t('002', 'pending', ['001']), t('003', 'pending', ['002'])];
+    expect(detectCycles(tasks)).not.toBeNull();
+  });
+
+  it('不修改原数组（不可变）', () => {
+    const tasks = [t('001', 'pending', ['002']), t('002', 'pending', ['001'])];
+    const copy = JSON.parse(JSON.stringify(tasks));
+    detectCycles(tasks);
+    expect(tasks).toEqual(copy);
+  });
+
+  it('findNextTask 遇到循环抛错', () => {
+    const tasks = [t('001', 'pending', ['002']), t('002', 'pending', ['001'])];
+    expect(() => findNextTask(tasks)).toThrow('循环依赖');
+  });
+
+  it('findParallelTasks 遇到循环抛错', () => {
+    const tasks = [t('001', 'pending', ['002']), t('002', 'pending', ['001'])];
+    expect(() => findParallelTasks(tasks)).toThrow('循环依赖');
   });
 });
 

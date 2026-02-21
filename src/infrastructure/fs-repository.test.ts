@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile } from 'fs/promises';
+import { mkdtemp, rm, readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { existsSync } from 'fs';
 import { FsWorkflowRepository } from './fs-repository';
-import type { ProgressData } from '../domain/types';
+import type { ProgressData, WorkflowStats } from '../domain/types';
 
 let dir: string;
 let repo: FsWorkflowRepository;
@@ -66,5 +67,64 @@ describe('FsWorkflowRepository', () => {
     await repo.ensureClaudeMd();
     const wrote = await repo.ensureClaudeMd();
     expect(wrote).toBe(false);
+  });
+
+  it('config 读写', async () => {
+    expect(await repo.loadConfig()).toEqual({});
+    await repo.saveConfig({ verify: { timeout: 60 } });
+    const cfg = await repo.loadConfig();
+    expect(cfg.verify).toEqual({ timeout: 60 });
+  });
+
+  it('clearContext 清理 context 目录', async () => {
+    await repo.saveTaskContext('001', 'data');
+    await repo.clearContext();
+    expect(await repo.loadTaskContext('001')).toBeNull();
+  });
+
+  it('clearAll 清理整个 .workflow 目录', async () => {
+    await repo.saveProgress(makeData());
+    await repo.clearAll();
+    expect(await repo.loadProgress()).toBeNull();
+  });
+
+  it('cleanupInjections 移除 CLAUDE.md 协议块', async () => {
+    await repo.ensureClaudeMd();
+    await repo.cleanupInjections();
+    const content = await readFile(join(dir, 'CLAUDE.md'), 'utf-8');
+    expect(content).not.toContain('flowpilot:start');
+  });
+
+  it('cleanupInjections 移除 hooks', async () => {
+    await repo.ensureHooks();
+    await repo.cleanupInjections();
+    const settings = JSON.parse(await readFile(join(dir, '.claude', 'settings.json'), 'utf-8'));
+    expect(settings.hooks?.PreToolUse).toBeUndefined();
+  });
+
+  it('history 保存和加载', async () => {
+    const stats: WorkflowStats = {
+      name: 'test', totalTasks: 3, doneCount: 2, skipCount: 1, failCount: 0,
+      retryTotal: 0, tasksByType: { backend: 3 }, failsByType: {},
+      startTime: '', endTime: new Date().toISOString(),
+    };
+    await repo.saveHistory(stats);
+    const loaded = await repo.loadHistory();
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0].name).toBe('test');
+  });
+
+  it('ensureHooks 幂等', async () => {
+    await repo.ensureHooks();
+    const wrote = await repo.ensureHooks();
+    expect(wrote).toBe(false);
+  });
+
+  it('lock/unlock 基本流程', async () => {
+    await repo.lock();
+    await repo.unlock();
+    // 解锁后可以再次获取锁
+    await repo.lock();
+    await repo.unlock();
   });
 });
