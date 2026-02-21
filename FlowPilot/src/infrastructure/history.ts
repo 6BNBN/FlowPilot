@@ -5,7 +5,7 @@
 
 import type { WorkflowStats, ProgressData } from '../domain/types';
 import { callClaude } from './extractor';
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, writeFile, mkdir, readdir } from 'fs/promises';
 import { join, dirname } from 'path';
 
 /** 分析结果 */
@@ -273,4 +273,120 @@ export async function experiment(
   await writeFile(logPath, JSON.stringify(existing, null, 2), 'utf-8');
 
   return log;
+}
+
+/** 审查检查项 */
+export interface ReviewCheck {
+  name: string;
+  passed: boolean;
+  detail: string;
+}
+
+/** 审查结果 */
+export interface ReviewResult {
+  timestamp: string;
+  checks: ReviewCheck[];
+  rolledBack: boolean;
+  rollbackReason?: string;
+}
+
+/** 自愈引擎：验证上轮实验效果，指标恶化则回滚 */
+export async function review(basePath: string): Promise<ReviewResult> {
+  const checks: ReviewCheck[] = [];
+  let rolledBack = false;
+  let rollbackReason: string | undefined;
+
+  const historyDir = join(basePath, '.flowpilot', 'history');
+  const configPath = join(basePath, '.flowpilot', 'config.json');
+  const protocolPath = join(basePath, 'FlowPilot', 'src', 'templates', 'protocol.md');
+  const expPath = join(basePath, '.flowpilot', 'evolution', 'experiments.json');
+
+  // 1. 加载历史（最近两轮）
+  let history: WorkflowStats[] = [];
+  try {
+    const files = (await readdir(historyDir)).filter(f => f.endsWith('.json')).sort();
+    const recent = files.slice(-2);
+    for (const f of recent) {
+      try { history.push(JSON.parse(await readFile(join(historyDir, f), 'utf-8'))); } catch { /* skip */ }
+    }
+  } catch { /* 无历史目录 */ }
+
+  // 2. 指标对比
+  if (history.length >= 2) {
+    const [prev, curr] = [history[history.length - 2], history[history.length - 1]];
+    const rate = (s: WorkflowStats, fn: (s: WorkflowStats) => number) =>
+      s.totalTasks > 0 ? fn(s) / s.totalTasks : 0;
+
+    const metrics = [
+      { name: 'failRate', fn: (s: WorkflowStats) => s.failCount },
+      { name: 'skipRate', fn: (s: WorkflowStats) => s.skipCount },
+      { name: 'retryRate', fn: (s: WorkflowStats) => s.retryTotal },
+    ];
+
+    for (const m of metrics) {
+      const prevR = rate(prev, m.fn), currR = rate(curr, m.fn);
+      const delta = currR - prevR;
+      const passed = delta <= 0.1;
+      checks.push({
+        name: m.name,
+        passed,
+        detail: `${(prevR * 100).toFixed(1)}% → ${(currR * 100).toFixed(1)}% (delta ${(delta * 100).toFixed(1)}pp)`,
+      });
+      if (!passed && !rolledBack) {
+        rolledBack = true;
+        rollbackReason = `${m.name} 恶化 ${(delta * 100).toFixed(1)} 个百分点`;
+      }
+    }
+  } else {
+    checks.push({ name: 'metrics', passed: true, detail: '历史不足两轮，跳过对比' });
+  }
+
+  // 3. 完整性检查
+  const configRaw = await safeRead(configPath, '');
+  if (configRaw) {
+    try { JSON.parse(configRaw); checks.push({ name: 'config.json', passed: true, detail: '合法 JSON' }); }
+    catch { checks.push({ name: 'config.json', passed: false, detail: 'JSON 解析失败' }); }
+  } else {
+    checks.push({ name: 'config.json', passed: true, detail: '文件不存在，跳过' });
+  }
+
+  const protocolExists = (await safeRead(protocolPath, '')) !== '';
+  checks.push({ name: 'protocol.md', passed: protocolExists, detail: protocolExists ? '存在' : '模板文件缺失' });
+
+  const expRaw = await safeRead(expPath, '');
+  if (expRaw) {
+    try { JSON.parse(expRaw); checks.push({ name: 'experiments.json', passed: true, detail: '可解析' }); }
+    catch { checks.push({ name: 'experiments.json', passed: false, detail: '解析失败' }); }
+  } else {
+    checks.push({ name: 'experiments.json', passed: true, detail: '文件不存在，跳过' });
+  }
+
+  // 4. 自动回滚
+  if (rolledBack) {
+    try {
+      const logs: ExperimentLog[] = JSON.parse(await readFile(expPath, 'utf-8'));
+      const last = logs[logs.length - 1];
+      if (last) {
+        for (const exp of last.experiments) {
+          if (!exp.applied || !exp.snapshotBefore) continue;
+          const target = exp.target === 'config' ? configPath : protocolPath;
+          await writeFile(target, exp.snapshotBefore, 'utf-8');
+        }
+      }
+    } catch { /* 无法回滚 */ }
+  }
+
+  // 5. 保存审查结果
+  const result: ReviewResult = {
+    timestamp: new Date().toISOString(),
+    checks,
+    rolledBack,
+    ...(rollbackReason ? { rollbackReason } : {}),
+  };
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  const outPath = join(basePath, '.flowpilot', 'evolution', `review-${ts}.json`);
+  await mkdir(dirname(outPath), { recursive: true });
+  await writeFile(outPath, JSON.stringify(result, null, 2), 'utf-8');
+
+  return result;
 }
