@@ -1,13 +1,14 @@
 # FlowPilot 快速上手
 
+[English](quick-start.en.md)
+
 > 不需要懂原理，照着做就行。
 
 ## 准备工作（只做一次）
 
 1. 确保电脑装了 Node.js（版本 20 以上）
-2. 打开 Claude Code，进设置开启 Agent Teams：
-   - Settings → Feature Flags → Agent Teams → 开启
-3. 安装插件：在 CC 中执行 `/plugin`，选择安装 `superpowers`、`frontend-design`、`feature-dev`、`code-review`
+2. 开启 Agent Teams：在 `~/.claude/settings.json` 中添加 `"env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }`
+3. 安装插件：在 CC 中执行 `/plugin`，选择安装 `superpowers`、`frontend-design`、`feature-dev`、`code-review`、`context7`
 4. 构建工具：
    ```bash
    cd FlowPilot目录
@@ -48,7 +49,7 @@ cp FlowPilot目录/dist/flow.js  你的项目/
 cd 你的项目
 node flow.js init
 
-# 3. 打开 CC，说"开始"，然后描述需求：
+# 3. 打开 CC，描述你的开发需求：
 给现有系统加一个搜索功能，支持按标题和内容搜索
 ```
 
@@ -61,7 +62,7 @@ node flow.js init
 claude --dangerously-skip-permissions --continue
 ```
 
-进去后说「开始」，它会自动从断点继续，之前做的不会丢。
+进去后说「继续任务」，它会自动从断点继续，之前做的不会丢。
 
 如果想从历史对话列表里挑一个恢复：
 ```bash
@@ -109,5 +110,5 @@ node flow.js status
 
 正常使用只需要记住三件事：
 1. 项目里放一个 `flow.js`，执行 `node flow.js init`
-2. 打开 CC 说「开始」
-3. 中断了就新开窗口再说「开始」
+2. 打开 CC，描述开发需求
+3. 中断了就新开窗口说「继续任务」

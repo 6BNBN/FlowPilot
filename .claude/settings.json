@@ -1,0 +1,33 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "TaskCreate",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "BLOCK this tool call. FlowPilot requires using node flow.js commands instead of native task tools."
+          }
+        ]
+      },
+      {
+        "matcher": "TaskUpdate",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "BLOCK this tool call. FlowPilot requires using node flow.js commands instead of native task tools."
+          }
+        ]
+      },
+      {
+        "matcher": "TaskList",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "BLOCK this tool call. FlowPilot requires using node flow.js commands instead of native task tools."
+          }
+        ]
+      }
+    ]
+  }
+}

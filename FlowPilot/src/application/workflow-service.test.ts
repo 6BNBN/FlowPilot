@@ -84,9 +84,11 @@ describe('WorkflowService 集成测试', () => {
     await svc.init(TASKS_MD);
     await svc.next(); // 001 active
 
-    // 失败3次
+    // 失败3次（每次重试需重新激活）
     await svc.checkpoint('001', 'FAILED');
+    await svc.next(); // 重新激活
     await svc.checkpoint('001', 'FAILED');
+    await svc.next(); // 重新激活
     const msg = await svc.checkpoint('001', 'FAILED');
     expect(msg).toContain('跳过');
 

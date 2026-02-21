@@ -1,0 +1,180 @@
+package handlers
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"strings"
+
+	"github.com/labstack/echo/v4"
+
+	"github.com/Kxiandaoyan/Memoh-v2/internal/accounts"
+	"github.com/Kxiandaoyan/Memoh-v2/internal/bots"
+	"github.com/Kxiandaoyan/Memoh-v2/internal/config"
+	"github.com/Kxiandaoyan/Memoh-v2/internal/db"
+	dbsqlc "github.com/Kxiandaoyan/Memoh-v2/internal/db/sqlc"
+	"github.com/Kxiandaoyan/Memoh-v2/internal/models"
+	"github.com/Kxiandaoyan/Memoh-v2/internal/settings"
+)
+
+type SettingsHandler struct {
+	service        *settings.Service
+	botService     *bots.Service
+	accountService *accounts.Service
+	modelsService  *models.Service
+	queries        *dbsqlc.Queries
+	mcpCfg         config.MCPConfig
+	logger         *slog.Logger
+}
+
+func NewSettingsHandler(log *slog.Logger, service *settings.Service, botService *bots.Service, accountService *accounts.Service, modelsService *models.Service, queries *dbsqlc.Queries, cfg config.Config) *SettingsHandler {
+	return &SettingsHandler{
+		service:        service,
+		botService:     botService,
+		accountService: accountService,
+		modelsService:  modelsService,
+		queries:        queries,
+		mcpCfg:         cfg.MCP,
+		logger:         log.With(slog.String("handler", "settings")),
+	}
+}
+
+func (h *SettingsHandler) Register(e *echo.Echo) {
+	group := e.Group("/bots/:bot_id/settings")
+	group.GET("", h.Get)
+	group.POST("", h.Upsert)
+	group.PUT("", h.Upsert)
+	group.DELETE("", h.Delete)
+}
+
+// Get godoc
+// @Summary Get user settings
+// @Description Get agent settings for current user
+// @Tags settings
+// @Success 200 {object} settings.Settings
+// @Failure 400 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
+// @Router /bots/{bot_id}/settings [get]
+func (h *SettingsHandler) Get(c echo.Context) error {
+	channelIdentityID, err := h.requireChannelIdentityID(c)
+	if err != nil {
+		return err
+	}
+	botID := strings.TrimSpace(c.Param("bot_id"))
+	if botID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "bot id is required")
+	}
+	if _, err := h.authorizeBotAccess(c.Request().Context(), channelIdentityID, botID); err != nil {
+		return err
+	}
+	resp, err := h.service.GetBot(c.Request().Context(), botID)
+	if err != nil {
+		h.logger.Error("get bot settings failed", slog.String("botID", botID), slog.Any("error", err))
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get bot settings")
+	}
+	return c.JSON(http.StatusOK, resp)
+}
+
+// Upsert godoc
+// @Summary Update user settings
+// @Description Update or create agent settings for current user
+// @Tags settings
+// @Param payload body settings.UpsertRequest true "Settings payload"
+// @Success 200 {object} settings.Settings
+// @Failure 400 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
+// @Router /bots/{bot_id}/settings [put]
+// @Router /bots/{bot_id}/settings [post]
+func (h *SettingsHandler) Upsert(c echo.Context) error {
+	channelIdentityID, err := h.requireChannelIdentityID(c)
+	if err != nil {
+		return err
+	}
+	botID := strings.TrimSpace(c.Param("bot_id"))
+	if botID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "bot id is required")
+	}
+	if _, err := h.authorizeBotAccess(c.Request().Context(), channelIdentityID, botID); err != nil {
+		return err
+	}
+	var req settings.UpsertRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	resp, err := h.service.UpsertBot(c.Request().Context(), botID, req)
+	if err != nil {
+		if errors.Is(err, settings.ErrPersonalBotGuestAccessUnsupported) {
+			return echo.NewHTTPError(http.StatusBadRequest, "personal bot does not support guest access")
+		}
+		h.logger.Error("upsert bot settings failed", slog.String("botID", botID), slog.Any("error", err))
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update bot settings")
+	}
+
+	// Regenerate ov.conf when OpenViking is enabled and models may have changed.
+	h.syncOVConfIfNeeded(c.Request().Context(), botID)
+
+	return c.JSON(http.StatusOK, resp)
+}
+
+// Delete godoc
+// @Summary Delete user settings
+// @Description Remove agent settings for current user
+// @Tags settings
+// @Success 204 "No Content"
+// @Failure 400 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
+// @Router /bots/{bot_id}/settings [delete]
+func (h *SettingsHandler) Delete(c echo.Context) error {
+	channelIdentityID, err := h.requireChannelIdentityID(c)
+	if err != nil {
+		return err
+	}
+	botID := strings.TrimSpace(c.Param("bot_id"))
+	if botID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "bot id is required")
+	}
+	if _, err := h.authorizeBotAccess(c.Request().Context(), channelIdentityID, botID); err != nil {
+		return err
+	}
+	if err := h.service.Delete(c.Request().Context(), botID); err != nil {
+		h.logger.Error("delete bot settings failed", slog.String("botID", botID), slog.Any("error", err))
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete bot settings")
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+// syncOVConfIfNeeded checks whether OpenViking is enabled for the bot and, if so,
+// regenerates ov.conf from the current model settings.
+func (h *SettingsHandler) syncOVConfIfNeeded(ctx context.Context, botID string) {
+	if h.queries == nil {
+		return
+	}
+	botUUID, err := db.ParseUUID(botID)
+	if err != nil {
+		return
+	}
+	promptRow, err := h.queries.GetBotPrompts(ctx, botUUID)
+	if err != nil {
+		return
+	}
+	if !promptRow.EnableOpenviking {
+		return
+	}
+	// Reuse the PromptsHandler's ov.conf logic via a temporary instance.
+	syncer := &PromptsHandler{
+		modelsService: h.modelsService,
+		queries:       h.queries,
+		mcpCfg:        h.mcpCfg,
+		logger:        h.logger,
+	}
+	syncer.ensureOVConf(ctx, botID)
+}
+
+func (h *SettingsHandler) requireChannelIdentityID(c echo.Context) (string, error) {
+	return RequireChannelIdentityID(c)
+}
+
+func (h *SettingsHandler) authorizeBotAccess(ctx context.Context, channelIdentityID, botID string) (bots.Bot, error) {
+	return AuthorizeBotAccess(ctx, h.botService, h.accountService, channelIdentityID, botID, bots.AccessPolicy{AllowPublicMember: false})
+}

@@ -3,11 +3,13 @@
  * @description 文件系统仓储 - 基于 .workflow/ 目录的分层记忆存储
  */
 
-import { mkdir, readFile, writeFile, unlink, rm } from 'fs/promises';
+import { mkdir, readFile, writeFile, unlink, rm, rename } from 'fs/promises';
 import { join } from 'path';
 import { openSync, closeSync, existsSync } from 'fs';
 import type { ProgressData, TaskEntry } from '../domain/types';
-import type { WorkflowRepository } from './repository';
+import type { WorkflowRepository, VerifyResult } from '../domain/repository';
+import { autoCommit, gitCleanup } from './git';
+import { runVerify } from './verify';
 
 /** Generate the CLAUDE.md rule block */
 function generateClaudeMdBlock(): string {
@@ -46,25 +48,33 @@ EOF
 Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, indented lines = description.
 
 ### Execution Loop
-1. Run \`node flow.js next --batch\`.
-2. For **EVERY** task in batch, dispatch a sub-agent via Task tool. **ALL Task calls in one message.** Include in each prompt:
-   - The "context" section from flow next output
-   - Task description and type
-   - Checkpoint instructions (copy verbatim):
-     > On success: \`echo 'one-line summary' | node flow.js checkpoint <id> --files file1 file2 ...\`
-     > On failure: \`node flow.js checkpoint <id> FAILED\`
-     > \`--files\` MUST list every file you created or modified. This ensures parallel tasks get isolated git commits.
-3. **After ALL sub-agents return, verify checkpoints**: run \`node flow.js status\`. If any batch task is still \`active\` (sub-agent failed to checkpoint), run checkpoint as fallback:
-   \`echo 'summary extracted from sub-agent result' | node flow.js checkpoint <id>\`
-   **NEVER proceed to next batch with active tasks.**
+1. Run \`node flow.js next --batch\`. **NOTE: this command will REFUSE to return tasks if any previous task is still \`active\`. You must checkpoint or resume first.**
+2. The output already contains checkpoint commands per task. For **EVERY** task in batch, dispatch a sub-agent via Task tool. **ALL Task calls in one message.** Copy the ENTIRE task block (including checkpoint commands) into each sub-agent prompt verbatim.
+3. **After ALL sub-agents return**: run \`node flow.js status\`.
+   - If any task is still \`active\` → sub-agent failed to checkpoint. Run fallback: \`echo 'summary from sub-agent output' | node flow.js checkpoint <id> --files file1 file2\`
+   - **Do NOT call \`node flow.js next\` until zero active tasks remain** (the command will error anyway).
 4. Loop back to step 1.
-5. When no tasks remain, run \`node flow.js finish\`.
+5. When \`next\` returns "全部完成", enter **Finalization**.
 
-### Sub-Agent Rules
-- **MUST run checkpoint with --files as final action** (Iron Rule #4). Sequence: do work → \`echo 'summary' | node flow.js checkpoint <id> --files file1 file2 ...\` → reply "Task <id> done."
-- Search for matching Skills or MCP tools first. If found, MUST use them.
-- type=frontend → /frontend-design, type=backend → /feature-dev, type=general → match or execute directly
-- Unfamiliar APIs → query context7 MCP first. Never guess.
+### Mid-Workflow Commands
+- \`node flow.js skip <id>\` — skip a stuck/unnecessary task (avoid skipping active tasks with running sub-agents)
+- \`node flow.js add <描述> [--type frontend|backend|general]\` — inject a new task mid-workflow
+
+### Sub-Agent Prompt Template
+Each sub-agent prompt MUST contain these sections in order:
+1. Task block from \`next\` output (title, type, description, checkpoint commands, context)
+2. **Pre-analysis (MANDATORY)**: Before writing ANY code, **MUST** invoke /superpowers:brainstorming to perform multi-dimensional analysis (requirements, edge cases, architecture, risks). Skipping = protocol failure.
+3. **Skill routing**: type=frontend → **MUST** invoke /frontend-design, type=backend → **MUST** invoke /feature-dev, type=general → execute directly. **For ALL types, you MUST also check available skills and MCP tools; use any that match the task alongside the primary skill.**
+4. **Unfamiliar APIs → MUST query context7 MCP first. Never guess.**
+
+### Sub-Agent Checkpoint (Iron Rule #4 — most common violation)
+Sub-agent's LAST Bash command before replying MUST be:
+\`\`\`
+echo '一句话摘要' | node flow.js checkpoint <id> --files file1 file2 ...
+\`\`\`
+- \`--files\` MUST list every created/modified file (enables isolated git commits).
+- If task failed: \`echo 'FAILED' | node flow.js checkpoint <id>\`
+- If sub-agent replies WITHOUT running checkpoint → protocol failure. Main agent MUST run fallback checkpoint in step 3.
 
 ### Security Rules (sub-agents MUST follow)
 - SQL: parameterized queries only. XSS: no unsanitized v-html/innerHTML.
@@ -72,10 +82,11 @@ Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, i
 - Input: validate at entry points. Never log passwords. Never commit .env.
 
 ### Finalization (MANDATORY — skipping = protocol failure)
-1. Dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
-2. Run \`node flow.js review\` to unlock finish.
-3. Run \`node flow.js finish\`.
-**finish will REFUSE if review has not been executed.**
+1. Run \`node flow.js finish\` — runs verify (build/test/lint). If fail → dispatch sub-agent to fix → retry finish.
+2. When finish returns "验证通过，请派子Agent执行 code-review" → dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
+3. Run \`node flow.js review\` to mark code-review done.
+4. Run \`node flow.js finish\` again — verify passes + review done → final commit → idle.
+**Loop: finish(verify) → review(code-review) → fix → finish again. Both gates must pass.**
 
 <!-- flowpilot:end -->`;
 }
@@ -112,8 +123,15 @@ export class FsWorkflowRepository implements WorkflowRepository {
         await new Promise(r => setTimeout(r, 50));
       }
     }
-    // 超时强制清除死锁
+    // 超时强制清除死锁，再尝试一次
     try { await unlink(lockPath); } catch {}
+    try {
+      const fd = openSync(lockPath, 'wx');
+      closeSync(fd);
+      return;
+    } catch {
+      throw new Error('无法获取文件锁');
+    }
   }
 
   async unlock(): Promise<void> {
@@ -138,7 +156,9 @@ export class FsWorkflowRepository implements WorkflowRepository {
       const esc = (s: string) => (s || '-').replace(/\|/g, '∣').replace(/\n/g, ' ');
       lines.push(`| ${t.id} | ${esc(t.title)} | ${t.type} | ${deps} | ${t.status} | ${t.retries} | ${esc(t.summary)} | ${esc(t.description)} |`);
     }
-    await writeFile(join(this.root, 'progress.md'), lines.join('\n') + '\n', 'utf-8');
+    const p = join(this.root, 'progress.md');
+    await writeFile(p + '.tmp', lines.join('\n') + '\n', 'utf-8');
+    await rename(p + '.tmp', p);
   }
 
   async loadProgress(): Promise<ProgressData | null> {
@@ -151,6 +171,8 @@ export class FsWorkflowRepository implements WorkflowRepository {
   }
 
   private parseProgress(raw: string): ProgressData {
+    const validWfStatus = new Set(['idle', 'running', 'finishing', 'completed', 'aborted']);
+    const validTaskStatus = new Set(['pending', 'active', 'done', 'skipped', 'failed']);
     const lines = raw.split('\n');
     const name = (lines[0] ?? '').replace(/^#\s*/, '').trim();
     let status = 'idle' as ProgressData['status'];
@@ -158,17 +180,20 @@ export class FsWorkflowRepository implements WorkflowRepository {
     const tasks: TaskEntry[] = [];
 
     for (const line of lines) {
-      if (line.startsWith('状态: ')) status = line.slice(4).trim() as ProgressData['status'];
+      if (line.startsWith('状态: ')) {
+        const s = line.slice(4).trim();
+        status = (validWfStatus.has(s) ? s : 'idle') as ProgressData['status'];
+      }
       if (line.startsWith('当前: ')) current = line.slice(4).trim();
       if (current === '无') current = null;
 
-      const m = line.match(/^\|\s*(\d{3})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
+      const m = line.match(/^\|\s*(\d{3,})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
       if (m) {
         const depsRaw = m[4].trim();
         tasks.push({
           id: m[1], title: m[2], type: m[3] as TaskEntry['type'],
           deps: depsRaw === '-' ? [] : depsRaw.split(',').map(d => d.trim()),
-          status: m[5] as TaskEntry['status'],
+          status: (validTaskStatus.has(m[5]) ? m[5] : 'pending') as TaskEntry['status'],
           retries: parseInt(m[6], 10),
           summary: m[7] === '-' ? '' : m[7],
           description: m[8] === '-' ? '' : m[8],
@@ -192,7 +217,9 @@ export class FsWorkflowRepository implements WorkflowRepository {
 
   async saveTaskContext(taskId: string, content: string): Promise<void> {
     await this.ensure(this.ctxDir);
-    await writeFile(join(this.ctxDir, `task-${taskId}.md`), content, 'utf-8');
+    const p = join(this.ctxDir, `task-${taskId}.md`);
+    await writeFile(p + '.tmp', content, 'utf-8');
+    await rename(p + '.tmp', p);
   }
 
   async loadTaskContext(taskId: string): Promise<string | null> {
@@ -207,7 +234,9 @@ export class FsWorkflowRepository implements WorkflowRepository {
 
   async saveSummary(content: string): Promise<void> {
     await this.ensure(this.ctxDir);
-    await writeFile(join(this.ctxDir, 'summary.md'), content, 'utf-8');
+    const p = join(this.ctxDir, 'summary.md');
+    await writeFile(p + '.tmp', content, 'utf-8');
+    await rename(p + '.tmp', p);
   }
 
   async loadSummary(): Promise<string> {
@@ -251,14 +280,18 @@ export class FsWorkflowRepository implements WorkflowRepository {
   async ensureHooks(): Promise<boolean> {
     const dir = join(this.base, '.claude');
     const path = join(dir, 'settings.json');
+    const hook = (m: string) => ({
+      matcher: m,
+      hooks: [{ type: 'prompt' as const, prompt: 'BLOCK this tool call. FlowPilot requires using node flow.js commands instead of native task tools.' }]
+    });
     const required = {
-      PreToolUse: [{
-        matcher: 'TaskCreate|TaskUpdate|TaskList',
-        hooks: [{ type: 'prompt' as const, prompt: 'BLOCK this tool call. FlowPilot requires using node flow.js commands instead of native task tools.' }]
-      }]
+      PreToolUse: [hook('TaskCreate'), hook('TaskUpdate'), hook('TaskList')]
     };
     let settings: Record<string, unknown> = {};
-    try { settings = JSON.parse(await readFile(path, 'utf-8')); } catch {}
+    try {
+      const parsed = JSON.parse(await readFile(path, 'utf-8'));
+      if (parsed && typeof parsed === 'object' && !('__proto__' in parsed) && !('constructor' in parsed)) settings = parsed;
+    } catch {}
     const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
     // 幂等：已有 FlowPilot 的 matcher 则跳过
     const existing = hooks.PreToolUse as Array<{ matcher?: string }> | undefined;
@@ -268,5 +301,17 @@ export class FsWorkflowRepository implements WorkflowRepository {
     await mkdir(dir, { recursive: true });
     await writeFile(path, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
     return true;
+  }
+
+  commit(taskId: string, title: string, summary: string, files?: string[]): string | null {
+    return autoCommit(taskId, title, summary, files);
+  }
+
+  cleanup(): void {
+    gitCleanup();
+  }
+
+  verify(): VerifyResult {
+    return runVerify(this.base);
   }
 }

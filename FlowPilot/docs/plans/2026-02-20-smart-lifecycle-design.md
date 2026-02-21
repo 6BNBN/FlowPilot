@@ -17,7 +17,7 @@
 ## flow finish 实现
 
 1. 检查 `isAllDone` → 状态改 `finishing`
-2. 自动检测项目类型并执行验证（支持7种语言/构建系统）：
+2. 自动检测项目类型并执行验证（支持8种语言/构建系统）：
    - Node.js: npm run build/test/lint
    - Rust: cargo build/test
    - Go: go build/test

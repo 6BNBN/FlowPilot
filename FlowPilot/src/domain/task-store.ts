@@ -26,8 +26,53 @@ export function cascadeSkip(tasks: TaskEntry[]): void {
   }
 }
 
+/** 检测任务依赖中的循环引用 */
+export function detectCycles(tasks: TaskEntry[]): string[] | null {
+  const visited = new Set<string>();
+  const inStack = new Set<string>();
+  const parent = new Map<string, string>();
+
+  function dfs(id: string): string[] | null {
+    visited.add(id);
+    inStack.add(id);
+    const task = tasks.find(t => t.id === id);
+    if (task) {
+      for (const dep of task.deps) {
+        if (!visited.has(dep)) {
+          parent.set(dep, id);
+          const cycle = dfs(dep);
+          if (cycle) return cycle;
+        } else if (inStack.has(dep)) {
+          // 回溯构建环路径
+          const path = [dep];
+          let cur = id;
+          while (cur !== dep) {
+            path.push(cur);
+            cur = parent.get(cur)!;
+          }
+          path.push(dep);
+          return path.reverse();
+        }
+      }
+    }
+    inStack.delete(id);
+    return null;
+  }
+
+  for (const t of tasks) {
+    if (!visited.has(t.id)) {
+      const cycle = dfs(t.id);
+      if (cycle) return cycle;
+    }
+  }
+  return null;
+}
+
 /** 查找下一个待执行任务（依赖已满足） */
 export function findNextTask(tasks: TaskEntry[]): TaskEntry | null {
+  const pending = tasks.filter(t => t.status === 'pending');
+  const cycle = detectCycles(pending);
+  if (cycle) throw new Error(`循环依赖: ${cycle.join(' -> ')}`);
   cascadeSkip(tasks);
   for (const t of tasks) {
     if (t.status !== 'pending') continue;
@@ -86,6 +131,9 @@ export function resumeProgress(data: ProgressData): string | null {
 
 /** 查找所有可并行执行的任务（依赖已满足的pending任务） */
 export function findParallelTasks(tasks: TaskEntry[]): TaskEntry[] {
+  const pending = tasks.filter(t => t.status === 'pending');
+  const cycle = detectCycles(pending);
+  if (cycle) throw new Error(`循环依赖: ${cycle.join(' -> ')}`);
   cascadeSkip(tasks);
   return tasks.filter(t => {
     if (t.status !== 'pending') return false;

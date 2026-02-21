@@ -4,6 +4,7 @@
  */
 
 import { readFileSync } from 'fs';
+import { resolve, relative } from 'path';
 import type { WorkflowService } from '../application/workflow-service';
 import { formatStatus, formatTask, formatBatch } from './formatter';
 import { readStdinIfPiped } from './stdin';
@@ -38,7 +39,7 @@ export class CLI {
         } else {
           out = await s.setup();
         }
-        return out + '\n\n提示: 建议先通过 /plugin 安装插件 superpowers、frontend-design、feature-dev、code-review，未安装则子Agent无法使用专业技能，功能会降级';
+        return out + '\n\n提示: 建议先通过 /plugin 安装插件 superpowers、frontend-design、feature-dev、code-review、context7，未安装则子Agent无法使用专业技能，功能会降级';
       }
 
       case 'next': {
@@ -69,7 +70,9 @@ export class CLI {
         }
 
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
-          detail = readFileSync(rest[fileIdx + 1], 'utf-8');
+          const filePath = resolve(rest[fileIdx + 1]);
+          if (relative(process.cwd(), filePath).startsWith('..')) throw new Error('--file 路径不能超出项目目录');
+          detail = readFileSync(filePath, 'utf-8');
         } else if (rest.length > 1 && fileIdx < 0 && filesIdx < 0) {
           detail = rest.slice(1).join(' ');
         } else {

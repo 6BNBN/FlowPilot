@@ -143,9 +143,8 @@
 ### 环境依赖
 
 以下环境依赖需用户手动安装，`flow init` 输出中会提醒：
-- Agent Teams（Settings → Feature Flags → Agent Teams）
-- 插件：superpowers、frontend-design、feature-dev、code-review（通过 `/plugin` 安装）
-- context7 MCP（`~/.claude/mcp.json` 配置）
+- Agent Teams（`~/.claude/settings.json` 中设置 `"env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }`）
+- 插件：superpowers、frontend-design、feature-dev、code-review、context7（通过 `/plugin` 安装）
 
 ### Hooks 强制拦截
 
@@ -178,7 +177,7 @@
 
 ### CLAUDE.md 自引导
 `flow init` 将完整协议块直接嵌入项目 CLAUDE.md（`<!-- flowpilot:start/end -->` 标记）。
-新窗口打开CC → 自动读CLAUDE.md → 发现嵌入协议 → 用户说"开始" → flow resume → 无缝继续
+新窗口打开CC → 自动读CLAUDE.md → 发现嵌入协议 → 用户说"继续任务" → flow resume → 无缝继续
 
 ## 实现计划
 
@@ -208,7 +207,7 @@
 - `fs-repository.ts` — progress.md读写+context/+summary+CLAUDE.md协议嵌入 ✅
 - `markdown-parser.ts` — 支持类型+依赖+缩进描述 ✅
 - `git.ts` — 新增，每任务自动commit ✅
-- `verify.ts` — 新增，7种语言自动检测验证 ✅
+- `verify.ts` — 新增，8种语言自动检测验证 ✅
 
 ### 最终文件清单
 
