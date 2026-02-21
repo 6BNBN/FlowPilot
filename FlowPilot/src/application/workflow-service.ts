@@ -10,9 +10,9 @@ import { makeTaskId, cascadeSkip, findNextTask, findParallelTasks, completeTask,
 import { runLifecycleHook } from '../infrastructure/hooks';
 import { log, setWorkflowName } from '../infrastructure/logger';
 import { collectStats, analyzeHistory } from '../infrastructure/history';
-import { appendMemory, queryMemory, decayMemory, compactMemory, loadMemory } from '../infrastructure/memory';
+import { appendMemory, queryMemory, decayMemory, compactMemory, loadMemory, loadDf, saveDf, rebuildDf } from '../infrastructure/memory';
 import { extractAll } from '../infrastructure/extractor';
-import { detect as detectLoop, type LoopDetection } from '../infrastructure/loop-detector';
+import { detect as detectLoop, loadWindow, type LoopDetection } from '../infrastructure/loop-detector';
 import { writeFile, readFile, unlink, mkdir } from 'fs/promises';
 import { join } from 'path';
 
@@ -134,6 +134,12 @@ export class WorkflowService {
       const loopWarning = await this.loadAndClearLoopWarning();
       if (loopWarning) {
         parts.push(`## 循环检测警告\n\n${loopWarning}`);
+      }
+
+      // 心跳自检
+      const hcWarnings = await this.healthCheck();
+      if (hcWarnings.length) {
+        parts.push('## 健康检查警告\n\n' + hcWarnings.map(w => `- ${w}`).join('\n'));
       }
 
       return { task, context: parts.join('\n\n---\n\n') };
@@ -639,6 +645,44 @@ export class WorkflowService {
       return msg;
     }
     return null;
+  }
+
+  /** 心跳自检：任务超时 + 记忆膨胀 + DF一致性 */
+  async healthCheck(): Promise<string[]> {
+    const warnings: string[] = [];
+    const data = await this.repo.loadProgress();
+    if (!data || data.status !== 'running') return warnings;
+
+    // 1. 活跃任务超时检测（>30分钟无checkpoint）
+    const active = data.tasks.filter(t => t.status === 'active');
+    if (active.length) {
+      const window = await loadWindow(this.repo.projectRoot());
+      const lastCp = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
+      if (lastCp && Date.now() - lastCp > 30 * 60 * 1000) {
+        warnings.push(`[TIMEOUT] 活跃任务 ${active.map(t => t.id).join(',')} 超过30分钟无checkpoint`);
+      }
+    }
+
+    // 2. 记忆膨胀检测（>100条触发自动压缩）
+    const memories = await loadMemory(this.repo.projectRoot());
+    const activeCount = memories.filter(e => !e.archived).length;
+    if (activeCount > 100) {
+      await compactMemory(this.repo.projectRoot());
+      warnings.push(`[MEMORY] 活跃记忆 ${activeCount} 条，已自动压缩`);
+    }
+
+    // 3. DF 统计一致性校验
+    const dfStats = await loadDf(this.repo.projectRoot());
+    if (dfStats.docCount > 0) {
+      const rebuilt = rebuildDf(memories);
+      const diff = Math.abs(dfStats.docCount - rebuilt.docCount) / Math.max(dfStats.docCount, 1);
+      if (diff > 0.1) {
+        await saveDf(this.repo.projectRoot(), rebuilt);
+        warnings.push(`[DF] docCount 偏差 ${(diff * 100).toFixed(0)}%，已重建`);
+      }
+    }
+
+    return warnings;
   }
 
   private async requireProgress(): Promise<ProgressData> {

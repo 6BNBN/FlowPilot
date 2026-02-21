@@ -19,7 +19,7 @@ export interface MemoryEntry {
 }
 
 /** DF 统计持久化结构 */
-interface DfStats {
+export interface DfStats {
   docCount: number;
   df: Record<string, number>;
   avgDocLen: number;
@@ -137,7 +137,7 @@ function termFrequency(tokens: string[]): Map<string, number> {
 }
 
 /** 加载 DF 统计 */
-async function loadDf(basePath: string): Promise<DfStats> {
+export async function loadDf(basePath: string): Promise<DfStats> {
   try {
     return JSON.parse(await readFile(dfPath(basePath), 'utf-8'));
   } catch {
@@ -146,14 +146,14 @@ async function loadDf(basePath: string): Promise<DfStats> {
 }
 
 /** 保存 DF 统计 */
-async function saveDf(basePath: string, stats: DfStats): Promise<void> {
+export async function saveDf(basePath: string, stats: DfStats): Promise<void> {
   const p = dfPath(basePath);
   await mkdir(dirname(p), { recursive: true });
   await writeFile(p, JSON.stringify(stats), 'utf-8');
 }
 
 /** 从记忆条目重建 DF 统计（含 avgDocLen） */
-function rebuildDf(entries: MemoryEntry[]): DfStats {
+export function rebuildDf(entries: MemoryEntry[]): DfStats {
   const active = entries.filter(e => !e.archived);
   const df: Record<string, number> = {};
   let totalLen = 0;
