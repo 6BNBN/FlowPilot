@@ -32,6 +32,13 @@ const BM25_B = 0.75;
 const MEMORY_FILE = 'memory.json';
 const DF_FILE = 'memory-df.json';
 const SNAPSHOT_FILE = 'memory-snapshot.json';
+const VECTOR_FILE = 'vectors.json';
+
+/** 向量存储条目 */
+interface VectorEntry {
+  content: string;
+  vector: Record<string, number>;
+}
 const COMPACT_THRESHOLD = 50;
 const EVERGREEN_SOURCES = ['architecture', 'identity', 'decision'];
 
@@ -100,6 +107,53 @@ function dfPath(basePath: string): string {
 
 function snapshotPath(basePath: string): string {
   return join(basePath, '.flowpilot', SNAPSHOT_FILE);
+}
+
+function vectorFilePath(basePath: string): string {
+  return join(basePath, '.flowpilot', VECTOR_FILE);
+}
+
+/** 加载所有向量 */
+async function loadVectors(basePath: string): Promise<VectorEntry[]> {
+  try {
+    return JSON.parse(await readFile(vectorFilePath(basePath), 'utf-8'));
+  } catch { return []; }
+}
+
+/** 保存向量（原子写入） */
+async function saveVectors(basePath: string, vectors: VectorEntry[]): Promise<void> {
+  const p = vectorFilePath(basePath);
+  await mkdir(dirname(p), { recursive: true });
+  await writeFile(p, JSON.stringify(vectors), 'utf-8');
+}
+
+/** 向量检索：余弦相似度 top-k */
+function vectorSearch(
+  queryVec: Map<string, number>,
+  vectors: VectorEntry[],
+  entries: MemoryEntry[],
+  k: number
+): { entry: MemoryEntry; score: number }[] {
+  const contentMap = new Map(entries.map(e => [e.content, e]));
+  return vectors
+    .map(v => {
+      const stored = new Map(Object.entries(v.vector));
+      const entry = contentMap.get(v.content);
+      if (!entry) return null;
+      return { entry, score: cosineSimilarity(queryVec, stored) };
+    })
+    .filter((x): x is { entry: MemoryEntry; score: number } => x !== null && x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, k);
+}
+
+/** 重建向量索引：只保留活跃条目 */
+async function rebuildVectorIndex(basePath: string, active: MemoryEntry[], stats: DfStats): Promise<void> {
+  const vectors: VectorEntry[] = active.map(e => ({
+    content: e.content,
+    vector: Object.fromEntries(bm25Vector(tokenize(e.content), stats)),
+  }));
+  await saveVectors(basePath, vectors);
 }
 
 /** CJK 全范围：中文 + 日文平假名/片假名 + 韩文 */
@@ -234,7 +288,20 @@ export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'r
     log.debug(`memory: 新增条目, 总计 ${newEntries.length}`);
     await saveMemory(basePath, newEntries);
   }
-  await saveDf(basePath, rebuildDf(await loadMemory(basePath)));
+  const saved = await loadMemory(basePath);
+  const newStats = rebuildDf(saved);
+  await saveDf(basePath, newStats);
+
+  // 向量索引：追加/更新当前条目的 BM25 向量
+  const vec = bm25Vector(tokenize(entry.content), newStats);
+  const vecRecord: Record<string, number> = Object.fromEntries(vec);
+  const vectors = await loadVectors(basePath);
+  const vi = vectors.findIndex(v => v.content === entry.content);
+  const newVectors = vi >= 0
+    ? vectors.map((v, i) => i === vi ? { content: entry.content, vector: vecRecord } : v)
+    : [...vectors, { content: entry.content, vector: vecRecord }];
+  await saveVectors(basePath, newVectors);
+
   await clearCache(basePath);
 }
 
@@ -281,7 +348,7 @@ export function rrfFuse(sources: { entry: MemoryEntry; score: number }[][]): { e
   return [...scores.values()].sort((a, b) => b.score - a.score);
 }
 
-/** 查询与任务描述相关的记忆（BM25 + 余弦相似度 + MMR + RRF 多源融合预留），命中条目 refs++，含 SHA-256 + LRU 缓存 */
+/** 查询与任务描述相关的记忆（BM25 文本检索 + 向量余弦检索 → RRF 双源融合 + MMR 重排序），命中条目 refs++，含 SHA-256 + LRU 缓存 */
 export async function queryMemory(basePath: string, taskDescription: string): Promise<MemoryEntry[]> {
   const cacheKey = sha256(taskDescription);
   const cache = await loadCache(basePath);
@@ -304,14 +371,15 @@ export async function queryMemory(basePath: string, taskDescription: string): Pr
     return { entry: e, score: cosineSimilarity(queryVec, vec) * temporalDecayScore(e), vec };
   }).filter(s => s.score > 0.05);
 
-  // 未来可在此添加第二检索源（如向量检索）作为 source2
-  // const source2 = await vectorSearch(basePath, taskDescription);
+  // Source 2: 向量余弦检索
+  const vectors = await loadVectors(basePath);
+  const source2 = vectorSearch(queryVec, vectors, active, 10);
 
-  // 单源时直接使用，多源时调用 rrfFuse
-  const sources = [source1.map(s => ({ entry: s.entry, score: s.score }))];
-  const fused = sources.length > 1
-    ? rrfFuse(sources)
-    : sources[0];
+  // RRF 双源融合
+  const fused = rrfFuse([
+    source1.map(s => ({ entry: s.entry, score: s.score })),
+    source2,
+  ]);
 
   // 从 fused 结果恢复 vec 用于 MMR 重排序
   const candidates = fused.map(f => {
@@ -396,14 +464,18 @@ export async function compactMemory(basePath: string, targetCount?: number): Pro
     const toRemove = new Set(sorted.slice(0, activeResult.length - targetCount));
     const final = result.filter(e => !toRemove.has(e));
     await saveMemory(basePath, final);
-    await saveDf(basePath, rebuildDf(final));
+    const finalStats = rebuildDf(final);
+    await saveDf(basePath, finalStats);
+    await rebuildVectorIndex(basePath, final.filter(e => !e.archived), finalStats);
     await clearCache(basePath);
     log.debug(`memory: 压缩 ${entries.length} → ${final.length} 条`);
     return entries.length - final.length;
   }
 
   await saveMemory(basePath, result);
-  await saveDf(basePath, rebuildDf(result));
+  const resultStats = rebuildDf(result);
+  await saveDf(basePath, resultStats);
+  await rebuildVectorIndex(basePath, result.filter(e => !e.archived), resultStats);
   await clearCache(basePath);
   const removed = entries.length - result.length;
   if (removed) log.debug(`memory: 压缩合并 ${removed} 条`);
