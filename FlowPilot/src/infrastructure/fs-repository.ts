@@ -6,7 +6,7 @@
 import { mkdir, readFile, writeFile, unlink, rm, rename, readdir } from 'fs/promises';
 import { join } from 'path';
 import { openSync, closeSync, existsSync } from 'fs';
-import type { ProgressData, TaskEntry, WorkflowStats } from '../domain/types';
+import type { ProgressData, TaskEntry, WorkflowStats, EvolutionEntry } from '../domain/types';
 import type { WorkflowRepository, VerifyResult } from '../domain/repository';
 import { autoCommit, gitCleanup, tagTask, rollbackToTask, cleanTags as gitCleanTags } from './git';
 import { runVerify } from './verify';
@@ -31,6 +31,7 @@ export class FsWorkflowRepository implements WorkflowRepository {
   private readonly root: string;
   private readonly ctxDir: string;
   private readonly historyDir: string;
+  private readonly evolutionDir: string;
   private readonly base: string;
 
   constructor(basePath: string) {
@@ -38,6 +39,7 @@ export class FsWorkflowRepository implements WorkflowRepository {
     this.root = join(basePath, '.workflow');
     this.ctxDir = join(this.root, 'context');
     this.historyDir = join(basePath, '.flowpilot', 'history');
+    this.evolutionDir = join(basePath, '.flowpilot', 'evolution');
   }
 
   projectRoot(): string { return this.base; }
@@ -84,6 +86,7 @@ export class FsWorkflowRepository implements WorkflowRepository {
       '',
       `状态: ${data.status}`,
       `当前: ${data.current ?? '无'}`,
+      ...(data.startTime ? [`开始: ${data.startTime}`] : []),
       '',
       '| ID | 标题 | 类型 | 依赖 | 状态 | 重试 | 摘要 | 描述 |',
       '|----|------|------|------|------|------|------|------|',
@@ -114,6 +117,7 @@ export class FsWorkflowRepository implements WorkflowRepository {
     const name = (lines[0] ?? '').replace(/^#\s*/, '').trim();
     let status = 'idle' as ProgressData['status'];
     let current: string | null = null;
+    let startTime: string | undefined;
     const tasks: TaskEntry[] = [];
 
     for (const line of lines) {
@@ -123,6 +127,7 @@ export class FsWorkflowRepository implements WorkflowRepository {
       }
       if (line.startsWith('当前: ')) current = line.slice(4).trim();
       if (current === '无') current = null;
+      if (line.startsWith('开始: ')) startTime = line.slice(4).trim();
 
       const m = line.match(/^\|\s*(\d{3,})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
       if (m) {
@@ -139,7 +144,7 @@ export class FsWorkflowRepository implements WorkflowRepository {
     }
 
     // 从 tasks.md 补充 deps 信息
-    return { name, status, current, tasks };
+    return { name, status, current, tasks, ...(startTime ? { startTime } : {}) };
   }
 
   // --- context/ 任务详细产出 ---
@@ -320,4 +325,23 @@ export class FsWorkflowRepository implements WorkflowRepository {
   tag(taskId: string): string | null { return tagTask(taskId); }
   rollback(taskId: string): string | null { return rollbackToTask(taskId); }
   cleanTags(): void { gitCleanTags(); }
+
+  // --- .flowpilot/evolution/ 进化日志 ---
+
+  async saveEvolution(entry: EvolutionEntry): Promise<void> {
+    await this.ensure(this.evolutionDir);
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    await writeFile(join(this.evolutionDir, `${ts}.json`), JSON.stringify(entry, null, 2), 'utf-8');
+  }
+
+  async loadEvolutions(): Promise<EvolutionEntry[]> {
+    try {
+      const files = (await readdir(this.evolutionDir)).filter(f => f.endsWith('.json')).sort();
+      const results: EvolutionEntry[] = [];
+      for (const f of files) {
+        try { results.push(JSON.parse(await readFile(join(this.evolutionDir, f), 'utf-8'))); } catch {}
+      }
+      return results;
+    } catch { return []; }
+  }
 }

@@ -45,6 +45,7 @@ export class WorkflowService {
       status: 'running',
       current: null,
       tasks,
+      startTime: new Date().toISOString(),
     };
     setWorkflowName(def.name);
     await this.repo.saveProgress(data);
@@ -390,6 +391,19 @@ export class WorkflowService {
     const wfStats = collectStats(data);
     await this.repo.saveHistory(wfStats);
 
+    // 保存进化快照（config 变更前后对比）
+    const configNow = await this.repo.loadConfig();
+    const evolutions = await this.repo.loadEvolutions();
+    const lastEvo = evolutions[evolutions.length - 1];
+    const configBefore = lastEvo?.configAfter ?? {};
+    if (JSON.stringify(configBefore) !== JSON.stringify(configNow)) {
+      await this.repo.saveEvolution({
+        timestamp: new Date().toISOString(),
+        workflowName: data.name,
+        configBefore, configAfter: configNow, suggestions: [],
+      });
+    }
+
     await this.repo.cleanupInjections();
     this.repo.cleanTags();
     const commitErr = this.repo.commit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`);
@@ -439,6 +453,22 @@ export class WorkflowService {
     await this.repo.cleanupInjections();
     await this.repo.clearAll();
     return `工作流 "${data.name}" 已中止，.workflow/ 已清理`;
+  }
+
+  /** rollbackEvolution: 从进化日志恢复历史 config */
+  async rollbackEvolution(index: number): Promise<string> {
+    const evolutions = await this.repo.loadEvolutions();
+    if (!evolutions.length) return '无进化日志';
+    if (index < 0 || index >= evolutions.length) return `索引越界，有效范围: 0-${evolutions.length - 1}`;
+    const target = evolutions[index];
+    const configBefore = await this.repo.loadConfig();
+    await this.repo.saveConfig(target.configBefore);
+    await this.repo.saveEvolution({
+      timestamp: new Date().toISOString(),
+      workflowName: `rollback-to-${index}`,
+      configBefore, configAfter: target.configBefore, suggestions: ['手动回滚'],
+    });
+    return `已回滚到进化点 ${index}（${target.timestamp}）`;
   }
 
   /** status: 全局进度 */
@@ -535,7 +565,7 @@ export class WorkflowService {
     await this.repo.saveSummary(lines.join('\n') + '\n');
   }
 
-  /** 读取历史经验，输出建议，自动调整默认参数 */
+  /** 读取历史经验，输出建议，自动写入 config.json（闭环进化） */
   private async applyHistoryInsights(): Promise<void> {
     const history = await this.repo.loadHistory();
     if (!history.length) return;
@@ -546,21 +576,22 @@ export class WorkflowService {
       for (const s of suggestions) console.log(`  - ${s}`);
     }
 
-    // 仅在用户未自定义时写入推荐参数
-    if (Object.keys(recommendedConfig).length) {
-      const config = await this.repo.loadConfig();
-      const verify = (config.verify ?? {}) as Record<string, unknown>;
-      let changed = false;
-      for (const [k, v] of Object.entries(recommendedConfig)) {
-        if (!(k in config) && !(k in verify)) {
-          verify[k] = v;
-          changed = true;
-        }
-      }
-      if (changed) {
-        await this.repo.saveConfig({ ...config, verify });
-        console.log('[历史经验] 已基于历史数据自动调整默认参数');
-      }
+    if (!Object.keys(recommendedConfig).length) return;
+
+    const configBefore = await this.repo.loadConfig();
+    const merged = { ...configBefore };
+    let changed = false;
+    for (const [k, v] of Object.entries(recommendedConfig)) {
+      if (!(k in merged)) { merged[k] = v; changed = true; }
+    }
+    if (changed) {
+      await this.repo.saveConfig(merged);
+      await this.repo.saveEvolution({
+        timestamp: new Date().toISOString(),
+        workflowName: (await this.repo.loadProgress())?.name ?? '',
+        configBefore, configAfter: merged, suggestions,
+      });
+      console.log('[历史经验] 已基于历史数据自动调整默认参数');
     }
   }
 

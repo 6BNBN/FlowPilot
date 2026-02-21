@@ -3,7 +3,7 @@
  * @description 仓储接口 - 持久化契约
  */
 
-import type { ProgressData, WorkflowStats } from './types';
+import type { ProgressData, WorkflowStats, EvolutionEntry } from './types';
 
 /** 验证结果 */
 export interface VerifyResult {
@@ -63,4 +63,8 @@ export interface WorkflowRepository {
   rollback(taskId: string): string | null;
   /** 清理所有 flowpilot/ 前缀的 tag */
   cleanTags(): void;
+  /** 保存进化日志 */
+  saveEvolution(entry: EvolutionEntry): Promise<void>;
+  /** 加载所有进化日志 */
+  loadEvolutions(): Promise<EvolutionEntry[]>;
 }
