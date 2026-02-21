@@ -35,7 +35,7 @@ export function collectStats(data: ProgressData): WorkflowStats {
     totalTasks: data.tasks.length,
     doneCount, skipCount, failCount, retryTotal,
     tasksByType, failsByType,
-    startTime: '', // 由调用方填充
+    startTime: data.startTime || new Date().toISOString(),
     endTime: new Date().toISOString(),
   };
 }

@@ -34,6 +34,17 @@ export interface ProgressData {
   status: WorkflowStatus;
   current: string | null;
   tasks: TaskEntry[];
+  /** 工作流启动时间 ISO */
+  startTime?: string;
+}
+
+/** 进化日志条目 */
+export interface EvolutionEntry {
+  timestamp: string;
+  workflowName: string;
+  configBefore: Record<string, unknown>;
+  configAfter: Record<string, unknown>;
+  suggestions: string[];
 }
 
 /** 工作流历史统计 */
