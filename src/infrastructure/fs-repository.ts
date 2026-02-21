@@ -8,7 +8,7 @@ import { join } from 'path';
 import { openSync, closeSync, existsSync } from 'fs';
 import type { ProgressData, TaskEntry, WorkflowStats } from '../domain/types';
 import type { WorkflowRepository, VerifyResult } from '../domain/repository';
-import { autoCommit, gitCleanup } from './git';
+import { autoCommit, gitCleanup, tagTask, rollbackToTask, cleanTags as gitCleanTags } from './git';
 import { runVerify } from './verify';
 
 /** 内置模板路径：dev 时 __dirname=src/infrastructure/，打包后 __dirname=dist/ */
