@@ -14,6 +14,7 @@ export interface MemoryEntry {
   timestamp: string;
   refs: number;
   archived: boolean;
+  evergreen?: boolean;
 }
 
 /** DF 统计持久化结构 */
@@ -24,6 +25,14 @@ interface DfStats {
 
 const MEMORY_FILE = 'memory.json';
 const DF_FILE = 'memory-df.json';
+const EVERGREEN_SOURCES = ['architecture', 'identity', 'decision'];
+
+/** 指数衰减评分：score = exp(-ln2/halfLife * ageDays)，evergreen 条目恒为 1 */
+export function temporalDecayScore(entry: MemoryEntry, halfLifeDays = 30): number {
+  if (entry.evergreen || EVERGREEN_SOURCES.some(s => entry.source.includes(s))) return 1;
+  const ageDays = (Date.now() - new Date(entry.timestamp).getTime()) / (24 * 60 * 60 * 1000);
+  return Math.exp(-Math.LN2 / halfLifeDays * ageDays);
+}
 
 function memoryPath(basePath: string): string {
   return join(basePath, '.flowpilot', MEMORY_FILE);
@@ -188,7 +197,7 @@ export async function queryMemory(basePath: string, taskDescription: string): Pr
 
   const candidates = active.map(e => {
     const vec = tfidfVector(tokenize(e.content), fallback);
-    return { entry: e, score: cosineSimilarity(queryVec, vec), vec };
+    return { entry: e, score: cosineSimilarity(queryVec, vec) * temporalDecayScore(e), vec };
   }).filter(s => s.score > 0.05);
 
   const reranked = mmrRerank(candidates, 5);
@@ -202,19 +211,19 @@ export async function queryMemory(basePath: string, taskDescription: string): Pr
   return reranked.map(s => ({ ...s.entry, refs: s.entry.refs + 1 }));
 }
 
-/** 衰减归档：refs=0 且超过 30 天的条目标记 archived */
+/** 衰减归档：衰减系数 < 0.1 且 refs=0 的条目标记 archived（immutable） */
 export async function decayMemory(basePath: string): Promise<number> {
   const entries = await loadMemory(basePath);
-  const threshold = Date.now() - 30 * 24 * 60 * 60 * 1000;
   let count = 0;
-  for (const e of entries) {
-    if (!e.archived && e.refs === 0 && new Date(e.timestamp).getTime() < threshold) {
-      e.archived = true;
+  const updated = entries.map(e => {
+    if (!e.archived && e.refs === 0 && temporalDecayScore(e) < 0.1) {
       count++;
+      return { ...e, archived: true };
     }
-  }
+    return e;
+  });
   if (count) {
-    await saveMemory(basePath, entries);
+    await saveMemory(basePath, updated);
     log.debug(`memory: 衰减归档 ${count} 条`);
   }
   return count;
