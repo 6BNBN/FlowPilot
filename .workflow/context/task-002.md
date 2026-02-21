@@ -1,3 +1,3 @@
-# task-002: 可选 LLM 智能提取：Extract→Decide 优雅降级
+# task-002: Experiment 实验引擎：自动调整协议和配置
 
-LLM智能提取(Extract→Decide)优雅降级完成：callClaude/llmExtract/llmDecide + extractAll异步化 + 调用方await更新
+experiment()实验引擎：解析ReflectReport自动调整config已知参数+protocol追加规则，含快照回滚和追加日志

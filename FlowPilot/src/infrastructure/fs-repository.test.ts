@@ -106,7 +106,7 @@ describe('FsWorkflowRepository', () => {
     const stats: WorkflowStats = {
       name: 'test', totalTasks: 3, doneCount: 2, skipCount: 1, failCount: 0,
       retryTotal: 0, tasksByType: { backend: 3 }, failsByType: {},
-      startTime: '', endTime: new Date().toISOString(),
+      taskResults: [], startTime: '', endTime: new Date().toISOString(),
     };
     await repo.saveHistory(stats);
     const loaded = await repo.loadHistory();

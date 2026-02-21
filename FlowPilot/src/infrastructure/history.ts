@@ -133,10 +133,10 @@ function ruleReflect(stats: WorkflowStats): ReflectReport {
 
   // 连续失败链检测
   let streak = 0;
-  for (const r of results) {
-    streak = r.status === 'failed' ? streak + 1 : 0;
+  for (let i = 0; i < results.length; i++) {
+    streak = results[i].status === 'failed' ? streak + 1 : 0;
     if (streak >= 2) {
-      findings.push(`连续失败链：从任务 ${results[results.indexOf(r) - 1].id} 开始连续失败`);
+      findings.push(`连续失败链：从任务 ${results[i - streak + 1].id} 开始连续失败`);
       experiments.push({
         trigger: '连续失败链', observation: `${streak} 个任务连续失败`,
         action: '在失败任务间插入诊断步骤', expected: '打断失败传播', target: 'protocol',
@@ -219,10 +219,9 @@ const KNOWN_PARAMS = ['maxRetries', 'timeout', 'parallelLimit', 'verifyTimeout']
 /** 从 action 文本提取参数名和数值 */
 function parseConfigAction(action: string): { key: string; value: number } | null {
   for (const k of KNOWN_PARAMS) {
-    if (action.includes(k)) {
-      const m = action.match(/(\d+)/);
-      if (m) return { key: k, value: Number(m[1]) };
-    }
+    const re = new RegExp(k + '\\D*(\\d+)');
+    const m = action.match(re);
+    if (m) return { key: k, value: Number(m[1]) };
   }
   return null;
 }
@@ -238,30 +237,40 @@ export async function experiment(
   const configPath = join(basePath, '.flowpilot', 'config.json');
   const protocolPath = join(basePath, 'FlowPilot', 'src', 'templates', 'protocol.md');
 
+  // Fix C1: 循环外一次性读取原始快照，避免竞态
+  const configSnapshot = await safeRead(configPath, '{}');
+  const protocolSnapshot = await safeRead(protocolPath, '');
+  let configObj = JSON.parse(configSnapshot);
+  let protocolContent = protocolSnapshot;
+
   for (const exp of report.experiments) {
     const applied: AppliedExperiment = { ...exp, applied: false, snapshotBefore: '' };
     try {
       if (exp.target === 'config') {
-        const raw = await safeRead(configPath, '{}');
-        applied.snapshotBefore = raw;
+        applied.snapshotBefore = configSnapshot;
         const parsed = parseConfigAction(exp.action);
         if (parsed) {
-          const cfg = JSON.parse(raw);
-          cfg[parsed.key] = parsed.value;
-          await mkdir(dirname(configPath), { recursive: true });
-          await writeFile(configPath, JSON.stringify(cfg, null, 2), 'utf-8');
+          configObj = { ...configObj, [parsed.key]: parsed.value };
           applied.applied = true;
         }
       } else if (exp.target === 'protocol') {
-        const content = await safeRead(protocolPath, '');
-        applied.snapshotBefore = content;
+        applied.snapshotBefore = protocolSnapshot;
         const appendix = `\n<!-- evolution: ${exp.trigger} -->\n> ${exp.action}\n`;
-        await mkdir(dirname(protocolPath), { recursive: true });
-        await writeFile(protocolPath, content + appendix, 'utf-8');
+        protocolContent += appendix;
         applied.applied = true;
       }
     } catch { /* 降级：applied 保持 false */ }
     log.experiments.push(applied);
+  }
+
+  // 循环结束后一次性写入
+  if (log.experiments.some(e => e.applied && e.target === 'config')) {
+    await mkdir(dirname(configPath), { recursive: true });
+    await writeFile(configPath, JSON.stringify(configObj, null, 2), 'utf-8');
+  }
+  if (log.experiments.some(e => e.applied && e.target === 'protocol')) {
+    await mkdir(dirname(protocolPath), { recursive: true });
+    await writeFile(protocolPath, protocolContent, 'utf-8');
   }
 
   // 追加保存实验日志
@@ -361,17 +370,16 @@ export async function review(basePath: string): Promise<ReviewResult> {
     checks.push({ name: 'experiments.json', passed: true, detail: '文件不存在，跳过' });
   }
 
-  // 4. 自动回滚
+  // 4. 自动回滚：只用第一个 applied 实验的 snapshotBefore（即真正的原始状态）
   if (rolledBack) {
     try {
       const logs: ExperimentLog[] = JSON.parse(await readFile(expPath, 'utf-8'));
       const last = logs[logs.length - 1];
       if (last) {
-        for (const exp of last.experiments) {
-          if (!exp.applied || !exp.snapshotBefore) continue;
-          const target = exp.target === 'config' ? configPath : protocolPath;
-          await writeFile(target, exp.snapshotBefore, 'utf-8');
-        }
+        const firstConfig = last.experiments.find(e => e.applied && e.target === 'config');
+        const firstProtocol = last.experiments.find(e => e.applied && e.target === 'protocol');
+        if (firstConfig?.snapshotBefore) await writeFile(configPath, firstConfig.snapshotBefore, 'utf-8');
+        if (firstProtocol?.snapshotBefore) await writeFile(protocolPath, firstProtocol.snapshotBefore, 'utf-8');
       }
     } catch { /* 无法回滚 */ }
   }

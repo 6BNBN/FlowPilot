@@ -1,8 +1,14 @@
-1. [backend] 文件级向量索引：激活 RRF 双源融合
-   在 memory.ts 新增文件级向量存储（.flowpilot/vectors.json），每次 appendMemory 时将 BM25 稀疏向量持久化，queryMemory 时同时执行 BM25 文本检索和向量余弦检索两路，通过已有的 rrfFuse 合并结果。实现 saveVector/loadVectors/vectorSearch 三个内部函数。参考 Memoh-v2 的 SearchWithVectors + fuseByRankFusion 逻辑。
+1. [backend] Reflect 反思引擎：LLM 分析工作流成败模式
+   已完成。在 history.ts 新增 reflect() 函数，LLM+规则双路径分析。
 
-2. [backend] 可选 LLM 智能提取：Extract→Decide 优雅降级 (deps: 1)
-   在 extractor.ts 新增可选 LLM 提取路径：检测 ANTHROPIC_API_KEY 环境变量，有则调用 Claude API 执行 Extract（从文本提取事实）和 Decide（对比已有记忆决定 ADD/UPDATE/SKIP），无则降级到现有规则引擎。使用 Node.js 内置 https 模块直接调用 API（零外部依赖）。参考 Memoh-v2 的 LLM Extract→Decide 两步流程。
+2. [backend] Experiment 实验引擎：自动调整协议和配置 (deps: 1)
+   在 history.ts 新增 experiment() 函数：基于 reflect 的 experiments 建议，自动修改 config.json 和 protocol.md 模板。每次修改前保存完整快照，记录到 .flowpilot/evolution/experiments.json。
 
-3. [general] 集成测试 + 构建验证 (deps: 1, 2)
-   为向量索引和 LLM 提取编写测试：向量存储/检索/RRF双源融合端到端、LLM降级到规则引擎、API调用mock。运行 npm test + tsc --noEmit 确保全部通过。
+3. [backend] Review 自愈引擎：验证实验效果 + 回滚 (deps: 2)
+   在 history.ts 新增 review() 函数：init 时调用，对比上轮实验前后的工作流统计，指标恶化则自动回滚。检查 protocol.md 完整性、config.json 合法性。
+
+4. [backend] 三阶段集成到工作流生命周期 (deps: 1, 2, 3)
+   修改 workflow-service.ts：finish() 末尾调用 reflect() + experiment()，init() 开头调用 review()。
+
+5. [general] 测试验证 + 构建 (deps: 4)
+   为三阶段进化编写测试，运行 npm test + tsc + npm run build 确保全部通过。

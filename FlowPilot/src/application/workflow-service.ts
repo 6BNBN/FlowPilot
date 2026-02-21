@@ -44,12 +44,12 @@ export class WorkflowService {
   /** init: 解析任务markdown → 生成progress/tasks */
   async init(tasksMd: string, force = false): Promise<ProgressData> {
     // 自愈检查：验证上轮实验效果
-    const reviewResult = await review(this.repo.projectRoot());
-    if (reviewResult.rolledBack) {
-      log.info(`[自愈] 已回滚上轮实验: ${reviewResult.rollbackReason}`);
-    }
-    for (const check of reviewResult.checks.filter(c => !c.passed)) {
-      log.info(`[自愈] 检查未通过: ${check.name} - ${check.detail}`);
+    try {
+      const reviewResult = await review(this.repo.projectRoot());
+      if (reviewResult.rolledBack) log.info(`[自愈] 已回滚: ${reviewResult.rollbackReason}`);
+      for (const c of reviewResult.checks.filter(c => !c.passed)) log.info(`[自愈] ${c.name}: ${c.detail}`);
+    } catch (e) {
+      log.debug(`[自愈] review 跳过: ${e}`);
     }
 
     const existing = await this.repo.loadProgress();

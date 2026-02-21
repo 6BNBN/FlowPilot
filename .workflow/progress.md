@@ -2,10 +2,12 @@
 
 状态: finishing
 当前: 无
-开始: 2026-02-21T15:15:03.644Z
+开始: 2026-02-21T17:09:50.158Z
 
 | ID | 标题 | 类型 | 依赖 | 状态 | 重试 | 摘要 | 描述 |
 |----|------|------|------|------|------|------|------|
-| 001 | 文件级向量索引：激活 RRF 双源融合 | backend | - | done | 0 | 文件级向量索引完成：新增 VectorEntry 类型 + loadVectors/saveVectors/vectorSearch/rebuildVector | 在 memory.ts 新增文件级向量存储（.flowpilot/vectors.json），每次 appendMemory 时将 BM25 稀疏向量持久化，queryMemory 时同时执行 BM25 文本检索和向量余弦检索两路，通过已有的 rrfFuse 合并结果。实现 saveVector/loadVectors/vectorSearch 三个内部函数。参考 Memoh-v2 的 SearchWithVectors + fuseByRankFusion 逻辑。 |
-| 002 | 可选 LLM 智能提取：Extract→Decide 优雅降级 | backend | 001 | done | 0 | LLM智能提取(Extract→Decide)优雅降级完成：callClaude/llmExtract/llmDecide + extractAll异步化 + | 在 extractor.ts 新增可选 LLM 提取路径：检测 ANTHROPIC_API_KEY 环境变量，有则调用 Claude API 执行 Extract（从文本提取事实）和 Decide（对比已有记忆决定 ADD/UPDATE/SKIP），无则降级到现有规则引擎。使用 Node.js 内置 https 模块直接调用 API（零外部依赖）。参考 Memoh-v2 的 LLM Extract→Decide 两步流程。 |
-| 003 | 集成测试 + 构建验证 | general | 001,002 | done | 0 | 集成测试通过：memory.test.ts 新增3个向量索引测试，extractor.test.ts 新增2个LLM降级测试，全部138测试通过+tsc通过 | 为向量索引和 LLM 提取编写测试：向量存储/检索/RRF双源融合端到端、LLM降级到规则引擎、API调用mock。运行 npm test + tsc --noEmit 确保全部通过。 |
+| 001 | Reflect 反思引擎：LLM 分析工作流成败模式 | backend | - | done | 0 | Reflect反思引擎完成：ReflectReport/Experiment类型+llmReflect+ruleReflect+reflect入口，callCl | 已完成。在 history.ts 新增 reflect() 函数，LLM+规则双路径分析。 |
+| 002 | Experiment 实验引擎：自动调整协议和配置 | backend | 001 | done | 0 | experiment()实验引擎：解析ReflectReport自动调整config已知参数+protocol追加规则，含快照回滚和追加日志 | 在 history.ts 新增 experiment() 函数：基于 reflect 的 experiments 建议，自动修改 config.json 和 protocol.md 模板。每次修改前保存完整快照，记录到 .flowpilot/evolution/experiments.json。 |
+| 003 | Review 自愈引擎：验证实验效果 + 回滚 | backend | 002 | done | 0 | review() 自愈引擎：指标对比+完整性检查+自动回滚 | 在 history.ts 新增 review() 函数：init 时调用，对比上轮实验前后的工作流统计，指标恶化则自动回滚。检查 protocol.md 完整性、config.json 合法性。 |
+| 004 | 三阶段集成到工作流生命周期 | backend | 001,002,003 | done | 0 | 三阶段(reflect/experiment/review)集成到workflow-service的init和finish生命周期 | 修改 workflow-service.ts：finish() 末尾调用 reflect() + experiment()，init() 开头调用 review()。 |
+| 005 | 测试验证 + 构建 | general | 004 | done | 0 | 测试验证+构建：为reflect/experiment/review三阶段自我进化编写11个测试，修复2个预存测试，全部149测试通过+tsc通过+build通 | 为三阶段进化编写测试，运行 npm test + tsc + npm run build 确保全部通过。 |

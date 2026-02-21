@@ -780,293 +780,90 @@ async function runLifecycleHook(hookName, basePath2, env) {
   }
 }
 
-// src/infrastructure/history.ts
-function collectStats(data) {
-  const tasksByType = {};
-  const failsByType = {};
-  let retryTotal = 0, doneCount = 0, skipCount = 0, failCount = 0;
-  for (const t of data.tasks) {
-    tasksByType[t.type] = (tasksByType[t.type] ?? 0) + 1;
-    retryTotal += t.retries;
-    if (t.status === "done") doneCount++;
-    else if (t.status === "skipped") skipCount++;
-    else if (t.status === "failed") {
-      failCount++;
-      failsByType[t.type] = (failsByType[t.type] ?? 0) + 1;
-    }
-  }
-  return {
-    name: data.name,
-    totalTasks: data.tasks.length,
-    doneCount,
-    skipCount,
-    failCount,
-    retryTotal,
-    tasksByType,
-    failsByType,
-    startTime: data.startTime || (/* @__PURE__ */ new Date()).toISOString(),
-    endTime: (/* @__PURE__ */ new Date()).toISOString()
-  };
-}
-function analyzeHistory(history) {
-  if (!history.length) return { suggestions: [], recommendedConfig: {} };
-  const suggestions = [];
-  const recommendedConfig = {};
-  const typeTotal = {};
-  const typeFails = {};
-  let totalRetries = 0, totalTasks = 0;
-  for (const h of history) {
-    totalTasks += h.totalTasks;
-    totalRetries += h.retryTotal;
-    for (const [t, n] of Object.entries(h.tasksByType)) {
-      typeTotal[t] = (typeTotal[t] ?? 0) + n;
-    }
-    for (const [t, n] of Object.entries(h.failsByType)) {
-      typeFails[t] = (typeFails[t] ?? 0) + n;
-    }
-  }
-  for (const [type, total] of Object.entries(typeTotal)) {
-    const fails = typeFails[type] ?? 0;
-    const rate = fails / total;
-    if (rate > 0.2 && total >= 3) {
-      suggestions.push(`${type} \u7C7B\u578B\u4EFB\u52A1\u5386\u53F2\u5931\u8D25\u7387 ${(rate * 100).toFixed(0)}%\uFF08${fails}/${total}\uFF09\uFF0C\u5EFA\u8BAE\u62C6\u5206\u66F4\u7EC6`);
-    }
-  }
-  if (totalTasks > 0) {
-    const avgRetry = totalRetries / totalTasks;
-    if (avgRetry > 1) {
-      suggestions.push(`\u5E73\u5747\u91CD\u8BD5\u6B21\u6570 ${avgRetry.toFixed(1)}\uFF0C\u5EFA\u8BAE\u589E\u52A0 retry \u4E0A\u9650`);
-      recommendedConfig.maxRetries = Math.min(Math.ceil(avgRetry) + 2, 8);
-    }
-  }
-  const totalSkips = history.reduce((s, h) => s + h.skipCount, 0);
-  if (totalTasks > 0 && totalSkips / totalTasks > 0.15) {
-    suggestions.push(`\u5386\u53F2\u8DF3\u8FC7\u7387 ${(totalSkips / totalTasks * 100).toFixed(0)}%\uFF0C\u5EFA\u8BAE\u51CF\u5C11\u4EFB\u52A1\u95F4\u4F9D\u8D56`);
-  }
-  return { suggestions, recommendedConfig };
-}
-
-// src/infrastructure/memory.ts
-var import_promises3 = require("fs/promises");
-var import_path4 = require("path");
-var MEMORY_FILE = "memory.json";
-var DF_FILE = "memory-df.json";
-var SNAPSHOT_FILE = "memory-snapshot.json";
-var EVERGREEN_SOURCES = ["architecture", "identity", "decision"];
-function temporalDecayScore(entry, halfLifeDays = 30) {
-  if (entry.evergreen || EVERGREEN_SOURCES.some((s) => entry.source.includes(s))) return 1;
-  const ageDays = (Date.now() - new Date(entry.timestamp).getTime()) / (24 * 60 * 60 * 1e3);
-  return Math.exp(-Math.LN2 / halfLifeDays * ageDays);
-}
-function memoryPath(basePath2) {
-  return (0, import_path4.join)(basePath2, ".flowpilot", MEMORY_FILE);
-}
-function dfPath(basePath2) {
-  return (0, import_path4.join)(basePath2, ".flowpilot", DF_FILE);
-}
-function snapshotPath(basePath2) {
-  return (0, import_path4.join)(basePath2, ".flowpilot", SNAPSHOT_FILE);
-}
-function tokenize(text) {
-  const lower = text.toLowerCase();
-  const tokens = [];
-  for (const m of lower.matchAll(/[a-z0-9_]{2,}|[a-z]/g)) {
-    tokens.push(m[0]);
-  }
-  const cjk = [...lower.matchAll(/[\u4e00-\u9fff\u3400-\u4dbf]/g)].map((m) => m[0]);
-  for (let i = 0; i < cjk.length; i++) {
-    tokens.push(cjk[i]);
-    if (i + 1 < cjk.length) tokens.push(cjk[i] + cjk[i + 1]);
-  }
-  return tokens;
-}
-function termFrequency(tokens) {
-  const tf = /* @__PURE__ */ new Map();
-  for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
-  return tf;
-}
-async function loadDf(basePath2) {
-  try {
-    return JSON.parse(await (0, import_promises3.readFile)(dfPath(basePath2), "utf-8"));
-  } catch {
-    return { docCount: 0, df: {} };
-  }
-}
-async function saveDf(basePath2, stats) {
-  const p = dfPath(basePath2);
-  await (0, import_promises3.mkdir)((0, import_path4.dirname)(p), { recursive: true });
-  await (0, import_promises3.writeFile)(p, JSON.stringify(stats), "utf-8");
-}
-function rebuildDf(entries) {
-  const active = entries.filter((e) => !e.archived);
-  const df = {};
-  for (const e of active) {
-    const unique = new Set(tokenize(e.content));
-    for (const t of unique) df[t] = (df[t] ?? 0) + 1;
-  }
-  return { docCount: active.length, df };
-}
-function tfidfVector(tokens, stats) {
-  const tf = termFrequency(tokens);
-  const vec = /* @__PURE__ */ new Map();
-  const N = Math.max(stats.docCount, 1);
-  for (const [term, freq] of tf) {
-    const docFreq = stats.df[term] ?? 0;
-    const idf = Math.log(1 + N / (1 + docFreq));
-    vec.set(term, freq * idf);
-  }
-  return vec;
-}
-function cosineSimilarity(a, b) {
-  let dot = 0, normA = 0, normB = 0;
-  for (const [k, v] of a) {
-    normA += v * v;
-    const bv = b.get(k);
-    if (bv !== void 0) dot += v * bv;
-  }
-  for (const v of b.values()) normB += v * v;
-  if (!normA || !normB) return 0;
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
-}
-async function loadMemory(basePath2) {
-  try {
-    return JSON.parse(await (0, import_promises3.readFile)(memoryPath(basePath2), "utf-8"));
-  } catch {
-    return [];
-  }
-}
-async function saveMemory(basePath2, entries) {
-  const p = memoryPath(basePath2);
-  await (0, import_promises3.mkdir)((0, import_path4.dirname)(p), { recursive: true });
-  await (0, import_promises3.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
-}
-async function appendMemory(basePath2, entry) {
-  const entries = await loadMemory(basePath2);
-  const stats = rebuildDf(entries);
-  const queryTokens = tokenize(entry.content);
-  const queryVec = tfidfVector(queryTokens, stats);
-  const idx = entries.findIndex((e) => {
-    if (e.archived) return false;
-    const vec = tfidfVector(tokenize(e.content), stats);
-    return cosineSimilarity(queryVec, vec) > 0.8;
-  });
-  if (idx >= 0) {
-    const updated = entries.map(
-      (e, i) => i === idx ? { ...e, content: entry.content, timestamp: entry.timestamp, source: entry.source } : e
-    );
-    log.debug(`memory: \u66F4\u65B0\u5DF2\u6709\u6761\u76EE (\u76F8\u4F3C\u5EA6>0.8)`);
-    await saveMemory(basePath2, updated);
-  } else {
-    const newEntries = [...entries, { ...entry, refs: 0, archived: false }];
-    log.debug(`memory: \u65B0\u589E\u6761\u76EE, \u603B\u8BA1 ${newEntries.length}`);
-    await saveMemory(basePath2, newEntries);
-  }
-  await saveDf(basePath2, rebuildDf(await loadMemory(basePath2)));
-}
-function mmrRerank(candidates, k, lambda = 0.7) {
-  const selected = [];
-  const remaining = [...candidates];
-  while (selected.length < k && remaining.length > 0) {
-    let bestIdx = 0, bestScore = -Infinity;
-    for (let i = 0; i < remaining.length; i++) {
-      const rel = remaining[i].score;
-      let maxSim = 0;
-      for (const s of selected) {
-        maxSim = Math.max(maxSim, cosineSimilarity(remaining[i].vec, s.vec));
-      }
-      const mmr = lambda * rel - (1 - lambda) * maxSim;
-      if (mmr > bestScore) {
-        bestScore = mmr;
-        bestIdx = i;
-      }
-    }
-    selected.push(remaining.splice(bestIdx, 1)[0]);
-  }
-  return selected.map((s) => ({ entry: s.entry, score: s.score }));
-}
-async function queryMemory(basePath2, taskDescription) {
-  const entries = await loadMemory(basePath2);
-  const active = entries.filter((e) => !e.archived);
-  if (!active.length) return [];
-  const stats = await loadDf(basePath2);
-  const fallback = stats.docCount > 0 ? stats : rebuildDf(entries);
-  const queryVec = tfidfVector(tokenize(taskDescription), fallback);
-  const candidates = active.map((e) => {
-    const vec = tfidfVector(tokenize(e.content), fallback);
-    return { entry: e, score: cosineSimilarity(queryVec, vec) * temporalDecayScore(e), vec };
-  }).filter((s) => s.score > 0.05);
-  const reranked = mmrRerank(candidates, 5);
-  if (reranked.length) {
-    const hitSet = new Set(reranked.map((s) => s.entry));
-    const updated = entries.map((e) => hitSet.has(e) ? { ...e, refs: e.refs + 1 } : e);
-    await saveMemory(basePath2, updated);
-    log.debug(`memory: \u67E5\u8BE2\u547D\u4E2D ${reranked.length} \u6761`);
-  }
-  return reranked.map((s) => ({ ...s.entry, refs: s.entry.refs + 1 }));
-}
-async function decayMemory(basePath2) {
-  const entries = await loadMemory(basePath2);
-  let count = 0;
-  const updated = entries.map((e) => {
-    if (!e.archived && e.refs === 0 && temporalDecayScore(e) < 0.1) {
-      count++;
-      return { ...e, archived: true };
-    }
-    return e;
-  });
-  if (count) {
-    await saveMemory(basePath2, updated);
-    log.debug(`memory: \u8870\u51CF\u5F52\u6863 ${count} \u6761`);
-  }
-  return count;
-}
-async function saveSnapshot(basePath2, entries) {
-  const p = snapshotPath(basePath2);
-  await (0, import_promises3.mkdir)((0, import_path4.dirname)(p), { recursive: true });
-  await (0, import_promises3.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
-}
-async function compactMemory(basePath2, targetCount) {
-  const entries = await loadMemory(basePath2);
-  const active = entries.filter((e) => !e.archived);
-  if (active.length <= 1) return 0;
-  await saveSnapshot(basePath2, entries);
-  const stats = rebuildDf(entries);
-  const vecs = active.map((e) => tfidfVector(tokenize(e.content), stats));
-  const merged = /* @__PURE__ */ new Set();
-  const result = [...entries.filter((e) => e.archived)];
-  for (let i = 0; i < active.length; i++) {
-    if (merged.has(i)) continue;
-    let current = active[i];
-    for (let j = i + 1; j < active.length; j++) {
-      if (merged.has(j)) continue;
-      if (cosineSimilarity(vecs[i], vecs[j]) > 0.7) {
-        const newer = new Date(active[j].timestamp) > new Date(current.timestamp) ? active[j] : current;
-        current = { ...newer, refs: Math.max(current.refs, active[j].refs) };
-        merged.add(j);
-      }
-    }
-    result.push(current);
-  }
-  const activeResult = result.filter((e) => !e.archived);
-  if (targetCount && activeResult.length > targetCount) {
-    const sorted = [...activeResult].sort(
-      (a, b) => a.refs !== b.refs ? a.refs - b.refs : new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    );
-    const toRemove = new Set(sorted.slice(0, activeResult.length - targetCount));
-    const final = result.filter((e) => !toRemove.has(e));
-    await saveMemory(basePath2, final);
-    await saveDf(basePath2, rebuildDf(final));
-    log.debug(`memory: \u538B\u7F29 ${entries.length} \u2192 ${final.length} \u6761`);
-    return entries.length - final.length;
-  }
-  await saveMemory(basePath2, result);
-  await saveDf(basePath2, rebuildDf(result));
-  const removed = entries.length - result.length;
-  if (removed) log.debug(`memory: \u538B\u7F29\u5408\u5E76 ${removed} \u6761`);
-  return removed;
-}
-
 // src/infrastructure/extractor.ts
+var import_https = require("https");
+async function callClaude(prompt, systemPrompt) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+  return new Promise((resolve2) => {
+    const body = JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages: [{ role: "user", content: prompt }]
+    });
+    const req = (0, import_https.request)({
+      hostname: "api.anthropic.com",
+      path: "/v1/messages",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01"
+      }
+    }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => data += chunk);
+      res.on("end", () => {
+        try {
+          if (res.statusCode !== 200) {
+            resolve2(null);
+            return;
+          }
+          const json = JSON.parse(data);
+          resolve2(json.content?.[0]?.text ?? null);
+        } catch {
+          resolve2(null);
+        }
+      });
+    });
+    req.on("error", () => resolve2(null));
+    req.setTimeout(15e3, () => {
+      req.destroy();
+      resolve2(null);
+    });
+    req.write(body);
+    req.end();
+  });
+}
+function parseJsonArray(text) {
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    const match = text.match(/\[[\s\S]*\]/);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[0]);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {
+      }
+    }
+  }
+  return null;
+}
+async function llmExtract(text) {
+  const system = `You are a knowledge extraction engine. Extract key facts, decisions, and technical insights from the given text. Return a JSON array of objects with "content" and "source" fields. Source should be one of: "decision", "architecture", "tech-stack", "insight". Only extract genuinely important information. Return [] if nothing worth remembering.`;
+  const result = await callClaude(`Extract knowledge from:
+
+${text}`, system);
+  if (!result) return null;
+  const arr = parseJsonArray(result);
+  return arr ? arr.filter((e) => typeof e.content === "string" && typeof e.source === "string") : null;
+}
+async function llmDecide(newFacts, existingMemories) {
+  if (!newFacts.length) return [];
+  const system = `You are a memory deduplication engine. Given new facts and existing memories, decide which new facts to ADD (truly new), UPDATE (refines existing), or SKIP (already known). Return a JSON array of objects with "content", "source", and "action" fields. Action is "ADD", "UPDATE", or "SKIP". Only return ADD and UPDATE items.`;
+  const prompt = `New facts:
+${JSON.stringify(newFacts)}
+
+Existing memories:
+${existingMemories.map((m, i) => `${i + 1}. ${m}`).join("\n")}`;
+  const result = await callClaude(prompt, system);
+  if (!result) return null;
+  const arr = parseJsonArray(result);
+  return arr ? arr.filter((e) => typeof e.content === "string" && e.action !== "SKIP") : null;
+}
 function extractTaggedKnowledge(text, source) {
   const TAG_RE = /\[(?:REMEMBER|DECISION|ARCHITECTURE|IMPORTANT)\]\s*(.+)/gi;
   const results = [];
@@ -1155,7 +952,7 @@ function extractTechStack(text, source) {
   }
   return results;
 }
-function extractAll(text, source) {
+function ruleExtract(text, source) {
   const tagged = extractTaggedKnowledge(text, source);
   const decisions = extractDecisionPatterns(text, source);
   const primary = [...tagged, ...decisions];
@@ -1171,10 +968,690 @@ function extractAll(text, source) {
     return true;
   });
 }
+async function extractAll(text, source, existingMemories) {
+  const llmResult = await llmExtract(text);
+  if (llmResult !== null) {
+    if (existingMemories?.length) {
+      const decided = await llmDecide(llmResult, existingMemories);
+      if (decided !== null) return decided;
+    }
+    return llmResult;
+  }
+  return ruleExtract(text, source);
+}
 
-// src/infrastructure/loop-detector.ts
+// src/infrastructure/history.ts
+var import_promises3 = require("fs/promises");
+var import_path4 = require("path");
+function collectStats(data) {
+  const tasksByType = {};
+  const failsByType = {};
+  let retryTotal = 0, doneCount = 0, skipCount = 0, failCount = 0;
+  for (const t of data.tasks) {
+    tasksByType[t.type] = (tasksByType[t.type] ?? 0) + 1;
+    retryTotal += t.retries;
+    if (t.status === "done") doneCount++;
+    else if (t.status === "skipped") skipCount++;
+    else if (t.status === "failed") {
+      failCount++;
+      failsByType[t.type] = (failsByType[t.type] ?? 0) + 1;
+    }
+  }
+  return {
+    name: data.name,
+    totalTasks: data.tasks.length,
+    doneCount,
+    skipCount,
+    failCount,
+    retryTotal,
+    tasksByType,
+    failsByType,
+    taskResults: data.tasks.map((t) => ({ id: t.id, type: t.type, status: t.status, retries: t.retries })),
+    startTime: data.startTime || (/* @__PURE__ */ new Date()).toISOString(),
+    endTime: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+function analyzeHistory(history) {
+  if (!history.length) return { suggestions: [], recommendedConfig: {} };
+  const suggestions = [];
+  const recommendedConfig = {};
+  const typeTotal = {};
+  const typeFails = {};
+  let totalRetries = 0, totalTasks = 0;
+  for (const h of history) {
+    totalTasks += h.totalTasks;
+    totalRetries += h.retryTotal;
+    for (const [t, n] of Object.entries(h.tasksByType)) {
+      typeTotal[t] = (typeTotal[t] ?? 0) + n;
+    }
+    for (const [t, n] of Object.entries(h.failsByType)) {
+      typeFails[t] = (typeFails[t] ?? 0) + n;
+    }
+  }
+  for (const [type, total] of Object.entries(typeTotal)) {
+    const fails = typeFails[type] ?? 0;
+    const rate = fails / total;
+    if (rate > 0.2 && total >= 3) {
+      suggestions.push(`${type} \u7C7B\u578B\u4EFB\u52A1\u5386\u53F2\u5931\u8D25\u7387 ${(rate * 100).toFixed(0)}%\uFF08${fails}/${total}\uFF09\uFF0C\u5EFA\u8BAE\u62C6\u5206\u66F4\u7EC6`);
+    }
+  }
+  if (totalTasks > 0) {
+    const avgRetry = totalRetries / totalTasks;
+    if (avgRetry > 1) {
+      suggestions.push(`\u5E73\u5747\u91CD\u8BD5\u6B21\u6570 ${avgRetry.toFixed(1)}\uFF0C\u5EFA\u8BAE\u589E\u52A0 retry \u4E0A\u9650`);
+      recommendedConfig.maxRetries = Math.min(Math.ceil(avgRetry) + 2, 8);
+    }
+  }
+  const totalSkips = history.reduce((s, h) => s + h.skipCount, 0);
+  if (totalTasks > 0 && totalSkips / totalTasks > 0.15) {
+    suggestions.push(`\u5386\u53F2\u8DF3\u8FC7\u7387 ${(totalSkips / totalTasks * 100).toFixed(0)}%\uFF0C\u5EFA\u8BAE\u51CF\u5C11\u4EFB\u52A1\u95F4\u4F9D\u8D56`);
+  }
+  return { suggestions, recommendedConfig };
+}
+async function llmReflect(stats) {
+  const system = `\u4F60\u662F\u5DE5\u4F5C\u6D41\u53CD\u601D\u5F15\u64CE\u3002\u5206\u6790\u7ED9\u5B9A\u7684\u5DE5\u4F5C\u6D41\u7EDF\u8BA1\u6570\u636E\uFF0C\u627E\u51FA\u5931\u8D25\u6A21\u5F0F\u548C\u6539\u8FDB\u673A\u4F1A\u3002\u8FD4\u56DE JSON: {"findings": ["\u53D1\u73B01", ...], "experiments": [{"trigger":"\u89E6\u53D1\u539F\u56E0","observation":"\u89C2\u5BDF\u73B0\u8C61","action":"\u5EFA\u8BAE\u884C\u52A8","expected":"\u9884\u671F\u6548\u679C","target":"config\u6216protocol"}, ...]}\u3002\u53EA\u8FD4\u56DE JSON\uFF0C\u4E0D\u8981\u5176\u4ED6\u5185\u5BB9\u3002`;
+  const result = await callClaude(JSON.stringify(stats), system);
+  if (!result) return null;
+  try {
+    const match = result.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(match ? match[0] : result);
+    if (Array.isArray(parsed.findings) && Array.isArray(parsed.experiments)) {
+      return { timestamp: (/* @__PURE__ */ new Date()).toISOString(), findings: parsed.findings, experiments: parsed.experiments };
+    }
+  } catch {
+  }
+  return null;
+}
+function ruleReflect(stats) {
+  const findings = [];
+  const experiments = [];
+  const results = stats.taskResults ?? [];
+  let streak = 0;
+  for (const r of results) {
+    streak = r.status === "failed" ? streak + 1 : 0;
+    if (streak >= 2) {
+      findings.push(`\u8FDE\u7EED\u5931\u8D25\u94FE\uFF1A\u4ECE\u4EFB\u52A1 ${results[results.indexOf(r) - 1].id} \u5F00\u59CB\u8FDE\u7EED\u5931\u8D25`);
+      experiments.push({
+        trigger: "\u8FDE\u7EED\u5931\u8D25\u94FE",
+        observation: `${streak} \u4E2A\u4EFB\u52A1\u8FDE\u7EED\u5931\u8D25`,
+        action: "\u5728\u5931\u8D25\u4EFB\u52A1\u95F4\u63D2\u5165\u8BCA\u65AD\u6B65\u9AA4",
+        expected: "\u6253\u65AD\u5931\u8D25\u4F20\u64AD",
+        target: "protocol"
+      });
+      break;
+    }
+  }
+  for (const [type, total] of Object.entries(stats.tasksByType)) {
+    const fails = stats.failsByType[type] ?? 0;
+    if (total > 0 && fails / total > 0.3) {
+      findings.push(`\u7C7B\u578B ${type} \u5931\u8D25\u96C6\u4E2D\uFF1A${fails}/${total}`);
+      experiments.push({
+        trigger: "\u7C7B\u578B\u5931\u8D25\u96C6\u4E2D",
+        observation: `${type} \u5931\u8D25\u7387 ${(fails / total * 100).toFixed(0)}%`,
+        action: `\u62C6\u5206 ${type} \u4EFB\u52A1\u4E3A\u66F4\u5C0F\u7C92\u5EA6`,
+        expected: "\u964D\u4F4E\u5355\u4EFB\u52A1\u5931\u8D25\u7387",
+        target: "config"
+      });
+    }
+  }
+  for (const r of results) {
+    if (r.retries > 2) {
+      findings.push(`\u91CD\u8BD5\u70ED\u70B9\uFF1A\u4EFB\u52A1 ${r.id} \u91CD\u8BD5 ${r.retries} \u6B21`);
+      experiments.push({
+        trigger: "\u91CD\u8BD5\u70ED\u70B9",
+        observation: `\u4EFB\u52A1 ${r.id} \u91CD\u8BD5 ${r.retries} \u6B21`,
+        action: "\u589E\u52A0\u8BE5\u4EFB\u52A1\u7684\u4E0A\u4E0B\u6587\u6216\u524D\u7F6E\u68C0\u67E5",
+        expected: "\u51CF\u5C11\u91CD\u8BD5\u6B21\u6570",
+        target: "protocol"
+      });
+    }
+  }
+  if (stats.totalTasks > 0 && stats.skipCount / stats.totalTasks > 0.2) {
+    const rate = (stats.skipCount / stats.totalTasks * 100).toFixed(0);
+    findings.push(`\u7EA7\u8054\u8DF3\u8FC7\u4E25\u91CD\uFF1A\u8DF3\u8FC7\u7387 ${rate}%`);
+    experiments.push({
+      trigger: "\u7EA7\u8054\u8DF3\u8FC7",
+      observation: `${stats.skipCount}/${stats.totalTasks} \u4EFB\u52A1\u88AB\u8DF3\u8FC7`,
+      action: "\u51CF\u5C11\u4EFB\u52A1\u95F4\u786C\u4F9D\u8D56\uFF0C\u6539\u7528\u8F6F\u4F9D\u8D56",
+      expected: "\u964D\u4F4E\u8DF3\u8FC7\u7387\u81F3 10% \u4EE5\u4E0B",
+      target: "config"
+    });
+  }
+  return { timestamp: (/* @__PURE__ */ new Date()).toISOString(), findings, experiments };
+}
+async function reflect(stats, basePath2) {
+  const llmReport = await llmReflect(stats);
+  const report = llmReport ?? ruleReflect(stats);
+  const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+  const p = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", `reflect-${ts}.json`);
+  await (0, import_promises3.mkdir)((0, import_path4.dirname)(p), { recursive: true });
+  await (0, import_promises3.writeFile)(p, JSON.stringify(report, null, 2), "utf-8");
+  return report;
+}
+async function safeRead(p, fallback) {
+  try {
+    return await (0, import_promises3.readFile)(p, "utf-8");
+  } catch {
+    return fallback;
+  }
+}
+var KNOWN_PARAMS = ["maxRetries", "timeout", "parallelLimit", "verifyTimeout"];
+function parseConfigAction(action) {
+  for (const k of KNOWN_PARAMS) {
+    if (action.includes(k)) {
+      const m = action.match(/(\d+)/);
+      if (m) return { key: k, value: Number(m[1]) };
+    }
+  }
+  return null;
+}
+async function experiment(report, basePath2) {
+  const log2 = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), experiments: [] };
+  if (!report.experiments.length) return log2;
+  const configPath = (0, import_path4.join)(basePath2, ".flowpilot", "config.json");
+  const protocolPath = (0, import_path4.join)(basePath2, "FlowPilot", "src", "templates", "protocol.md");
+  for (const exp of report.experiments) {
+    const applied = { ...exp, applied: false, snapshotBefore: "" };
+    try {
+      if (exp.target === "config") {
+        const raw = await safeRead(configPath, "{}");
+        applied.snapshotBefore = raw;
+        const parsed = parseConfigAction(exp.action);
+        if (parsed) {
+          const cfg = JSON.parse(raw);
+          cfg[parsed.key] = parsed.value;
+          await (0, import_promises3.mkdir)((0, import_path4.dirname)(configPath), { recursive: true });
+          await (0, import_promises3.writeFile)(configPath, JSON.stringify(cfg, null, 2), "utf-8");
+          applied.applied = true;
+        }
+      } else if (exp.target === "protocol") {
+        const content = await safeRead(protocolPath, "");
+        applied.snapshotBefore = content;
+        const appendix = `
+<!-- evolution: ${exp.trigger} -->
+> ${exp.action}
+`;
+        await (0, import_promises3.mkdir)((0, import_path4.dirname)(protocolPath), { recursive: true });
+        await (0, import_promises3.writeFile)(protocolPath, content + appendix, "utf-8");
+        applied.applied = true;
+      }
+    } catch {
+    }
+    log2.experiments.push(applied);
+  }
+  const logPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
+  await (0, import_promises3.mkdir)((0, import_path4.dirname)(logPath), { recursive: true });
+  let existing = [];
+  try {
+    existing = JSON.parse(await (0, import_promises3.readFile)(logPath, "utf-8"));
+  } catch {
+  }
+  existing.push(log2);
+  await (0, import_promises3.writeFile)(logPath, JSON.stringify(existing, null, 2), "utf-8");
+  return log2;
+}
+async function review(basePath2) {
+  const checks = [];
+  let rolledBack = false;
+  let rollbackReason;
+  const historyDir = (0, import_path4.join)(basePath2, ".flowpilot", "history");
+  const configPath = (0, import_path4.join)(basePath2, ".flowpilot", "config.json");
+  const protocolPath = (0, import_path4.join)(basePath2, "FlowPilot", "src", "templates", "protocol.md");
+  const expPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
+  let history = [];
+  try {
+    const files = (await (0, import_promises3.readdir)(historyDir)).filter((f) => f.endsWith(".json")).sort();
+    const recent = files.slice(-2);
+    for (const f of recent) {
+      try {
+        history.push(JSON.parse(await (0, import_promises3.readFile)((0, import_path4.join)(historyDir, f), "utf-8")));
+      } catch {
+      }
+    }
+  } catch {
+  }
+  if (history.length >= 2) {
+    const [prev, curr] = [history[history.length - 2], history[history.length - 1]];
+    const rate = (s, fn) => s.totalTasks > 0 ? fn(s) / s.totalTasks : 0;
+    const metrics = [
+      { name: "failRate", fn: (s) => s.failCount },
+      { name: "skipRate", fn: (s) => s.skipCount },
+      { name: "retryRate", fn: (s) => s.retryTotal }
+    ];
+    for (const m of metrics) {
+      const prevR = rate(prev, m.fn), currR = rate(curr, m.fn);
+      const delta = currR - prevR;
+      const passed = delta <= 0.1;
+      checks.push({
+        name: m.name,
+        passed,
+        detail: `${(prevR * 100).toFixed(1)}% \u2192 ${(currR * 100).toFixed(1)}% (delta ${(delta * 100).toFixed(1)}pp)`
+      });
+      if (!passed && !rolledBack) {
+        rolledBack = true;
+        rollbackReason = `${m.name} \u6076\u5316 ${(delta * 100).toFixed(1)} \u4E2A\u767E\u5206\u70B9`;
+      }
+    }
+  } else {
+    checks.push({ name: "metrics", passed: true, detail: "\u5386\u53F2\u4E0D\u8DB3\u4E24\u8F6E\uFF0C\u8DF3\u8FC7\u5BF9\u6BD4" });
+  }
+  const configRaw = await safeRead(configPath, "");
+  if (configRaw) {
+    try {
+      JSON.parse(configRaw);
+      checks.push({ name: "config.json", passed: true, detail: "\u5408\u6CD5 JSON" });
+    } catch {
+      checks.push({ name: "config.json", passed: false, detail: "JSON \u89E3\u6790\u5931\u8D25" });
+    }
+  } else {
+    checks.push({ name: "config.json", passed: true, detail: "\u6587\u4EF6\u4E0D\u5B58\u5728\uFF0C\u8DF3\u8FC7" });
+  }
+  const protocolExists = await safeRead(protocolPath, "") !== "";
+  checks.push({ name: "protocol.md", passed: protocolExists, detail: protocolExists ? "\u5B58\u5728" : "\u6A21\u677F\u6587\u4EF6\u7F3A\u5931" });
+  const expRaw = await safeRead(expPath, "");
+  if (expRaw) {
+    try {
+      JSON.parse(expRaw);
+      checks.push({ name: "experiments.json", passed: true, detail: "\u53EF\u89E3\u6790" });
+    } catch {
+      checks.push({ name: "experiments.json", passed: false, detail: "\u89E3\u6790\u5931\u8D25" });
+    }
+  } else {
+    checks.push({ name: "experiments.json", passed: true, detail: "\u6587\u4EF6\u4E0D\u5B58\u5728\uFF0C\u8DF3\u8FC7" });
+  }
+  if (rolledBack) {
+    try {
+      const logs = JSON.parse(await (0, import_promises3.readFile)(expPath, "utf-8"));
+      const last = logs[logs.length - 1];
+      if (last) {
+        for (const exp of last.experiments) {
+          if (!exp.applied || !exp.snapshotBefore) continue;
+          const target = exp.target === "config" ? configPath : protocolPath;
+          await (0, import_promises3.writeFile)(target, exp.snapshotBefore, "utf-8");
+        }
+      }
+    } catch {
+    }
+  }
+  const result = {
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    checks,
+    rolledBack,
+    ...rollbackReason ? { rollbackReason } : {}
+  };
+  const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+  const outPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", `review-${ts}.json`);
+  await (0, import_promises3.mkdir)((0, import_path4.dirname)(outPath), { recursive: true });
+  await (0, import_promises3.writeFile)(outPath, JSON.stringify(result, null, 2), "utf-8");
+  return result;
+}
+
+// src/infrastructure/memory.ts
 var import_promises4 = require("fs/promises");
 var import_path5 = require("path");
+var import_crypto = require("crypto");
+var BM25_K1 = 1.2;
+var BM25_B = 0.75;
+var MEMORY_FILE = "memory.json";
+var DF_FILE = "memory-df.json";
+var SNAPSHOT_FILE = "memory-snapshot.json";
+var VECTOR_FILE = "vectors.json";
+var EVERGREEN_SOURCES = ["architecture", "identity", "decision"];
+var CACHE_FILE = "memory-cache.json";
+var CACHE_MAX = 50;
+var CACHE_PRUNE_RATIO = 0.1;
+function sha256(text) {
+  return (0, import_crypto.createHash)("sha256").update(text).digest("hex");
+}
+function cachePath(basePath2) {
+  return (0, import_path5.join)(basePath2, ".flowpilot", CACHE_FILE);
+}
+async function loadCache(basePath2) {
+  try {
+    return JSON.parse(await (0, import_promises4.readFile)(cachePath(basePath2), "utf-8"));
+  } catch {
+    return { entries: {} };
+  }
+}
+async function saveCache(basePath2, cache) {
+  const p = cachePath(basePath2);
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
+  const keys = Object.keys(cache.entries);
+  if (keys.length > CACHE_MAX) {
+    const sorted = keys.sort(
+      (a, b) => cache.entries[a].timestamp.localeCompare(cache.entries[b].timestamp)
+    );
+    const pruneCount = Math.ceil(keys.length * CACHE_PRUNE_RATIO);
+    for (const k of sorted.slice(0, pruneCount)) delete cache.entries[k];
+  }
+  await (0, import_promises4.writeFile)(p, JSON.stringify(cache), "utf-8");
+}
+async function clearCache(basePath2) {
+  try {
+    await (0, import_promises4.unlink)(cachePath(basePath2));
+  } catch {
+  }
+}
+function temporalDecayScore(entry, halfLifeDays = 30) {
+  if (entry.evergreen || EVERGREEN_SOURCES.some((s) => entry.source.includes(s))) return 1;
+  const ageDays = (Date.now() - new Date(entry.timestamp).getTime()) / (24 * 60 * 60 * 1e3);
+  return Math.exp(-Math.LN2 / halfLifeDays * ageDays);
+}
+function memoryPath(basePath2) {
+  return (0, import_path5.join)(basePath2, ".flowpilot", MEMORY_FILE);
+}
+function dfPath(basePath2) {
+  return (0, import_path5.join)(basePath2, ".flowpilot", DF_FILE);
+}
+function snapshotPath(basePath2) {
+  return (0, import_path5.join)(basePath2, ".flowpilot", SNAPSHOT_FILE);
+}
+function vectorFilePath(basePath2) {
+  return (0, import_path5.join)(basePath2, ".flowpilot", VECTOR_FILE);
+}
+async function loadVectors(basePath2) {
+  try {
+    return JSON.parse(await (0, import_promises4.readFile)(vectorFilePath(basePath2), "utf-8"));
+  } catch {
+    return [];
+  }
+}
+async function saveVectors(basePath2, vectors) {
+  const p = vectorFilePath(basePath2);
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
+  await (0, import_promises4.writeFile)(p, JSON.stringify(vectors), "utf-8");
+}
+function vectorSearch(queryVec, vectors, entries, k) {
+  const contentMap = new Map(entries.map((e) => [e.content, e]));
+  return vectors.map((v) => {
+    const stored = new Map(Object.entries(v.vector));
+    const entry = contentMap.get(v.content);
+    if (!entry) return null;
+    return { entry, score: cosineSimilarity(queryVec, stored) };
+  }).filter((x) => x !== null && x.score > 0).sort((a, b) => b.score - a.score).slice(0, k);
+}
+async function rebuildVectorIndex(basePath2, active, stats) {
+  const vectors = active.map((e) => ({
+    content: e.content,
+    vector: Object.fromEntries(bm25Vector(tokenize(e.content), stats))
+  }));
+  await saveVectors(basePath2, vectors);
+}
+var CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g;
+function tokenize(text) {
+  const lower = text.toLowerCase();
+  const tokens = [];
+  for (const m of lower.matchAll(/[a-z0-9_]{2,}|[a-z]/g)) {
+    tokens.push(m[0]);
+  }
+  const cjk = [...lower.matchAll(CJK_RE)].map((m) => m[0]);
+  for (let i = 0; i < cjk.length; i++) {
+    tokens.push(cjk[i]);
+    if (i + 1 < cjk.length) tokens.push(cjk[i] + cjk[i + 1]);
+  }
+  return tokens;
+}
+function termFrequency(tokens) {
+  const tf = /* @__PURE__ */ new Map();
+  for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
+  return tf;
+}
+async function loadDf(basePath2) {
+  try {
+    return JSON.parse(await (0, import_promises4.readFile)(dfPath(basePath2), "utf-8"));
+  } catch {
+    return { docCount: 0, df: {}, avgDocLen: 0 };
+  }
+}
+async function saveDf(basePath2, stats) {
+  const p = dfPath(basePath2);
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
+  await (0, import_promises4.writeFile)(p, JSON.stringify(stats), "utf-8");
+}
+function rebuildDf(entries) {
+  const active = entries.filter((e) => !e.archived);
+  const df = {};
+  let totalLen = 0;
+  for (const e of active) {
+    const tokens = tokenize(e.content);
+    totalLen += tokens.length;
+    const unique = new Set(tokens);
+    for (const t of unique) df[t] = (df[t] ?? 0) + 1;
+  }
+  return { docCount: active.length, df, avgDocLen: active.length ? totalLen / active.length : 0 };
+}
+function bm25Vector(tokens, stats) {
+  const tf = termFrequency(tokens);
+  const vec = /* @__PURE__ */ new Map();
+  const N = Math.max(stats.docCount, 1);
+  const avgDl = stats.avgDocLen || 1;
+  const docLen = tokens.length;
+  for (const [term, freq] of tf) {
+    const dfVal = stats.df[term] ?? 0;
+    const idf = Math.log(1 + (N - dfVal + 0.5) / (dfVal + 0.5));
+    const tfNorm = freq * (BM25_K1 + 1) / (freq + BM25_K1 * (1 - BM25_B + BM25_B * docLen / avgDl));
+    vec.set(term, tfNorm * idf);
+  }
+  return vec;
+}
+function cosineSimilarity(a, b) {
+  let dot = 0, normA = 0, normB = 0;
+  for (const [k, v] of a) {
+    normA += v * v;
+    const bv = b.get(k);
+    if (bv !== void 0) dot += v * bv;
+  }
+  for (const v of b.values()) normB += v * v;
+  if (!normA || !normB) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+async function loadMemory(basePath2) {
+  try {
+    return JSON.parse(await (0, import_promises4.readFile)(memoryPath(basePath2), "utf-8"));
+  } catch {
+    return [];
+  }
+}
+async function saveMemory(basePath2, entries) {
+  const p = memoryPath(basePath2);
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
+  await (0, import_promises4.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
+}
+async function appendMemory(basePath2, entry) {
+  const entries = await loadMemory(basePath2);
+  const stats = rebuildDf(entries);
+  const queryTokens = tokenize(entry.content);
+  const queryVec = bm25Vector(queryTokens, stats);
+  const idx = entries.findIndex((e) => {
+    if (e.archived) return false;
+    const vec2 = bm25Vector(tokenize(e.content), stats);
+    return cosineSimilarity(queryVec, vec2) > 0.8;
+  });
+  if (idx >= 0) {
+    const oldContent = entries[idx].content;
+    const updated = entries.map(
+      (e, i) => i === idx ? { ...e, content: entry.content, timestamp: entry.timestamp, source: entry.source } : e
+    );
+    log.debug(`memory: \u66F4\u65B0\u5DF2\u6709\u6761\u76EE (\u76F8\u4F3C\u5EA6>0.8)`);
+    await saveMemory(basePath2, updated);
+    const vectors2 = await loadVectors(basePath2);
+    await saveVectors(basePath2, vectors2.filter((v) => v.content !== oldContent));
+  } else {
+    const newEntries = [...entries, { ...entry, refs: 0, archived: false }];
+    log.debug(`memory: \u65B0\u589E\u6761\u76EE, \u603B\u8BA1 ${newEntries.length}`);
+    await saveMemory(basePath2, newEntries);
+  }
+  const saved = await loadMemory(basePath2);
+  const newStats = rebuildDf(saved);
+  await saveDf(basePath2, newStats);
+  const vec = bm25Vector(tokenize(entry.content), newStats);
+  const vecRecord = Object.fromEntries(vec);
+  const vectors = await loadVectors(basePath2);
+  const vi = vectors.findIndex((v) => v.content === entry.content);
+  const newVectors = vi >= 0 ? vectors.map((v, i) => i === vi ? { content: entry.content, vector: vecRecord } : v) : [...vectors, { content: entry.content, vector: vecRecord }];
+  await saveVectors(basePath2, newVectors);
+  await clearCache(basePath2);
+}
+function mmrRerank(candidates, k, lambda = 0.7) {
+  const selected = [];
+  const remaining = [...candidates];
+  while (selected.length < k && remaining.length > 0) {
+    let bestIdx = 0, bestScore = -Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const rel = remaining[i].score;
+      let maxSim = 0;
+      for (const s of selected) {
+        maxSim = Math.max(maxSim, cosineSimilarity(remaining[i].vec, s.vec));
+      }
+      const mmr = lambda * rel - (1 - lambda) * maxSim;
+      if (mmr > bestScore) {
+        bestScore = mmr;
+        bestIdx = i;
+      }
+    }
+    selected.push(remaining.splice(bestIdx, 1)[0]);
+  }
+  return selected.map((s) => ({ entry: s.entry, score: s.score }));
+}
+function rrfFuse(sources) {
+  const RRF_K = 60;
+  const scores = /* @__PURE__ */ new Map();
+  for (const source of sources) {
+    for (let rank = 0; rank < source.length; rank++) {
+      const { entry } = source[rank];
+      const key = entry.content;
+      const prev = scores.get(key);
+      const rrfScore = 1 / (RRF_K + rank + 1);
+      scores.set(key, {
+        entry,
+        score: (prev?.score ?? 0) + rrfScore
+      });
+    }
+  }
+  return [...scores.values()].sort((a, b) => b.score - a.score);
+}
+async function queryMemory(basePath2, taskDescription) {
+  const cacheKey = sha256(taskDescription);
+  const cache = await loadCache(basePath2);
+  if (cache.entries[cacheKey]) {
+    log.debug("memory: \u7F13\u5B58\u547D\u4E2D");
+    return cache.entries[cacheKey].results;
+  }
+  const entries = await loadMemory(basePath2);
+  const active = entries.filter((e) => !e.archived);
+  if (!active.length) return [];
+  const stats = await loadDf(basePath2);
+  const fallback = stats.docCount > 0 ? stats : rebuildDf(entries);
+  const queryVec = bm25Vector(tokenize(taskDescription), fallback);
+  const source1 = active.map((e) => {
+    const vec = bm25Vector(tokenize(e.content), fallback);
+    return { entry: e, score: cosineSimilarity(queryVec, vec) * temporalDecayScore(e), vec };
+  }).filter((s) => s.score > 0.05);
+  const vectors = await loadVectors(basePath2);
+  const source2 = vectorSearch(queryVec, vectors, active, 10);
+  const fused = rrfFuse([
+    source1.map((s) => ({ entry: s.entry, score: s.score })),
+    source2
+  ]);
+  const candidates = fused.map((f) => {
+    const vec = bm25Vector(tokenize(f.entry.content), fallback);
+    return { entry: f.entry, score: f.score, vec };
+  });
+  const reranked = mmrRerank(candidates, 5);
+  if (reranked.length) {
+    const hitSet = new Set(reranked.map((s) => s.entry));
+    const updated = entries.map((e) => hitSet.has(e) ? { ...e, refs: e.refs + 1 } : e);
+    await saveMemory(basePath2, updated);
+    log.debug(`memory: \u67E5\u8BE2\u547D\u4E2D ${reranked.length} \u6761`);
+  }
+  const results = reranked.map((s) => ({ ...s.entry, refs: s.entry.refs + 1 }));
+  cache.entries[cacheKey] = { results, timestamp: (/* @__PURE__ */ new Date()).toISOString() };
+  await saveCache(basePath2, cache);
+  return results;
+}
+async function decayMemory(basePath2) {
+  const entries = await loadMemory(basePath2);
+  let count = 0;
+  const updated = entries.map((e) => {
+    if (!e.archived && e.refs === 0 && temporalDecayScore(e) < 0.1) {
+      count++;
+      return { ...e, archived: true };
+    }
+    return e;
+  });
+  if (count) {
+    await saveMemory(basePath2, updated);
+    log.debug(`memory: \u8870\u51CF\u5F52\u6863 ${count} \u6761`);
+  }
+  return count;
+}
+async function saveSnapshot(basePath2, entries) {
+  const p = snapshotPath(basePath2);
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
+  await (0, import_promises4.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
+}
+async function compactMemory(basePath2, targetCount) {
+  const entries = await loadMemory(basePath2);
+  const active = entries.filter((e) => !e.archived);
+  if (active.length <= 1) return 0;
+  await saveSnapshot(basePath2, entries);
+  const stats = rebuildDf(entries);
+  const vecs = active.map((e) => bm25Vector(tokenize(e.content), stats));
+  const merged = /* @__PURE__ */ new Set();
+  const result = [...entries.filter((e) => e.archived)];
+  for (let i = 0; i < active.length; i++) {
+    if (merged.has(i)) continue;
+    let current = active[i];
+    for (let j = i + 1; j < active.length; j++) {
+      if (merged.has(j)) continue;
+      if (cosineSimilarity(vecs[i], vecs[j]) > 0.7) {
+        const newer = new Date(active[j].timestamp) > new Date(current.timestamp) ? active[j] : current;
+        current = { ...newer, refs: Math.max(current.refs, active[j].refs) };
+        merged.add(j);
+      }
+    }
+    result.push(current);
+  }
+  const activeResult = result.filter((e) => !e.archived);
+  if (targetCount && activeResult.length > targetCount) {
+    const sorted = [...activeResult].sort(
+      (a, b) => a.refs !== b.refs ? a.refs - b.refs : new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+    const toRemove = new Set(sorted.slice(0, activeResult.length - targetCount));
+    const final = result.filter((e) => !toRemove.has(e));
+    await saveMemory(basePath2, final);
+    const finalStats = rebuildDf(final);
+    await saveDf(basePath2, finalStats);
+    await rebuildVectorIndex(basePath2, final.filter((e) => !e.archived), finalStats);
+    await clearCache(basePath2);
+    log.debug(`memory: \u538B\u7F29 ${entries.length} \u2192 ${final.length} \u6761`);
+    return entries.length - final.length;
+  }
+  await saveMemory(basePath2, result);
+  const resultStats = rebuildDf(result);
+  await saveDf(basePath2, resultStats);
+  await rebuildVectorIndex(basePath2, result.filter((e) => !e.archived), resultStats);
+  await clearCache(basePath2);
+  const removed = entries.length - result.length;
+  if (removed) log.debug(`memory: \u538B\u7F29\u5408\u5E76 ${removed} \u6761`);
+  return removed;
+}
+
+// src/infrastructure/truncation.ts
+function truncateHeadTail(text, maxChars) {
+  if (text.length <= maxChars) return text;
+  const head = Math.floor(maxChars * 0.7);
+  const tail = Math.floor(maxChars * 0.2);
+  return `${text.slice(0, head)}
+
+[...truncated ${text.length - head - tail} chars...]
+
+${text.slice(-tail)}`;
+}
+
+// src/infrastructure/loop-detector.ts
+var import_promises5 = require("fs/promises");
+var import_path6 = require("path");
 var WINDOW_SIZE = 20;
 var STATE_FILE = "loop-state.json";
 function fnv1a(str) {
@@ -1200,19 +1677,19 @@ function similarity(a, b) {
   return inter / (sa.size + sb.size - inter);
 }
 function statePath(basePath2) {
-  return (0, import_path5.join)(basePath2, ".workflow", STATE_FILE);
+  return (0, import_path6.join)(basePath2, ".workflow", STATE_FILE);
 }
 async function loadWindow(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises4.readFile)(statePath(basePath2), "utf-8"));
+    return JSON.parse(await (0, import_promises5.readFile)(statePath(basePath2), "utf-8"));
   } catch {
     return [];
   }
 }
 async function saveWindow(basePath2, window) {
   const p = statePath(basePath2);
-  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
-  await (0, import_promises4.writeFile)(p, JSON.stringify(window), "utf-8");
+  await (0, import_promises5.mkdir)((0, import_path6.dirname)(p), { recursive: true });
+  await (0, import_promises5.writeFile)(p, JSON.stringify(window), "utf-8");
 }
 function repeatedNoProgress(window) {
   if (window.length < 3) return null;
@@ -1270,25 +1747,25 @@ async function detect(basePath2, taskId, summary, failed) {
 }
 
 // src/application/workflow-service.ts
-var import_promises5 = require("fs/promises");
-var import_path6 = require("path");
+var import_promises6 = require("fs/promises");
+var import_path7 = require("path");
 var WorkflowService = class {
   constructor(repo2, parse) {
     this.repo = repo2;
     this.parse = parse;
   }
   loopWarningPath() {
-    return (0, import_path6.join)(this.repo.projectRoot(), ".workflow", "loop-warning.txt");
+    return (0, import_path7.join)(this.repo.projectRoot(), ".workflow", "loop-warning.txt");
   }
   async saveLoopWarning(msg) {
     const p = this.loopWarningPath();
-    await (0, import_promises5.mkdir)((0, import_path6.join)(this.repo.projectRoot(), ".workflow"), { recursive: true });
-    await (0, import_promises5.writeFile)(p, msg, "utf-8");
+    await (0, import_promises6.mkdir)((0, import_path7.join)(this.repo.projectRoot(), ".workflow"), { recursive: true });
+    await (0, import_promises6.writeFile)(p, msg, "utf-8");
   }
   async loadAndClearLoopWarning() {
     try {
-      const msg = await (0, import_promises5.readFile)(this.loopWarningPath(), "utf-8");
-      await (0, import_promises5.unlink)(this.loopWarningPath());
+      const msg = await (0, import_promises6.readFile)(this.loopWarningPath(), "utf-8");
+      await (0, import_promises6.unlink)(this.loopWarningPath());
       return msg || null;
     } catch {
       return null;
@@ -1296,6 +1773,13 @@ var WorkflowService = class {
   }
   /** init: 解析任务markdown → 生成progress/tasks */
   async init(tasksMd, force = false) {
+    const reviewResult = await review(this.repo.projectRoot());
+    if (reviewResult.rolledBack) {
+      log.info(`[\u81EA\u6108] \u5DF2\u56DE\u6EDA\u4E0A\u8F6E\u5B9E\u9A8C: ${reviewResult.rollbackReason}`);
+    }
+    for (const check of reviewResult.checks.filter((c) => !c.passed)) {
+      log.info(`[\u81EA\u6108] \u68C0\u67E5\u672A\u901A\u8FC7: ${check.name} - ${check.detail}`);
+    }
     const existing = await this.repo.loadProgress();
     if (existing && existing.status === "running" && !force) {
       throw new Error(`\u5DF2\u6709\u8FDB\u884C\u4E2D\u7684\u5DE5\u4F5C\u6D41: ${existing.name}\uFF0C\u4F7F\u7528 --force \u8986\u76D6`);
@@ -1374,6 +1858,10 @@ ${def.description}
         parts.push(`## \u5FAA\u73AF\u68C0\u6D4B\u8B66\u544A
 
 ${loopWarning}`);
+      }
+      const hcWarnings = await this.healthCheck();
+      if (hcWarnings.length) {
+        parts.push("## \u5065\u5EB7\u68C0\u67E5\u8B66\u544A\n\n" + hcWarnings.map((w) => `- ${w}`).join("\n"));
       }
       return { task, context: parts.join("\n\n---\n\n") };
     } finally {
@@ -1466,7 +1954,7 @@ ${warns.join("\n")}` : msg2;
 
 ${detail}
 `);
-      for (const entry of extractAll(detail, `task-${id}`)) {
+      for (const entry of await extractAll(detail, `task-${id}`)) {
         await appendMemory(this.repo.projectRoot(), {
           content: entry.content,
           source: entry.source,
@@ -1619,6 +2107,10 @@ ${detail}
     await runLifecycleHook("onWorkflowFinish", this.repo.projectRoot(), { WORKFLOW_NAME: data.name });
     const wfStats = collectStats(data);
     await this.repo.saveHistory(wfStats);
+    const reflectReport = await reflect(wfStats, this.repo.projectRoot());
+    if (reflectReport.experiments.length) {
+      await experiment(reflectReport, this.repo.projectRoot());
+    }
     const configNow = await this.repo.loadConfig();
     const evolutions = await this.repo.loadEvolutions();
     const lastEvo = evolutions[evolutions.length - 1];
@@ -1763,7 +2255,8 @@ ${stats}
       progressItems.push({ label: `[${t.type}] ${text}`, text });
     }
     for (const t of recent) {
-      const text = t.summary ? `${t.title}: ${t.summary}` : t.title;
+      const summary = t.summary && t.summary.length > 500 ? truncateHeadTail(t.summary, 500) : t.summary;
+      const text = summary ? `${t.title}: ${summary}` : t.title;
       progressItems.push({ label: `[${t.type}] ${text}`, text });
     }
     const deduped = this.dedup(progressItems);
@@ -1774,7 +2267,9 @@ ${stats}
       lines.push("\n## \u5F85\u5B8C\u6210\n");
       for (const t of pending) lines.push(`- [${t.type}] ${t.title}`);
     }
-    await this.repo.saveSummary(lines.join("\n") + "\n");
+    let totalSummary = lines.join("\n") + "\n";
+    if (totalSummary.length > 3e3) totalSummary = truncateHeadTail(totalSummary, 3e3);
+    await this.repo.saveSummary(totalSummary);
   }
   /** 读取历史经验，输出建议，自动写入 config.json（闭环进化） */
   async applyHistoryInsights() {
@@ -1837,6 +2332,36 @@ ${entry}`;
     }
     return null;
   }
+  /** 心跳自检：任务超时 + 记忆膨胀 + DF一致性 */
+  async healthCheck() {
+    const warnings = [];
+    const data = await this.repo.loadProgress();
+    if (!data || data.status !== "running") return warnings;
+    const active = data.tasks.filter((t) => t.status === "active");
+    if (active.length) {
+      const window = await loadWindow(this.repo.projectRoot());
+      const lastCp = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
+      if (lastCp && Date.now() - lastCp > 30 * 60 * 1e3) {
+        warnings.push(`[TIMEOUT] \u6D3B\u8DC3\u4EFB\u52A1 ${active.map((t) => t.id).join(",")} \u8D85\u8FC730\u5206\u949F\u65E0checkpoint`);
+      }
+    }
+    const memories = await loadMemory(this.repo.projectRoot());
+    const activeCount = memories.filter((e) => !e.archived).length;
+    if (activeCount > 100) {
+      await compactMemory(this.repo.projectRoot());
+      warnings.push(`[MEMORY] \u6D3B\u8DC3\u8BB0\u5FC6 ${activeCount} \u6761\uFF0C\u5DF2\u81EA\u52A8\u538B\u7F29`);
+    }
+    const dfStats = await loadDf(this.repo.projectRoot());
+    if (dfStats.docCount > 0) {
+      const rebuilt = rebuildDf(memories);
+      const diff = Math.abs(dfStats.docCount - rebuilt.docCount) / Math.max(dfStats.docCount, 1);
+      if (diff > 0.1) {
+        await saveDf(this.repo.projectRoot(), rebuilt);
+        warnings.push(`[DF] docCount \u504F\u5DEE ${(diff * 100).toFixed(0)}%\uFF0C\u5DF2\u91CD\u5EFA`);
+      }
+    }
+    return warnings;
+  }
   async requireProgress() {
     const data = await this.repo.loadProgress();
     if (!data) throw new Error("\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41\uFF0C\u8BF7\u5148 node flow.js init");
@@ -1847,7 +2372,7 @@ ${entry}`;
 
 // src/interfaces/cli.ts
 var import_fs3 = require("fs");
-var import_path7 = require("path");
+var import_path8 = require("path");
 
 // src/interfaces/formatter.ts
 var ICON = {
@@ -1980,8 +2505,8 @@ var CLI = class {
           }
         }
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
-          const filePath = (0, import_path7.resolve)(rest[fileIdx + 1]);
-          if ((0, import_path7.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
+          const filePath = (0, import_path8.resolve)(rest[fileIdx + 1]);
+          if ((0, import_path8.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
           detail = (0, import_fs3.readFileSync)(filePath, "utf-8");
         } else if (rest.length > 1 && fileIdx < 0 && filesIdx < 0) {
           detail = rest.slice(1).join(" ");
