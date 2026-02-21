@@ -9,7 +9,7 @@ import type { WorkflowRepository } from '../domain/repository';
 import { makeTaskId, cascadeSkip, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
 import { runLifecycleHook } from '../infrastructure/hooks';
 import { log, setWorkflowName } from '../infrastructure/logger';
-import { collectStats, analyzeHistory } from '../infrastructure/history';
+import { collectStats, analyzeHistory, reflect, experiment, review } from '../infrastructure/history';
 import { appendMemory, queryMemory, decayMemory, compactMemory, loadMemory, loadDf, saveDf, rebuildDf } from '../infrastructure/memory';
 import { extractAll } from '../infrastructure/extractor';
 import { truncateHeadTail } from '../infrastructure/truncation';
@@ -43,6 +43,15 @@ export class WorkflowService {
 
   /** init: 解析任务markdown → 生成progress/tasks */
   async init(tasksMd: string, force = false): Promise<ProgressData> {
+    // 自愈检查：验证上轮实验效果
+    const reviewResult = await review(this.repo.projectRoot());
+    if (reviewResult.rolledBack) {
+      log.info(`[自愈] 已回滚上轮实验: ${reviewResult.rollbackReason}`);
+    }
+    for (const check of reviewResult.checks.filter(c => !c.passed)) {
+      log.info(`[自愈] 检查未通过: ${check.name} - ${check.detail}`);
+    }
+
     const existing = await this.repo.loadProgress();
     if (existing && existing.status === 'running' && !force) {
       throw new Error(`已有进行中的工作流: ${existing.name}，使用 --force 覆盖`);
@@ -413,6 +422,12 @@ export class WorkflowService {
     // 保存工作流历史统计到 .flowpilot/history/（永久存储，不随 clearAll 清理）
     const wfStats = collectStats(data);
     await this.repo.saveHistory(wfStats);
+
+    // 进化循环：Reflect → Experiment
+    const reflectReport = await reflect(wfStats, this.repo.projectRoot());
+    if (reflectReport.experiments.length) {
+      await experiment(reflectReport, this.repo.projectRoot());
+    }
 
     // 保存进化快照（config 变更前后对比）
     const configNow = await this.repo.loadConfig();
