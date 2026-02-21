@@ -316,4 +316,8 @@ export class FsWorkflowRepository implements WorkflowRepository {
       }
     } catch {}
   }
+
+  tag(taskId: string): string | null { return tagTask(taskId); }
+  rollback(taskId: string): string | null { return rollbackToTask(taskId); }
+  cleanTags(): void { gitCleanTags(); }
 }
