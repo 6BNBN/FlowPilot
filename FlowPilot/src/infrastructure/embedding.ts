@@ -124,6 +124,57 @@ export async function embedText(text: string, basePath?: string): Promise<number
   return vector;
 }
 
+const VISION_TIMEOUT_MS = 30_000;
+
+/**
+ * 调用 Claude Vision API 生成图片文本描述（<200字）
+ * 无 API key 或失败时返回 null
+ */
+export async function describeImage(imageUrl: string): Promise<string | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+
+  return new Promise((resolve) => {
+    const body = JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 300,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'url', url: imageUrl } },
+          { type: 'text', text: '用简短文本描述这张图片的内容，不超过200字。' },
+        ],
+      }],
+    });
+
+    const req = request({
+      hostname: 'api.anthropic.com',
+      path: '/v1/messages',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk: string) => data += chunk);
+      res.on('end', () => {
+        try {
+          if (res.statusCode !== 200) { resolve(null); return; }
+          const json = JSON.parse(data);
+          const text = json.content?.[0]?.text;
+          resolve(typeof text === 'string' ? text : null);
+        } catch { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.setTimeout(VISION_TIMEOUT_MS, () => { req.destroy(); resolve(null); });
+    req.write(body);
+    req.end();
+  });
+}
+
 /** 清除内存缓存（用于测试） */
 export function clearEmbeddingMemCache(): void {
   memCache = null;

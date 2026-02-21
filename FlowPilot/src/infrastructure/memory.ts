@@ -8,8 +8,19 @@ import { join, dirname } from 'path';
 import { createHash } from 'crypto';
 import { log } from './logger';
 import { detectLanguage as detectLangCode, analyze } from './lang-analyzers';
-import { embedText } from './embedding';
+import { embedText, describeImage } from './embedding';
 import { loadDenseVectors, saveDenseVectors, denseSearch, type DenseVectorEntry } from './vector-store';
+
+/** 记忆内容类型 */
+export type MemoryContentType = 'text' | 'image' | 'file' | 'mixed';
+
+/** 记忆元数据（图片/文件附加信息） */
+export interface MemoryMetadata {
+  imageUrl?: string;
+  filePath?: string;
+  mimeType?: string;
+  description?: string;
+}
 
 /** 记忆条目 */
 export interface MemoryEntry {
@@ -19,6 +30,8 @@ export interface MemoryEntry {
   refs: number;
   archived: boolean;
   evergreen?: boolean;
+  contentType?: MemoryContentType;
+  metadata?: MemoryMetadata;
 }
 
 /** DF 统计持久化结构（key 格式: "{lang}:{term}" 按语言分 namespace，旧数据无前缀默认 en） */
@@ -368,12 +381,35 @@ async function saveMemory(basePath: string, entries: MemoryEntry[]): Promise<voi
   await writeFile(p, JSON.stringify(entries, null, 2), 'utf-8');
 }
 
+/** 根据 contentType 解析可检索文本 */
+async function resolveSearchableText(entry: Omit<MemoryEntry, 'refs' | 'archived'>): Promise<Omit<MemoryEntry, 'refs' | 'archived'>> {
+  const ct = entry.contentType ?? 'text';
+  if (ct === 'text') return entry;
+
+  if (ct === 'image') {
+    const url = entry.metadata?.imageUrl;
+    if (!url) return entry;
+    const desc = await describeImage(url) ?? url;
+    return { ...entry, content: desc, metadata: { ...entry.metadata, description: desc } };
+  }
+
+  if (ct === 'mixed') {
+    const desc = entry.metadata?.description ?? '';
+    const merged = desc ? `${entry.content}\n${desc}` : entry.content;
+    return { ...entry, content: merged };
+  }
+
+  // 'file': content 已是文件摘要，直接使用
+  return entry;
+}
+
 /** 追加记忆条目（BM25 余弦相似度>0.8则更新而非新增） */
 export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'refs' | 'archived'>): Promise<void> {
+  const resolved = await resolveSearchableText(entry);
   const entries = await loadMemory(basePath);
   const stats = rebuildDf(entries);
-  const entryLang = detectLangCode(entry.content);
-  const queryTokens = tokenize(entry.content);
+  const entryLang = detectLangCode(resolved.content);
+  const queryTokens = tokenize(resolved.content);
   const queryVec = bm25Vector(queryTokens, stats, entryLang);
 
   const idx = entries.findIndex(e => {
@@ -385,17 +421,16 @@ export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'r
   if (idx >= 0) {
     const oldContent = entries[idx].content;
     const updated = entries.map((e, i) =>
-      i === idx ? { ...e, content: entry.content, timestamp: entry.timestamp, source: entry.source } : e
+      i === idx ? { ...e, content: resolved.content, timestamp: resolved.timestamp, source: resolved.source, contentType: resolved.contentType, metadata: resolved.metadata } : e
     );
     log.debug(`memory: 更新已有条目 (相似度>0.8)`);
     await saveMemory(basePath, updated);
-    // 清除旧 content 的向量残留（sparse + dense）
     const vectors = await loadVectors(basePath);
     await saveVectors(basePath, vectors.filter(v => v.content !== oldContent));
     const denseVecs = await loadDenseVectors(basePath);
     await saveDenseVectors(basePath, denseVecs.filter(v => v.id !== oldContent));
   } else {
-    const newEntries = [...entries, { ...entry, refs: 0, archived: false }];
+    const newEntries = [...entries, { ...resolved, refs: 0, archived: false }];
     log.debug(`memory: 新增条目, 总计 ${newEntries.length}`);
     await saveMemory(basePath, newEntries);
   }
@@ -406,21 +441,21 @@ export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'r
   await saveDf(basePath, newStats);
 
   // 向量索引：追加/更新当前条目的 BM25 向量
-  const vec = bm25Vector(tokenize(entry.content), newStats, entryLang);
+  const vec = bm25Vector(tokenize(resolved.content), newStats, entryLang);
   const vecRecord: Record<number, number> = Object.fromEntries(vec);
   const vectors = await loadVectors(basePath);
-  const vi = vectors.findIndex(v => v.content === entry.content);
+  const vi = vectors.findIndex(v => v.content === resolved.content);
   const newVectors = vi >= 0
-    ? vectors.map((v, i) => i === vi ? { content: entry.content, vector: vecRecord } : v)
-    : [...vectors, { content: entry.content, vector: vecRecord }];
+    ? vectors.map((v, i) => i === vi ? { content: resolved.content, vector: vecRecord } : v)
+    : [...vectors, { content: resolved.content, vector: vecRecord }];
   await saveVectors(basePath, newVectors);
 
   // Dense 向量索引：调用 embedding API，无 key 时跳过
-  const denseVec = await embedText(entry.content, basePath);
+  const denseVec = await embedText(resolved.content, basePath);
   if (denseVec) {
     const denseVecs = await loadDenseVectors(basePath);
-    const di = denseVecs.findIndex(v => v.id === entry.content);
-    const newDense: DenseVectorEntry = { id: entry.content, vector: denseVec };
+    const di = denseVecs.findIndex(v => v.id === resolved.content);
+    const newDense: DenseVectorEntry = { id: resolved.content, vector: denseVec };
     const updatedDense = di >= 0
       ? denseVecs.map((v, i) => i === di ? newDense : v)
       : [...denseVecs, newDense];
@@ -474,8 +509,8 @@ export function rrfFuse(sources: { entry: MemoryEntry; score: number }[][]): { e
 }
 
 /** 查询与任务描述相关的记忆（BM25 sparse + Dense embedding + 向量余弦 → RRF 多源融合 + MMR 重排序），命中条目 refs++，含缓存 */
-export async function queryMemory(basePath: string, taskDescription: string): Promise<MemoryEntry[]> {
-  const cacheKey = sha256(taskDescription);
+export async function queryMemory(basePath: string, taskDescription: string, contentTypeFilter?: MemoryContentType): Promise<MemoryEntry[]> {
+  const cacheKey = sha256(taskDescription + (contentTypeFilter ?? ''));
   const cache = await loadCache(basePath);
   if (cache.entries[cacheKey]) {
     log.debug('memory: 缓存命中');
@@ -483,7 +518,10 @@ export async function queryMemory(basePath: string, taskDescription: string): Pr
   }
 
   const entries = await loadMemory(basePath);
-  const active = entries.filter(e => !e.archived);
+  let active = entries.filter(e => !e.archived);
+  if (contentTypeFilter) {
+    active = active.filter(e => (e.contentType ?? 'text') === contentTypeFilter);
+  }
   if (!active.length) return [];
 
   const stats = await loadDf(basePath);
