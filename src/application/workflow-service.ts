@@ -330,6 +330,33 @@ export class WorkflowService {
     return `验证通过: ${scripts}\n${stats}\n已提交最终commit，工作流回到待命状态\n等待下一个需求...`;
   }
 
+  /** rollback: 回滚到指定任务的快照 */
+  async rollback(id: string): Promise<string> {
+    await this.repo.lock();
+    try {
+      const data = await this.requireProgress();
+      const task = data.tasks.find(t => t.id === id);
+      if (!task) throw new Error(`任务 ${id} 不存在`);
+      if (task.status !== 'done') throw new Error(`任务 ${id} 状态为 ${task.status}，只能回滚已完成的任务`);
+
+      const err = this.repo.rollback(id);
+      if (err) return `回滚失败: ${err}`;
+
+      // 将该任务及其后续任务重置为 pending
+      const idx = parseInt(id, 10);
+      const newTasks = data.tasks.map(t =>
+        parseInt(t.id, 10) >= idx && t.status === 'done'
+          ? { ...t, status: 'pending' as const, summary: '' }
+          : t
+      );
+      await this.repo.saveProgress({ ...data, current: null, tasks: newTasks });
+      const resetCount = newTasks.filter((t, i) => t.status === 'pending' && data.tasks[i].status === 'done').length;
+      return `已回滚到任务 ${id} 之前的状态，${resetCount} 个任务重置为 pending`;
+    } finally {
+      await this.repo.unlock();
+    }
+  }
+
   /** abort: 中止工作流，清理 .workflow/ 目录 */
   async abort(): Promise<string> {
     const data = await this.repo.loadProgress();
