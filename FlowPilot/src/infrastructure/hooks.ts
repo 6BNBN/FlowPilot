@@ -6,6 +6,7 @@
 import { readFile } from 'fs/promises';
 import { execSync } from 'child_process';
 import { join } from 'path';
+import { log } from './logger';
 
 export type HookName = 'onTaskStart' | 'onTaskComplete' | 'onWorkflowFinish';
 
@@ -33,6 +34,7 @@ export async function runLifecycleHook(
   if (!cmd) return;
 
   try {
+    log.debug(`hook "${hookName}" executing: ${cmd}`);
     execSync(cmd, {
       cwd: basePath,
       stdio: 'pipe',

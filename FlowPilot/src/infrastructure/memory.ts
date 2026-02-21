@@ -58,17 +58,18 @@ async function saveMemory(basePath: string, entries: MemoryEntry[]): Promise<voi
 /** 追加记忆条目（相似度>0.8则更新而非新增） */
 export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'refs' | 'archived'>): Promise<void> {
   const entries = await loadMemory(basePath);
-  const existing = entries.find(e => !e.archived && similarity(e.content, entry.content) > 0.8);
-  if (existing) {
-    existing.content = entry.content;
-    existing.timestamp = entry.timestamp;
-    existing.source = entry.source;
+  const idx = entries.findIndex(e => !e.archived && similarity(e.content, entry.content) > 0.8);
+  if (idx >= 0) {
+    const updated = entries.map((e, i) =>
+      i === idx ? { ...e, content: entry.content, timestamp: entry.timestamp, source: entry.source } : e
+    );
     log.debug(`memory: 更新已有条目 (相似度>0.8)`);
+    await saveMemory(basePath, updated);
   } else {
-    entries.push({ ...entry, refs: 0, archived: false });
-    log.debug(`memory: 新增条目, 总计 ${entries.length}`);
+    const newEntries = [...entries, { ...entry, refs: 0, archived: false }];
+    log.debug(`memory: 新增条目, 总计 ${newEntries.length}`);
+    await saveMemory(basePath, newEntries);
   }
-  await saveMemory(basePath, entries);
 }
 
 /** 查询与任务描述相关的记忆（关键词匹配），命中条目 refs++ */
@@ -84,11 +85,12 @@ export async function queryMemory(basePath: string, taskDescription: string): Pr
     .slice(0, 5);
 
   if (scored.length) {
-    for (const s of scored) s.entry.refs++;
-    await saveMemory(basePath, entries);
+    const hitIds = new Set(scored.map(s => s.entry));
+    const updated = entries.map(e => hitIds.has(e) ? { ...e, refs: e.refs + 1 } : e);
+    await saveMemory(basePath, updated);
     log.debug(`memory: 查询命中 ${scored.length} 条`);
   }
-  return scored.map(s => s.entry);
+  return scored.map(s => ({ ...s.entry, refs: s.entry.refs + 1 }));
 }
 
 /** 衰减归档：refs=0 且超过 30 天的条目标记 archived */

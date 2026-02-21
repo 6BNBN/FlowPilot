@@ -9,7 +9,7 @@ import { existsSync } from 'node:fs';
 /** 获取所有子模块路径，无 .gitmodules 时返回空数组，有但命令失败时抛出 */
 function getSubmodules(): string[] {
   if (!existsSync('.gitmodules')) return [];
-  const out = execSync('git submodule --quiet foreach "echo $sm_path"', { stdio: 'pipe', encoding: 'utf-8' });
+  const out = execFileSync('git', ['submodule', '--quiet', 'foreach', 'echo $sm_path'], { stdio: 'pipe', encoding: 'utf-8' });
   return out.split('\n').filter(Boolean);
 }
 
