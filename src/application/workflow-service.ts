@@ -297,6 +297,16 @@ export class WorkflowService {
     return `验证通过: ${scripts}\n${stats}\n已提交最终commit，工作流回到待命状态\n等待下一个需求...`;
   }
 
+  /** abort: 中止工作流，清理 .workflow/ 目录 */
+  async abort(): Promise<string> {
+    const data = await this.repo.loadProgress();
+    if (!data) return '无活跃工作流，无需中止';
+    data.status = 'aborted';
+    await this.repo.saveProgress(data);
+    await this.repo.clearAll();
+    return `工作流 "${data.name}" 已中止，.workflow/ 已清理`;
+  }
+
   /** status: 全局进度 */
   async status(): Promise<ProgressData | null> {
     return this.repo.loadProgress();
