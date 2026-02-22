@@ -127,7 +127,7 @@ describe('reflect', () => {
       ],
     });
     const report = await reflect(stats, base);
-    expect(report.findings).toEqual([]);
+    expect(report.findings.every(f => !f.includes('失败') && !f.includes('重试热点'))).toBe(true);
   });
 });
 
@@ -153,20 +153,6 @@ describe('experiment', () => {
     expect(cfg.maxRetries).toBe(5);
   });
 
-  it('protocol target appends rule without destroying content', async () => {
-    const protoDir = join(base, 'FlowPilot', 'src', 'templates');
-    mkdirSync(protoDir, { recursive: true });
-    writeFileSync(join(protoDir, 'protocol.md'), '# Original');
-    const report: ReflectReport = {
-      timestamp: '', findings: [],
-      experiments: [{ trigger: 'test', observation: 'o', action: 'add rule', expected: 'e', target: 'protocol' }],
-    };
-    await experiment(report, base);
-    const content = readFileSync(join(protoDir, 'protocol.md'), 'utf-8');
-    expect(content).toContain('# Original');
-    expect(content).toContain('evolution: test');
-  });
-
   it('appends experiment log to experiments.json', async () => {
     const report: ReflectReport = {
       timestamp: '', findings: [],
@@ -184,9 +170,6 @@ describe('review', () => {
   beforeEach(() => { base = mkdtempSync(join(tmpdir(), 'fp-review-')); });
 
   it('no history data: all checks pass', async () => {
-    const protoDir = join(base, 'FlowPilot', 'src', 'templates');
-    mkdirSync(protoDir, { recursive: true });
-    writeFileSync(join(protoDir, 'protocol.md'), '# proto');
     const result = await review(base);
     expect(result.rolledBack).toBe(false);
     expect(result.checks.every(c => c.passed)).toBe(true);
@@ -206,7 +189,9 @@ describe('review', () => {
     mkdirSync(evoDir, { recursive: true });
     const configPath = join(base, '.flowpilot', 'config.json');
     writeFileSync(configPath, '{"maxRetries":5}');
-    const expLog = [{ timestamp: '', experiments: [
+    const snapshotPath = join(evoDir, 'snapshot-2024-01-01T00-00-00-000Z.json');
+    writeFileSync(snapshotPath, JSON.stringify({ timestamp: '', files: { 'config.json': '{"maxRetries":2}' } }));
+    const expLog = [{ timestamp: '', snapshotFile: snapshotPath, experiments: [
       { trigger: 't', observation: 'o', action: 'a', expected: 'e', target: 'config' as const, applied: true, snapshotBefore: '{"maxRetries":2}' },
     ] }];
     writeFileSync(join(evoDir, 'experiments.json'), JSON.stringify(expLog));

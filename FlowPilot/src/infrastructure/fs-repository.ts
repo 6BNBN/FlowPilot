@@ -5,16 +5,12 @@
 
 import { mkdir, readFile, writeFile, unlink, rm, rename, readdir } from 'fs/promises';
 import { join } from 'path';
-import { openSync, closeSync, existsSync } from 'fs';
+import { openSync, closeSync } from 'fs';
 import type { ProgressData, TaskEntry, WorkflowStats, EvolutionEntry } from '../domain/types';
 import type { WorkflowRepository, VerifyResult } from '../domain/repository';
 import { autoCommit, gitCleanup, tagTask, rollbackToTask, cleanTags as gitCleanTags } from './git';
 import { runVerify } from './verify';
-
-/** 内置模板路径：dev 时 __dirname=src/infrastructure/，打包后 __dirname=dist/ */
-const BUILTIN_TEMPLATE = existsSync(join(__dirname, '..', 'templates', 'protocol.md'))
-  ? join(__dirname, '..', 'templates', 'protocol.md')
-  : join(__dirname, 'templates', 'protocol.md');
+import { PROTOCOL_TEMPLATE } from './protocol-template';
 
 /** 读取协议模板：优先 .workflow/config.json 的 protocolTemplate，其次内置模板 */
 async function loadProtocolTemplate(basePath: string): Promise<string> {
@@ -24,7 +20,7 @@ async function loadProtocolTemplate(basePath: string): Promise<string> {
       return await readFile(join(basePath, config.protocolTemplate), 'utf-8');
     }
   } catch {}
-  return await readFile(BUILTIN_TEMPLATE, 'utf-8');
+  return PROTOCOL_TEMPLATE;
 }
 
 export class FsWorkflowRepository implements WorkflowRepository {

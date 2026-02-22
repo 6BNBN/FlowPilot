@@ -101,7 +101,7 @@ export interface Experiment {
   observation: string;
   action: string;
   expected: string;
-  target: 'config' | 'protocol' | 'claude-md';
+  target: 'config' | 'claude-md';
 }
 
 /** 反思报告 */
@@ -113,7 +113,7 @@ export interface ReflectReport {
 
 /** LLM 反思：调用 Claude 分析工作流统计 */
 async function llmReflect(stats: WorkflowStats): Promise<ReflectReport | null> {
-  const system = `你是工作流反思引擎。分析给定的工作流统计数据，找出失败模式和改进机会。返回 JSON: {"findings": ["发现1", ...], "experiments": [{"trigger":"触发原因","observation":"观察现象","action":"建议行动","expected":"预期效果","target":"config或protocol或claude-md"}, ...]}。target=claude-md 表示修改 CLAUDE.md 协议区域。只返回 JSON，不要其他内容。`;
+  const system = `你是工作流反思引擎。分析给定的工作流统计数据，找出失败模式和改进机会。返回 JSON: {"findings": ["发现1", ...], "experiments": [{"trigger":"触发原因","observation":"观察现象","action":"建议行动","expected":"预期效果","target":"config或claude-md"}, ...]}。target=claude-md 表示修改 CLAUDE.md 协议区域。只返回 JSON，不要其他内容。`;
   const result = await callClaude(JSON.stringify(stats), system);
   if (!result) return null;
   try {
@@ -214,7 +214,7 @@ function ruleReflect(stats: WorkflowStats): ReflectReport {
       findings.push(`连续失败链：从任务 ${results[i - streak + 1].id} 开始连续失败`);
       experiments.push({
         trigger: '连续失败链', observation: `${streak} 个任务连续失败`,
-        action: '在失败任务间插入诊断步骤', expected: '打断失败传播', target: 'protocol',
+        action: '在失败任务间插入诊断步骤', expected: '打断失败传播', target: 'claude-md',
       });
       break;
     }
@@ -238,7 +238,7 @@ function ruleReflect(stats: WorkflowStats): ReflectReport {
       findings.push(`重试热点：任务 ${r.id} 重试 ${r.retries} 次`);
       experiments.push({
         trigger: '重试热点', observation: `任务 ${r.id} 重试 ${r.retries} 次`,
-        action: '增加该任务的上下文或前置检查', expected: '减少重试次数', target: 'protocol',
+        action: '增加该任务的上下文或前置检查', expected: '减少重试次数', target: 'claude-md',
       });
     }
   }
@@ -359,19 +359,16 @@ export async function experiment(
   if (!report.experiments.length) return log;
 
   const configPath = join(basePath, '.flowpilot', 'config.json');
-  const protocolPath = join(basePath, 'FlowPilot', 'src', 'templates', 'protocol.md');
   const claudeMdPath = join(basePath, 'CLAUDE.md');
 
   // 预快照：实验前保存完整文件内容（参考 Memoh-v2 files_snapshot）
   const configSnapshot = await safeRead(configPath, '{}');
-  const protocolSnapshot = await safeRead(protocolPath, '');
   const claudeMdSnapshot = await safeRead(claudeMdPath, '');
-  const snapshotFile = await saveSnapshot(basePath, { 'config.json': configSnapshot, 'protocol.md': protocolSnapshot, 'CLAUDE.md': claudeMdSnapshot });
+  const snapshotFile = await saveSnapshot(basePath, { 'config.json': configSnapshot, 'CLAUDE.md': claudeMdSnapshot });
   log.snapshotFile = snapshotFile;
 
   try {
     let configObj = JSON.parse(configSnapshot);
-    let protocolContent = protocolSnapshot;
     let claudeMdContent = claudeMdSnapshot;
 
     let claudeMdExpCount = 0;
@@ -386,11 +383,6 @@ export async function experiment(
             configObj = { ...configObj, [parsed.key]: parsed.value };
             applied.applied = true;
           }
-        } else if (exp.target === 'protocol') {
-          applied.snapshotBefore = protocolSnapshot;
-          const appendix = `\n<!-- evolution: ${exp.trigger} -->\n> ${exp.action}\n`;
-          protocolContent += appendix;
-          applied.applied = true;
         } else if (exp.target === 'claude-md') {
           applied.snapshotBefore = claudeMdSnapshot;
           if (claudeMdExpCount >= 3) { /* max 3 claude-md experiments per cycle */ }
@@ -421,10 +413,6 @@ export async function experiment(
     if (log.experiments.some(e => e.applied && e.target === 'config')) {
       await mkdir(dirname(configPath), { recursive: true });
       await writeFile(configPath, JSON.stringify(configObj, null, 2), 'utf-8');
-    }
-    if (log.experiments.some(e => e.applied && e.target === 'protocol')) {
-      await mkdir(dirname(protocolPath), { recursive: true });
-      await writeFile(protocolPath, protocolContent, 'utf-8');
     }
     if (log.experiments.some(e => e.applied && e.target === 'claude-md')) {
       await writeFile(claudeMdPath, claudeMdContent, 'utf-8');
@@ -470,7 +458,6 @@ export async function review(basePath: string): Promise<ReviewResult> {
 
   const historyDir = join(basePath, '.flowpilot', 'history');
   const configPath = join(basePath, '.flowpilot', 'config.json');
-  const protocolPath = join(basePath, 'FlowPilot', 'src', 'templates', 'protocol.md');
   const claudeMdPath = join(basePath, 'CLAUDE.md');
   const expPath = join(basePath, '.flowpilot', 'evolution', 'experiments.json');
 
@@ -523,9 +510,6 @@ export async function review(basePath: string): Promise<ReviewResult> {
     checks.push({ name: 'config.json', passed: true, detail: '文件不存在，跳过' });
   }
 
-  const protocolExists = (await safeRead(protocolPath, '')) !== '';
-  checks.push({ name: 'protocol.md', passed: protocolExists, detail: protocolExists ? '存在' : '模板文件缺失' });
-
   const expRaw = await safeRead(expPath, '');
   if (expRaw) {
     try { JSON.parse(expRaw); checks.push({ name: 'experiments.json', passed: true, detail: '可解析' }); }
@@ -559,7 +543,6 @@ export async function review(basePath: string): Promise<ReviewResult> {
       if (!snapshot) snapshot = await loadLatestSnapshot(basePath);
       if (snapshot) {
         if (snapshot.files['config.json']) await writeFile(configPath, snapshot.files['config.json'], 'utf-8');
-        if (snapshot.files['protocol.md']) await writeFile(protocolPath, snapshot.files['protocol.md'], 'utf-8');
         if (snapshot.files['CLAUDE.md']) await writeFile(claudeMdPath, snapshot.files['CLAUDE.md'], 'utf-8');
       }
       // 标记最近实验为 skipped

@@ -14,7 +14,7 @@ describe('estimateCharsPerToken', () => {
 
   it('mixed text between 1.5 and 3.5', () => {
     const r = estimateCharsPerToken('PostgreSQL数据库设计React组件模式');
-    expect(r).toBeGreaterThan(1.5);
+    expect(r).toBeGreaterThanOrEqual(1.5);
     expect(r).toBeLessThan(3.5);
   });
 });

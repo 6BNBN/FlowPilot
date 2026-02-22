@@ -202,8 +202,85 @@ function detectCommands(cwd) {
   return [];
 }
 
+// src/infrastructure/protocol-template.ts
+var PROTOCOL_TEMPLATE = `<!-- flowpilot:start -->
+## FlowPilot Workflow Protocol (MANDATORY \u2014 any violation is a protocol failure)
+
+**You are the dispatcher. These rules have the HIGHEST priority and are ALWAYS active.**
+
+### On Session Start
+Run \`node flow.js resume\`:
+- If unfinished workflow \u2192 enter **Execution Loop** (unless user is asking an unrelated question \u2014 handle it first via **Ad-hoc Dispatch**, then remind user the workflow is paused)
+- If no workflow \u2192 **judge the request**: reply directly for pure chitchat, use **Ad-hoc Dispatch** for one-off tasks, or enter **Requirement Decomposition** for multi-step development work. When in doubt, prefer the heavier path.
+
+### Ad-hoc Dispatch (one-off tasks, no workflow init)
+Dispatch sub-agent(s) via Task tool. No init/checkpoint/finish needed. Iron Rule #4 does NOT apply (no task ID exists). Main agent MAY use Read/Glob/Grep directly for trivial lookups (e.g. reading a single file) \u2014 Iron Rule #2 is relaxed in Ad-hoc mode only.
+
+### Iron Rules (violating ANY = protocol failure)
+1. **NEVER use TaskCreate / TaskUpdate / TaskList** \u2014 use ONLY \`node flow.js xxx\`.
+2. **Main agent can ONLY use Bash, Task, and Skill** \u2014 Edit, Write, Read, Glob, Grep, Explore are ALL FORBIDDEN. To read any file (including docs), dispatch a sub-agent.
+3. **ALWAYS dispatch via Task tool** \u2014 one Task call per task. N tasks = N Task calls **in a single message** for parallel execution.
+4. **Sub-agents MUST run checkpoint with --files before replying** \u2014 \`echo 'summary' | node flow.js checkpoint <id> --files file1 file2\` is the LAST command before reply. MUST list all created/modified files. Skipping = protocol failure.
+
+### Requirement Decomposition
+1. Dispatch a sub-agent to read requirement docs and return a summary.
+2. Use /superpowers:brainstorming to brainstorm and produce a task list.
+3. Pipe into init using this **exact format**:
+\`\`\`bash
+cat <<'EOF' | node flow.js init
+1. [backend] Task title
+   Description of what to do
+2. [frontend] Another task (deps: 1)
+   Description here
+3. [general] Third task (deps: 1, 2)
+EOF
+\`\`\`
+Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, indented lines = description.
+
+### Execution Loop
+1. Run \`node flow.js next --batch\`. **NOTE: this command will REFUSE to return tasks if any previous task is still \`active\`. You must checkpoint or resume first.**
+2. The output already contains checkpoint commands per task. For **EVERY** task in batch, dispatch a sub-agent via Task tool. **ALL Task calls in one message.** Copy the ENTIRE task block (including checkpoint commands) into each sub-agent prompt verbatim.
+3. **After ALL sub-agents return**: run \`node flow.js status\`.
+   - If any task is still \`active\` \u2192 sub-agent failed to checkpoint. Run fallback: \`echo 'summary from sub-agent output' | node flow.js checkpoint <id> --files file1 file2\`
+   - **Do NOT call \`node flow.js next\` until zero active tasks remain** (the command will error anyway).
+4. Loop back to step 1.
+5. When \`next\` returns "\u5168\u90E8\u5B8C\u6210", enter **Finalization**.
+
+### Mid-Workflow Commands
+- \`node flow.js skip <id>\` \u2014 skip a stuck/unnecessary task (avoid skipping active tasks with running sub-agents)
+- \`node flow.js add <\u63CF\u8FF0> [--type frontend|backend|general]\` \u2014 inject a new task mid-workflow
+
+### Sub-Agent Prompt Template
+Each sub-agent prompt MUST contain these sections in order:
+1. Task block from \`next\` output (title, type, description, checkpoint commands, context)
+2. **Pre-analysis (MANDATORY)**: Before writing ANY code, **MUST** invoke /superpowers:brainstorming to perform multi-dimensional analysis (requirements, edge cases, architecture, risks). Skipping = protocol failure.
+3. **Skill routing**: type=frontend \u2192 **MUST** invoke /frontend-design, type=backend \u2192 **MUST** invoke /feature-dev, type=general \u2192 execute directly. **For ALL types, you MUST also check available skills and MCP tools; use any that match the task alongside the primary skill.**
+4. **Unfamiliar APIs \u2192 MUST query context7 MCP first. Never guess.**
+
+### Sub-Agent Checkpoint (Iron Rule #4 \u2014 most common violation)
+Sub-agent's LAST Bash command before replying MUST be:
+\`\`\`
+echo '\u4E00\u53E5\u8BDD\u6458\u8981' | node flow.js checkpoint <id> --files file1 file2 ...
+\`\`\`
+- \`--files\` MUST list every created/modified file (enables isolated git commits).
+- If task failed: \`echo 'FAILED' | node flow.js checkpoint <id>\`
+- If sub-agent replies WITHOUT running checkpoint \u2192 protocol failure. Main agent MUST run fallback checkpoint in step 3.
+
+### Security Rules (sub-agents MUST follow)
+- SQL: parameterized queries only. XSS: no unsanitized v-html/innerHTML.
+- Auth: secrets from env vars, bcrypt passwords, token expiry.
+- Input: validate at entry points. Never log passwords. Never commit .env.
+
+### Finalization (MANDATORY \u2014 skipping = protocol failure)
+1. Run \`node flow.js finish\` \u2014 runs verify (build/test/lint). If fail \u2192 dispatch sub-agent to fix \u2192 retry finish.
+2. When finish returns "\u9A8C\u8BC1\u901A\u8FC7\uFF0C\u8BF7\u6D3E\u5B50Agent\u6267\u884C code-review" \u2192 dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
+3. Run \`node flow.js review\` to mark code-review done.
+4. Run \`node flow.js finish\` again \u2014 verify passes + review done \u2192 final commit \u2192 idle.
+**Loop: finish(verify) \u2192 review(code-review) \u2192 fix \u2192 finish again. Both gates must pass.**
+
+<!-- flowpilot:end -->`;
+
 // src/infrastructure/fs-repository.ts
-var BUILTIN_TEMPLATE = (0, import_fs.existsSync)((0, import_path.join)(__dirname, "..", "templates", "protocol.md")) ? (0, import_path.join)(__dirname, "..", "templates", "protocol.md") : (0, import_path.join)(__dirname, "templates", "protocol.md");
 async function loadProtocolTemplate(basePath2) {
   try {
     const config = JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(basePath2, ".workflow", "config.json"), "utf-8"));
@@ -212,7 +289,7 @@ async function loadProtocolTemplate(basePath2) {
     }
   } catch {
   }
-  return await (0, import_promises.readFile)(BUILTIN_TEMPLATE, "utf-8");
+  return PROTOCOL_TEMPLATE;
 }
 var FsWorkflowRepository = class {
   root;
@@ -1049,7 +1126,7 @@ function analyzeHistory(history) {
   return { suggestions, recommendedConfig };
 }
 async function llmReflect(stats) {
-  const system = `\u4F60\u662F\u5DE5\u4F5C\u6D41\u53CD\u601D\u5F15\u64CE\u3002\u5206\u6790\u7ED9\u5B9A\u7684\u5DE5\u4F5C\u6D41\u7EDF\u8BA1\u6570\u636E\uFF0C\u627E\u51FA\u5931\u8D25\u6A21\u5F0F\u548C\u6539\u8FDB\u673A\u4F1A\u3002\u8FD4\u56DE JSON: {"findings": ["\u53D1\u73B01", ...], "experiments": [{"trigger":"\u89E6\u53D1\u539F\u56E0","observation":"\u89C2\u5BDF\u73B0\u8C61","action":"\u5EFA\u8BAE\u884C\u52A8","expected":"\u9884\u671F\u6548\u679C","target":"config\u6216protocol\u6216claude-md"}, ...]}\u3002target=claude-md \u8868\u793A\u4FEE\u6539 CLAUDE.md \u534F\u8BAE\u533A\u57DF\u3002\u53EA\u8FD4\u56DE JSON\uFF0C\u4E0D\u8981\u5176\u4ED6\u5185\u5BB9\u3002`;
+  const system = `\u4F60\u662F\u5DE5\u4F5C\u6D41\u53CD\u601D\u5F15\u64CE\u3002\u5206\u6790\u7ED9\u5B9A\u7684\u5DE5\u4F5C\u6D41\u7EDF\u8BA1\u6570\u636E\uFF0C\u627E\u51FA\u5931\u8D25\u6A21\u5F0F\u548C\u6539\u8FDB\u673A\u4F1A\u3002\u8FD4\u56DE JSON: {"findings": ["\u53D1\u73B01", ...], "experiments": [{"trigger":"\u89E6\u53D1\u539F\u56E0","observation":"\u89C2\u5BDF\u73B0\u8C61","action":"\u5EFA\u8BAE\u884C\u52A8","expected":"\u9884\u671F\u6548\u679C","target":"config\u6216claude-md"}, ...]}\u3002target=claude-md \u8868\u793A\u4FEE\u6539 CLAUDE.md \u534F\u8BAE\u533A\u57DF\u3002\u53EA\u8FD4\u56DE JSON\uFF0C\u4E0D\u8981\u5176\u4ED6\u5185\u5BB9\u3002`;
   const result = await callClaude(JSON.stringify(stats), system);
   if (!result) return null;
   try {
@@ -1139,7 +1216,7 @@ function ruleReflect(stats) {
         observation: `${streak} \u4E2A\u4EFB\u52A1\u8FDE\u7EED\u5931\u8D25`,
         action: "\u5728\u5931\u8D25\u4EFB\u52A1\u95F4\u63D2\u5165\u8BCA\u65AD\u6B65\u9AA4",
         expected: "\u6253\u65AD\u5931\u8D25\u4F20\u64AD",
-        target: "protocol"
+        target: "claude-md"
       });
       break;
     }
@@ -1165,7 +1242,7 @@ function ruleReflect(stats) {
         observation: `\u4EFB\u52A1 ${r.id} \u91CD\u8BD5 ${r.retries} \u6B21`,
         action: "\u589E\u52A0\u8BE5\u4EFB\u52A1\u7684\u4E0A\u4E0B\u6587\u6216\u524D\u7F6E\u68C0\u67E5",
         expected: "\u51CF\u5C11\u91CD\u8BD5\u6B21\u6570",
-        target: "protocol"
+        target: "claude-md"
       });
     }
   }
@@ -1247,16 +1324,13 @@ async function experiment(report, basePath2) {
   const log2 = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), experiments: [], status: "completed" };
   if (!report.experiments.length) return log2;
   const configPath = (0, import_path4.join)(basePath2, ".flowpilot", "config.json");
-  const protocolPath = (0, import_path4.join)(basePath2, "FlowPilot", "src", "templates", "protocol.md");
   const claudeMdPath = (0, import_path4.join)(basePath2, "CLAUDE.md");
   const configSnapshot = await safeRead(configPath, "{}");
-  const protocolSnapshot = await safeRead(protocolPath, "");
   const claudeMdSnapshot = await safeRead(claudeMdPath, "");
-  const snapshotFile = await saveSnapshot(basePath2, { "config.json": configSnapshot, "protocol.md": protocolSnapshot, "CLAUDE.md": claudeMdSnapshot });
+  const snapshotFile = await saveSnapshot(basePath2, { "config.json": configSnapshot, "CLAUDE.md": claudeMdSnapshot });
   log2.snapshotFile = snapshotFile;
   try {
     let configObj = JSON.parse(configSnapshot);
-    let protocolContent = protocolSnapshot;
     let claudeMdContent = claudeMdSnapshot;
     let claudeMdExpCount = 0;
     for (const exp of report.experiments) {
@@ -1269,14 +1343,6 @@ async function experiment(report, basePath2) {
             configObj = { ...configObj, [parsed.key]: parsed.value };
             applied.applied = true;
           }
-        } else if (exp.target === "protocol") {
-          applied.snapshotBefore = protocolSnapshot;
-          const appendix = `
-<!-- evolution: ${exp.trigger} -->
-> ${exp.action}
-`;
-          protocolContent += appendix;
-          applied.applied = true;
         } else if (exp.target === "claude-md") {
           applied.snapshotBefore = claudeMdSnapshot;
           if (claudeMdExpCount >= 3) {
@@ -1310,10 +1376,6 @@ async function experiment(report, basePath2) {
       await (0, import_promises3.mkdir)((0, import_path4.dirname)(configPath), { recursive: true });
       await (0, import_promises3.writeFile)(configPath, JSON.stringify(configObj, null, 2), "utf-8");
     }
-    if (log2.experiments.some((e) => e.applied && e.target === "protocol")) {
-      await (0, import_promises3.mkdir)((0, import_path4.dirname)(protocolPath), { recursive: true });
-      await (0, import_promises3.writeFile)(protocolPath, protocolContent, "utf-8");
-    }
     if (log2.experiments.some((e) => e.applied && e.target === "claude-md")) {
       await (0, import_promises3.writeFile)(claudeMdPath, claudeMdContent, "utf-8");
     }
@@ -1338,7 +1400,6 @@ async function review(basePath2) {
   let rollbackReason;
   const historyDir = (0, import_path4.join)(basePath2, ".flowpilot", "history");
   const configPath = (0, import_path4.join)(basePath2, ".flowpilot", "config.json");
-  const protocolPath = (0, import_path4.join)(basePath2, "FlowPilot", "src", "templates", "protocol.md");
   const claudeMdPath = (0, import_path4.join)(basePath2, "CLAUDE.md");
   const expPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
   let history = [];
@@ -1389,8 +1450,6 @@ async function review(basePath2) {
   } else {
     checks.push({ name: "config.json", passed: true, detail: "\u6587\u4EF6\u4E0D\u5B58\u5728\uFF0C\u8DF3\u8FC7" });
   }
-  const protocolExists = await safeRead(protocolPath, "") !== "";
-  checks.push({ name: "protocol.md", passed: protocolExists, detail: protocolExists ? "\u5B58\u5728" : "\u6A21\u677F\u6587\u4EF6\u7F3A\u5931" });
   const expRaw = await safeRead(expPath, "");
   if (expRaw) {
     try {
@@ -1427,7 +1486,6 @@ async function review(basePath2) {
       if (!snapshot) snapshot = await loadLatestSnapshot(basePath2);
       if (snapshot) {
         if (snapshot.files["config.json"]) await (0, import_promises3.writeFile)(configPath, snapshot.files["config.json"], "utf-8");
-        if (snapshot.files["protocol.md"]) await (0, import_promises3.writeFile)(protocolPath, snapshot.files["protocol.md"], "utf-8");
         if (snapshot.files["CLAUDE.md"]) await (0, import_promises3.writeFile)(claudeMdPath, snapshot.files["CLAUDE.md"], "utf-8");
       }
       if (logs.length) {
@@ -2232,8 +2290,85 @@ function computeMaxChars(contextWindow = 128e3, sample) {
 }
 
 // src/infrastructure/loop-detector.ts
+var import_promises8 = require("fs/promises");
+var import_path9 = require("path");
+
+// src/infrastructure/heartbeat.ts
 var import_promises7 = require("fs/promises");
 var import_path8 = require("path");
+var TASK_TIMEOUT_MS = 30 * 60 * 1e3;
+var MEMORY_COMPACT_THRESHOLD = 100;
+var DEFAULT_INTERVAL_MS = 5 * 60 * 1e3;
+function isWithinActiveHours(cfg) {
+  if (!cfg?.activeHoursStart && cfg?.activeHoursStart !== 0) return true;
+  const now = cfg.timezone ? new Date((/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: cfg.timezone })) : /* @__PURE__ */ new Date();
+  const hour = now.getHours();
+  const day = now.getDay();
+  if (cfg.activeDays?.length && !cfg.activeDays.includes(day)) return false;
+  const start = cfg.activeHoursStart;
+  const end = cfg.activeHoursEnd ?? 23;
+  return start <= end ? hour >= start && hour <= end : hour >= start || hour <= end;
+}
+async function runHeartbeat(basePath2, config) {
+  if (!isWithinActiveHours(config)) return { warnings: [], actions: [] };
+  const warnings = [];
+  const actions = [];
+  try {
+    const raw = await (0, import_promises7.readFile)((0, import_path8.join)(basePath2, ".workflow", "progress.json"), "utf-8");
+    const data = JSON.parse(raw);
+    if (data.status === "running") {
+      const active = data.tasks.filter((t) => t.status === "active");
+      if (active.length) {
+        const window = await loadWindow(basePath2);
+        const lastTs = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
+        if (lastTs && Date.now() - lastTs > TASK_TIMEOUT_MS) {
+          warnings.push(`[TIMEOUT] \u4EFB\u52A1 ${active.map((t) => t.id).join(",")} \u8D85\u8FC730\u5206\u949F\u65E0checkpoint`);
+        }
+      }
+    }
+  } catch {
+  }
+  try {
+    const memories = await loadMemory(basePath2);
+    const activeCount = memories.filter((e) => !e.archived).length;
+    if (activeCount > MEMORY_COMPACT_THRESHOLD) {
+      await compactMemory(basePath2);
+      actions.push(`compacted memory from ${activeCount} entries`);
+      warnings.push(`[MEMORY] \u6D3B\u8DC3\u8BB0\u5FC6 ${activeCount} \u6761\uFF0C\u5DF2\u81EA\u52A8\u538B\u7F29`);
+    }
+  } catch {
+  }
+  try {
+    const dfStats = await loadDf(basePath2);
+    if (dfStats.docCount > 0) {
+      const memories = await loadMemory(basePath2);
+      const rebuilt = rebuildDf(memories);
+      const diff = Math.abs(dfStats.docCount - rebuilt.docCount) / Math.max(dfStats.docCount, 1);
+      if (diff > 0.1) {
+        await saveDf(basePath2, rebuilt);
+        actions.push("rebuilt DF stats");
+        warnings.push(`[DF] docCount \u504F\u5DEE ${(diff * 100).toFixed(0)}%\uFF0C\u5DF2\u91CD\u5EFA`);
+      }
+    }
+  } catch {
+  }
+  if (warnings.length) log.info(`[heartbeat] ${warnings.join("; ")}`);
+  return { warnings, actions };
+}
+function startHeartbeat(basePath2, intervalMs = DEFAULT_INTERVAL_MS, config) {
+  const timer = setInterval(() => {
+    runHeartbeat(basePath2, config).catch(() => {
+    });
+  }, intervalMs);
+  timer.unref();
+  log.debug(`[heartbeat] started (interval=${intervalMs}ms)`);
+  return () => {
+    clearInterval(timer);
+    log.debug("[heartbeat] stopped");
+  };
+}
+
+// src/infrastructure/loop-detector.ts
 var WINDOW_SIZE = 20;
 var STATE_FILE = "loop-state.json";
 function fnv1a(str) {
@@ -2259,19 +2394,19 @@ function similarity(a, b) {
   return inter / (sa.size + sb.size - inter);
 }
 function statePath(basePath2) {
-  return (0, import_path8.join)(basePath2, ".workflow", STATE_FILE);
+  return (0, import_path9.join)(basePath2, ".workflow", STATE_FILE);
 }
 async function loadWindow(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises7.readFile)(statePath(basePath2), "utf-8"));
+    return JSON.parse(await (0, import_promises8.readFile)(statePath(basePath2), "utf-8"));
   } catch {
     return [];
   }
 }
 async function saveWindow(basePath2, window) {
   const p = statePath(basePath2);
-  await (0, import_promises7.mkdir)((0, import_path8.dirname)(p), { recursive: true });
-  await (0, import_promises7.writeFile)(p, JSON.stringify(window), "utf-8");
+  await (0, import_promises8.mkdir)((0, import_path9.dirname)(p), { recursive: true });
+  await (0, import_promises8.writeFile)(p, JSON.stringify(window), "utf-8");
 }
 function repeatedNoProgress(window) {
   if (window.length < 3) return null;
@@ -2314,7 +2449,8 @@ function globalCircuitBreaker(window) {
   }
   return null;
 }
-async function detect(basePath2, taskId, summary, failed) {
+async function detect(basePath2, taskId, summary, failed, activeHours) {
+  if (!isWithinActiveHours(activeHours)) return null;
   const window = await loadWindow(basePath2);
   const record = {
     taskId,
@@ -2326,70 +2462,6 @@ async function detect(basePath2, taskId, summary, failed) {
   const updated = [...window, record].slice(-WINDOW_SIZE);
   await saveWindow(basePath2, updated);
   return repeatedNoProgress(updated) ?? pingPong(updated) ?? globalCircuitBreaker(updated);
-}
-
-// src/infrastructure/heartbeat.ts
-var import_promises8 = require("fs/promises");
-var import_path9 = require("path");
-var TASK_TIMEOUT_MS = 30 * 60 * 1e3;
-var MEMORY_COMPACT_THRESHOLD = 100;
-var DEFAULT_INTERVAL_MS = 5 * 60 * 1e3;
-async function runHeartbeat(basePath2) {
-  const warnings = [];
-  const actions = [];
-  try {
-    const raw = await (0, import_promises8.readFile)((0, import_path9.join)(basePath2, ".workflow", "progress.json"), "utf-8");
-    const data = JSON.parse(raw);
-    if (data.status === "running") {
-      const active = data.tasks.filter((t) => t.status === "active");
-      if (active.length) {
-        const window = await loadWindow(basePath2);
-        const lastTs = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
-        if (lastTs && Date.now() - lastTs > TASK_TIMEOUT_MS) {
-          warnings.push(`[TIMEOUT] \u4EFB\u52A1 ${active.map((t) => t.id).join(",")} \u8D85\u8FC730\u5206\u949F\u65E0checkpoint`);
-        }
-      }
-    }
-  } catch {
-  }
-  try {
-    const memories = await loadMemory(basePath2);
-    const activeCount = memories.filter((e) => !e.archived).length;
-    if (activeCount > MEMORY_COMPACT_THRESHOLD) {
-      await compactMemory(basePath2);
-      actions.push(`compacted memory from ${activeCount} entries`);
-      warnings.push(`[MEMORY] \u6D3B\u8DC3\u8BB0\u5FC6 ${activeCount} \u6761\uFF0C\u5DF2\u81EA\u52A8\u538B\u7F29`);
-    }
-  } catch {
-  }
-  try {
-    const dfStats = await loadDf(basePath2);
-    if (dfStats.docCount > 0) {
-      const memories = await loadMemory(basePath2);
-      const rebuilt = rebuildDf(memories);
-      const diff = Math.abs(dfStats.docCount - rebuilt.docCount) / Math.max(dfStats.docCount, 1);
-      if (diff > 0.1) {
-        await saveDf(basePath2, rebuilt);
-        actions.push("rebuilt DF stats");
-        warnings.push(`[DF] docCount \u504F\u5DEE ${(diff * 100).toFixed(0)}%\uFF0C\u5DF2\u91CD\u5EFA`);
-      }
-    }
-  } catch {
-  }
-  if (warnings.length) log.info(`[heartbeat] ${warnings.join("; ")}`);
-  return { warnings, actions };
-}
-function startHeartbeat(basePath2, intervalMs = DEFAULT_INTERVAL_MS) {
-  const timer = setInterval(() => {
-    runHeartbeat(basePath2).catch(() => {
-    });
-  }, intervalMs);
-  timer.unref();
-  log.debug(`[heartbeat] started (interval=${intervalMs}ms)`);
-  return () => {
-    clearInterval(timer);
-    log.debug("[heartbeat] stopped");
-  };
 }
 
 // src/application/workflow-service.ts
