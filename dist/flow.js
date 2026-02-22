@@ -223,6 +223,11 @@ Dispatch sub-agent(s) via Task tool. No init/checkpoint/finish needed. Iron Rule
 4. **Sub-agents MUST run checkpoint with --files before replying** \u2014 \`echo 'summary' | node flow.js checkpoint <id> --files file1 file2\` is the LAST command before reply. MUST list all created/modified files. Skipping = protocol failure.
 
 ### Requirement Decomposition
+**Step 0 \u2014 Auto-detect (ALWAYS run first):**
+1. If user's message directly contains a task list (numbered items or checkbox items) \u2192 pipe it into \`node flow.js init\` directly, skip to **Execution Loop**.
+2. Search project root for \`tasks.md\` (run \`ls tasks.md 2>/dev/null\`). If found \u2192 ask user: "\u53D1\u73B0\u9879\u76EE\u4E2D\u6709 tasks.md\uFF0C\u662F\u5426\u4F5C\u4E3A\u672C\u6B21\u5DE5\u4F5C\u6D41\u7684\u4EFB\u52A1\u5217\u8868\uFF1F" If user confirms \u2192 \`cat tasks.md | node flow.js init\`, skip to **Execution Loop**. If user declines \u2192 continue to Path A/B.
+
+**Path A \u2014 Standard (default):**
 1. Dispatch a sub-agent to read requirement docs and return a summary.
 2. Use /superpowers:brainstorming to brainstorm and produce a task list.
 3. Pipe into init using this **exact format**:
@@ -236,6 +241,16 @@ cat <<'EOF' | node flow.js init
 EOF
 \`\`\`
 Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, indented lines = description.
+
+**Path B \u2014 OpenSpec (if \`openspec/\` directory exists AND \`openspec\` CLI is available):**
+1. Verify: run \`npx openspec --version\`. If command fails \u2192 fall back to **Path A**.
+2. Run \`/opsx:new <change-name>\` to create a change.
+3. Run \`/opsx:ff\` to fast-forward (generates proposal \u2192 specs \u2192 design \u2192 tasks).
+4. Pipe the generated tasks.md into init:
+\`\`\`bash
+cat openspec/changes/<change-name>/tasks.md | node flow.js init
+\`\`\`
+OpenSpec checkbox format (\`- [ ] 1.1 Task\`) is auto-detected. Group N tasks depend on group N-1.
 
 ### Execution Loop
 1. Run \`node flow.js next --batch\`. **NOTE: this command will REFUSE to return tasks if any previous task is still \`active\`. You must checkpoint or resume first.**
@@ -260,10 +275,11 @@ Each sub-agent prompt MUST contain these sections in order:
 ### Sub-Agent Checkpoint (Iron Rule #4 \u2014 most common violation)
 Sub-agent's LAST Bash command before replying MUST be:
 \`\`\`
-echo '\u4E00\u53E5\u8BDD\u6458\u8981' | node flow.js checkpoint <id> --files file1 file2 ...
+echo '\u6458\u8981 [REMEMBER] \u5173\u952E\u77E5\u8BC6\u70B9 [DECISION] \u91CD\u8981\u51B3\u7B56' | node flow.js checkpoint <id> --files file1 file2 ...
 \`\`\`
+- **\u6458\u8981\u4E2D MUST \u5305\u542B\u81F3\u5C11\u4E00\u4E2A\u6807\u7B7E**\uFF1A\`[REMEMBER]\` \u5173\u952E\u4E8B\u5B9E\u3001\`[DECISION]\` \u6280\u672F\u51B3\u7B56\u3001\`[ARCHITECTURE]\` \u67B6\u6784\u9009\u62E9\u3002\u8FD9\u4E9B\u6807\u7B7E\u4F1A\u88AB\u81EA\u52A8\u63D0\u53D6\u4E3A\u9879\u76EE\u8BB0\u5FC6\u3002
 - \`--files\` MUST list every created/modified file (enables isolated git commits).
-- If task failed: \`echo 'FAILED' | node flow.js checkpoint <id>\`
+- If task failed: \`echo 'FAILED: \u539F\u56E0 [REMEMBER] \u5931\u8D25\u539F\u56E0' | node flow.js checkpoint <id>\`
 - If sub-agent replies WITHOUT running checkpoint \u2192 protocol failure. Main agent MUST run fallback checkpoint in step 3.
 
 ### Security Rules (sub-agents MUST follow)
@@ -726,7 +742,55 @@ function isAllDone(tasks) {
 // src/infrastructure/markdown-parser.ts
 var TASK_RE = /^(\d+)\.\s+\[\s*(\w+)\s*\]\s+(.+?)(?:\s*\((?:deps?|依赖)\s*:\s*([^)]*)\))?\s*$/i;
 var DESC_RE = /^\s{2,}(.+)$/;
+var OPENSPEC_GROUP_RE = /^##\s+(\d+)\.\s+(.+)$/;
+var OPENSPEC_TASK_RE = /^-\s+\[[ x]\]\s+(\d+)\.(\d+)\s+(.+)$/i;
 function parseTasksMarkdown(markdown) {
+  const isOpenSpec = markdown.split("\n").some((l) => OPENSPEC_TASK_RE.test(l));
+  return isOpenSpec ? parseOpenSpecMarkdown(markdown) : parseFlowPilotMarkdown(markdown);
+}
+function parseOpenSpecMarkdown(markdown) {
+  const lines = markdown.split("\n");
+  let name = "";
+  let description = "";
+  const tasks = [];
+  const groupTasks = /* @__PURE__ */ new Map();
+  let currentGroup = 0;
+  for (const line of lines) {
+    if (!name && line.startsWith("# ") && !line.startsWith("## ")) {
+      name = line.slice(2).trim();
+      continue;
+    }
+    if (name && !description && !line.startsWith("#") && line.trim() && !OPENSPEC_TASK_RE.test(line)) {
+      description = line.trim();
+      continue;
+    }
+    const gm = line.match(OPENSPEC_GROUP_RE);
+    if (gm) {
+      currentGroup = parseInt(gm[1], 10);
+      if (!groupTasks.has(currentGroup)) groupTasks.set(currentGroup, []);
+      continue;
+    }
+    const tm = line.match(OPENSPEC_TASK_RE);
+    if (tm) {
+      const groupNum = parseInt(tm[1], 10);
+      const sysId = makeTaskId(tasks.length + 1);
+      if (!groupTasks.has(groupNum)) groupTasks.set(groupNum, []);
+      groupTasks.get(groupNum).push(sysId);
+      let titleText = tm[3].trim();
+      let type = "general";
+      const typeMatch = titleText.match(/^\[\s*(frontend|backend|general)\s*\]\s+(.+)$/i);
+      if (typeMatch) {
+        type = typeMatch[1].toLowerCase();
+        titleText = typeMatch[2];
+      }
+      const deps = groupNum > 1 && groupTasks.has(groupNum - 1) ? [...groupTasks.get(groupNum - 1)] : [];
+      tasks.push({ title: titleText, type, deps, description: "" });
+    }
+  }
+  if (!name) name = "OpenSpec Workflow";
+  return { name, description, tasks };
+}
+function parseFlowPilotMarkdown(markdown) {
   const lines = markdown.split("\n");
   let name = "";
   let description = "";
@@ -1039,11 +1103,15 @@ function ruleExtract(text, source) {
     return !primaryText.includes(keyword);
   });
   const seen = /* @__PURE__ */ new Set();
-  return [...primary, ...tech].filter((e) => {
+  const all = [...primary, ...tech].filter((e) => {
     if (seen.has(e.content)) return false;
     seen.add(e.content);
     return true;
   });
+  if (!all.length && text.trim()) {
+    all.push({ content: text.trim().slice(0, 500), source });
+  }
+  return all;
 }
 async function extractAll(text, source, existingMemories) {
   const llmResult = await llmExtract(text);
@@ -2490,6 +2558,30 @@ var WorkflowService = class {
       return null;
     }
   }
+  activatedPath() {
+    return (0, import_path10.join)(this.repo.projectRoot(), ".workflow", "activated.json");
+  }
+  async recordActivation(ids) {
+    let map = {};
+    try {
+      map = JSON.parse(await (0, import_promises9.readFile)(this.activatedPath(), "utf-8"));
+    } catch {
+    }
+    const now = Date.now();
+    for (const id of ids) map[id] = { time: now, pid: process.pid };
+    await (0, import_promises9.writeFile)(this.activatedPath(), JSON.stringify(map), "utf-8");
+  }
+  /** 跨进程激活时长(ms)，同进程返回 Infinity（跳过检查） */
+  async getActivationAge(id) {
+    try {
+      const map = JSON.parse(await (0, import_promises9.readFile)(this.activatedPath(), "utf-8"));
+      const entry = map[id];
+      if (!entry || entry.pid === process.pid) return Infinity;
+      return Date.now() - entry.time;
+    } catch {
+      return Infinity;
+    }
+  }
   /** init: 解析任务markdown → 生成progress/tasks */
   async init(tasksMd, force = false) {
     try {
@@ -2562,6 +2654,7 @@ ${def.description}
       log.debug(`next: \u6FC0\u6D3B\u4EFB\u52A1 ${task.id} (deps: ${task.deps.join(",") || "\u65E0"})`);
       const activated = cascaded.map((t) => t.id === task.id ? { ...t, status: "active" } : t);
       await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
+      await this.recordActivation([task.id]);
       await runLifecycleHook("onTaskStart", this.repo.projectRoot(), { TASK_ID: task.id, TASK_TITLE: task.title });
       const parts = [];
       const summary = await this.repo.loadSummary();
@@ -2610,6 +2703,7 @@ ${loopWarning}`);
       const activeIds = new Set(tasks.map((t) => t.id));
       const activated = cascaded.map((t) => activeIds.has(t.id) ? { ...t, status: "active" } : t);
       await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
+      await this.recordActivation(tasks.map((t) => t.id));
       for (const t of tasks) {
         await runLifecycleHook("onTaskStart", this.repo.projectRoot(), { TASK_ID: t.id, TASK_TITLE: t.title });
       }
@@ -2650,7 +2744,9 @@ ${loopWarning}`);
       if (task.status !== "active") {
         throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u53EA\u6709 active \u72B6\u6001\u53EF\u4EE5 checkpoint`);
       }
-      const isFailed = detail.startsWith("FAILED") || detail.length < 200 && /\b(fail|error|crash|timeout|限流|崩溃|超时|rate.?limit)\b/i.test(detail);
+      const MIN_WORK_TIME = 3e4;
+      const age = await this.getActivationAge(id);
+      const isFailed = detail.startsWith("FAILED") || detail.length < 200 && /\b(fail|error|crash|timeout|rate.?limit)\b/i.test(detail) || detail.length < 200 && /限流|崩溃|超时|失败|异常|中断|未完成|无法/.test(detail) || age < MIN_WORK_TIME;
       if (isFailed) {
         await this.appendFailureContext(id, task, detail);
         const patternWarn = await this.detectFailurePattern(id, task);

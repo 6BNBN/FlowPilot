@@ -19,6 +19,11 @@ Dispatch sub-agent(s) via Task tool. No init/checkpoint/finish needed. Iron Rule
 4. **Sub-agents MUST run checkpoint with --files before replying** — \`echo 'summary' | node flow.js checkpoint <id> --files file1 file2\` is the LAST command before reply. MUST list all created/modified files. Skipping = protocol failure.
 
 ### Requirement Decomposition
+**Step 0 — Auto-detect (ALWAYS run first):**
+1. If user's message directly contains a task list (numbered items or checkbox items) → pipe it into \`node flow.js init\` directly, skip to **Execution Loop**.
+2. Search project root for \`tasks.md\` (run \`ls tasks.md 2>/dev/null\`). If found → ask user: "发现项目中有 tasks.md，是否作为本次工作流的任务列表？" If user confirms → \`cat tasks.md | node flow.js init\`, skip to **Execution Loop**. If user declines → continue to Path A/B.
+
+**Path A — Standard (default):**
 1. Dispatch a sub-agent to read requirement docs and return a summary.
 2. Use /superpowers:brainstorming to brainstorm and produce a task list.
 3. Pipe into init using this **exact format**:
@@ -32,6 +37,16 @@ cat <<'EOF' | node flow.js init
 EOF
 \`\`\`
 Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, indented lines = description.
+
+**Path B — OpenSpec (if \`openspec/\` directory exists AND \`openspec\` CLI is available):**
+1. Verify: run \`npx openspec --version\`. If command fails → fall back to **Path A**.
+2. Run \`/opsx:new <change-name>\` to create a change.
+3. Run \`/opsx:ff\` to fast-forward (generates proposal → specs → design → tasks).
+4. Pipe the generated tasks.md into init:
+\`\`\`bash
+cat openspec/changes/<change-name>/tasks.md | node flow.js init
+\`\`\`
+OpenSpec checkbox format (\`- [ ] 1.1 Task\`) is auto-detected. Group N tasks depend on group N-1.
 
 ### Execution Loop
 1. Run \`node flow.js next --batch\`. **NOTE: this command will REFUSE to return tasks if any previous task is still \`active\`. You must checkpoint or resume first.**
@@ -56,10 +71,11 @@ Each sub-agent prompt MUST contain these sections in order:
 ### Sub-Agent Checkpoint (Iron Rule #4 — most common violation)
 Sub-agent's LAST Bash command before replying MUST be:
 \`\`\`
-echo '一句话摘要' | node flow.js checkpoint <id> --files file1 file2 ...
+echo '摘要 [REMEMBER] 关键知识点 [DECISION] 重要决策' | node flow.js checkpoint <id> --files file1 file2 ...
 \`\`\`
+- **摘要中 MUST 包含至少一个标签**：\`[REMEMBER]\` 关键事实、\`[DECISION]\` 技术决策、\`[ARCHITECTURE]\` 架构选择。这些标签会被自动提取为项目记忆。
 - \`--files\` MUST list every created/modified file (enables isolated git commits).
-- If task failed: \`echo 'FAILED' | node flow.js checkpoint <id>\`
+- If task failed: \`echo 'FAILED: 原因 [REMEMBER] 失败原因' | node flow.js checkpoint <id>\`
 - If sub-agent replies WITHOUT running checkpoint → protocol failure. Main agent MUST run fallback checkpoint in step 3.
 
 ### Security Rules (sub-agents MUST follow)

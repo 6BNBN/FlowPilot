@@ -182,11 +182,18 @@ function ruleExtract(text: string, source: string): ExtractedEntry[] {
   });
 
   const seen = new Set<string>();
-  return [...primary, ...tech].filter(e => {
+  const all = [...primary, ...tech].filter(e => {
     if (seen.has(e.content)) return false;
     seen.add(e.content);
     return true;
   });
+
+  // fallback：无提取结果时，保存原始摘要作为基线记忆
+  if (!all.length && text.trim()) {
+    all.push({ content: text.trim().slice(0, 500), source });
+  }
+
+  return all;
 }
 
 /** 统一提取入口：有 LLM 用 LLM，否则降级到规则引擎 */
