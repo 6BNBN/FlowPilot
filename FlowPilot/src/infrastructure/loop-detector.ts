@@ -5,6 +5,7 @@
 
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
+import { ActiveHoursConfig, isWithinActiveHours } from './heartbeat';
 
 /** 检查点记录 */
 export interface CheckpointRecord {
@@ -131,7 +132,9 @@ export async function detect(
   taskId: string,
   summary: string,
   failed: boolean,
+  activeHours?: ActiveHoursConfig,
 ): Promise<LoopDetection | null> {
+  if (!isWithinActiveHours(activeHours)) return null;
   const window = await loadWindow(basePath);
   const record: CheckpointRecord = {
     taskId,

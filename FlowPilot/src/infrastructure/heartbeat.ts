@@ -10,6 +10,13 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import type { ProgressData } from '../domain/types';
 
+export interface ActiveHoursConfig {
+  activeHoursStart?: number; // 0-23
+  activeHoursEnd?: number;   // 0-23
+  activeDays?: number[];     // 0=Sun..6=Sat
+  timezone?: string;         // e.g. "Asia/Shanghai"
+}
+
 export interface HeartbeatResult {
   warnings: string[];
   actions: string[];
@@ -19,8 +26,23 @@ const TASK_TIMEOUT_MS = 30 * 60 * 1000;
 const MEMORY_COMPACT_THRESHOLD = 100;
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 
+/** 判断当前是否在活跃时间窗口内 */
+export function isWithinActiveHours(cfg?: ActiveHoursConfig): boolean {
+  if (!cfg?.activeHoursStart && cfg?.activeHoursStart !== 0) return true;
+  const now = cfg.timezone
+    ? new Date(new Date().toLocaleString('en-US', { timeZone: cfg.timezone }))
+    : new Date();
+  const hour = now.getHours();
+  const day = now.getDay();
+  if (cfg.activeDays?.length && !cfg.activeDays.includes(day)) return false;
+  const start = cfg.activeHoursStart;
+  const end = cfg.activeHoursEnd ?? 23;
+  return start <= end ? hour >= start && hour <= end : hour >= start || hour <= end;
+}
+
 /** 单次心跳检查 */
-export async function runHeartbeat(basePath: string): Promise<HeartbeatResult> {
+export async function runHeartbeat(basePath: string, config?: ActiveHoursConfig): Promise<HeartbeatResult> {
+  if (!isWithinActiveHours(config)) return { warnings: [], actions: [] };
   const warnings: string[] = [];
   const actions: string[] = [];
 
@@ -71,8 +93,8 @@ export async function runHeartbeat(basePath: string): Promise<HeartbeatResult> {
 }
 
 /** 启动定时心跳，返回停止函数 */
-export function startHeartbeat(basePath: string, intervalMs = DEFAULT_INTERVAL_MS): () => void {
-  const timer = setInterval(() => { runHeartbeat(basePath).catch(() => {}); }, intervalMs);
+export function startHeartbeat(basePath: string, intervalMs = DEFAULT_INTERVAL_MS, config?: ActiveHoursConfig): () => void {
+  const timer = setInterval(() => { runHeartbeat(basePath, config).catch(() => {}); }, intervalMs);
   timer.unref();
   log.debug(`[heartbeat] started (interval=${intervalMs}ms)`);
   return () => { clearInterval(timer); log.debug('[heartbeat] stopped'); };
