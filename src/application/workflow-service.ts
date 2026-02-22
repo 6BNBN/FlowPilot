@@ -10,14 +10,17 @@ import { makeTaskId, cascadeSkip, findNextTask, findParallelTasks, completeTask,
 import { runLifecycleHook } from '../infrastructure/hooks';
 import { log, setWorkflowName } from '../infrastructure/logger';
 import { collectStats, analyzeHistory, reflect, experiment, review } from '../infrastructure/history';
-import { appendMemory, queryMemory, decayMemory, compactMemory, loadMemory, loadDf, saveDf, rebuildDf } from '../infrastructure/memory';
+import { appendMemory, queryMemory, decayMemory, compactMemory, loadMemory } from '../infrastructure/memory';
 import { extractAll } from '../infrastructure/extractor';
-import { truncateHeadTail } from '../infrastructure/truncation';
-import { detect as detectLoop, loadWindow, type LoopDetection } from '../infrastructure/loop-detector';
+import { truncateHeadTail, computeMaxChars } from '../infrastructure/truncation';
+import { detect as detectLoop, type LoopDetection } from '../infrastructure/loop-detector';
+import { startHeartbeat, runHeartbeat } from '../infrastructure/heartbeat';
 import { writeFile, readFile, unlink, mkdir } from 'fs/promises';
 import { join } from 'path';
 
 export class WorkflowService {
+  private stopHeartbeat: (() => void) | null = null;
+
   constructor(
     private readonly repo: WorkflowRepository,
     private readonly parse: (md: string) => WorkflowDefinition,
@@ -92,6 +95,10 @@ export class WorkflowService {
     if (memories.filter(e => !e.archived).length > 50) {
       await compactMemory(this.repo.projectRoot());
     }
+
+    // 启动心跳自检
+    this.stopHeartbeat?.();
+    this.stopHeartbeat = startHeartbeat(this.repo.projectRoot());
 
     return data;
   }
@@ -251,7 +258,11 @@ export class WorkflowService {
 
       if (!detail.trim()) throw new Error(`任务 ${id} checkpoint内容不能为空`);
 
-      const summaryLine = detail.split('\n')[0].slice(0, 80);
+      // 智能截断：防止过长 summary 膨胀 context
+      const maxChars = computeMaxChars(128_000, detail);
+      const truncated = detail.length > maxChars ? truncateHeadTail(detail, maxChars) : detail;
+
+      const summaryLine = truncated.split('\n')[0].slice(0, 80);
       const newData = completeTask(data, id, summaryLine);
       log.debug(`checkpoint ${id}: 完成, summary="${summaryLine}"`);
 
@@ -310,6 +321,10 @@ export class WorkflowService {
 
     const doneCount = newData.tasks.filter(t => t.status === 'done').length;
     const total = newData.tasks.length;
+
+    // 启动心跳自检
+    this.stopHeartbeat?.();
+    this.stopHeartbeat = startHeartbeat(this.repo.projectRoot());
 
     if (resetId) {
       return `恢复工作流: ${newData.name}\n进度: ${doneCount}/${total}\n中断任务 ${resetId} 已重置，将重新执行`;
@@ -397,6 +412,10 @@ export class WorkflowService {
     log.debug(`finish: status=${data.status}`);
     if (data.status === 'idle' || data.status === 'completed') return '工作流已完成，无需重复finish';
     if (!isAllDone(data.tasks)) throw new Error('还有未完成的任务，请先完成所有任务');
+
+    // 停止心跳
+    this.stopHeartbeat?.();
+    this.stopHeartbeat = null;
 
     // 1. 先验证（廉价操作）
     const result = this.repo.verify();
@@ -666,42 +685,10 @@ export class WorkflowService {
     return null;
   }
 
-  /** 心跳自检：任务超时 + 记忆膨胀 + DF一致性 */
+  /** 心跳自检：委托给 heartbeat 模块 */
   async healthCheck(): Promise<string[]> {
-    const warnings: string[] = [];
-    const data = await this.repo.loadProgress();
-    if (!data || data.status !== 'running') return warnings;
-
-    // 1. 活跃任务超时检测（>30分钟无checkpoint）
-    const active = data.tasks.filter(t => t.status === 'active');
-    if (active.length) {
-      const window = await loadWindow(this.repo.projectRoot());
-      const lastCp = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
-      if (lastCp && Date.now() - lastCp > 30 * 60 * 1000) {
-        warnings.push(`[TIMEOUT] 活跃任务 ${active.map(t => t.id).join(',')} 超过30分钟无checkpoint`);
-      }
-    }
-
-    // 2. 记忆膨胀检测（>100条触发自动压缩）
-    const memories = await loadMemory(this.repo.projectRoot());
-    const activeCount = memories.filter(e => !e.archived).length;
-    if (activeCount > 100) {
-      await compactMemory(this.repo.projectRoot());
-      warnings.push(`[MEMORY] 活跃记忆 ${activeCount} 条，已自动压缩`);
-    }
-
-    // 3. DF 统计一致性校验
-    const dfStats = await loadDf(this.repo.projectRoot());
-    if (dfStats.docCount > 0) {
-      const rebuilt = rebuildDf(memories);
-      const diff = Math.abs(dfStats.docCount - rebuilt.docCount) / Math.max(dfStats.docCount, 1);
-      if (diff > 0.1) {
-        await saveDf(this.repo.projectRoot(), rebuilt);
-        warnings.push(`[DF] docCount 偏差 ${(diff * 100).toFixed(0)}%，已重建`);
-      }
-    }
-
-    return warnings;
+    const result = await runHeartbeat(this.repo.projectRoot());
+    return result.warnings;
   }
 
   private async requireProgress(): Promise<ProgressData> {

@@ -1006,7 +1006,7 @@ function collectStats(data) {
     retryTotal,
     tasksByType,
     failsByType,
-    taskResults: data.tasks.map((t) => ({ id: t.id, type: t.type, status: t.status, retries: t.retries })),
+    taskResults: data.tasks.map((t) => ({ id: t.id, type: t.type, status: t.status, retries: t.retries, summary: t.summary || void 0 })),
     startTime: data.startTime || (/* @__PURE__ */ new Date()).toISOString(),
     endTime: (/* @__PURE__ */ new Date()).toISOString()
   };
@@ -1049,7 +1049,7 @@ function analyzeHistory(history) {
   return { suggestions, recommendedConfig };
 }
 async function llmReflect(stats) {
-  const system = `\u4F60\u662F\u5DE5\u4F5C\u6D41\u53CD\u601D\u5F15\u64CE\u3002\u5206\u6790\u7ED9\u5B9A\u7684\u5DE5\u4F5C\u6D41\u7EDF\u8BA1\u6570\u636E\uFF0C\u627E\u51FA\u5931\u8D25\u6A21\u5F0F\u548C\u6539\u8FDB\u673A\u4F1A\u3002\u8FD4\u56DE JSON: {"findings": ["\u53D1\u73B01", ...], "experiments": [{"trigger":"\u89E6\u53D1\u539F\u56E0","observation":"\u89C2\u5BDF\u73B0\u8C61","action":"\u5EFA\u8BAE\u884C\u52A8","expected":"\u9884\u671F\u6548\u679C","target":"config\u6216protocol"}, ...]}\u3002\u53EA\u8FD4\u56DE JSON\uFF0C\u4E0D\u8981\u5176\u4ED6\u5185\u5BB9\u3002`;
+  const system = `\u4F60\u662F\u5DE5\u4F5C\u6D41\u53CD\u601D\u5F15\u64CE\u3002\u5206\u6790\u7ED9\u5B9A\u7684\u5DE5\u4F5C\u6D41\u7EDF\u8BA1\u6570\u636E\uFF0C\u627E\u51FA\u5931\u8D25\u6A21\u5F0F\u548C\u6539\u8FDB\u673A\u4F1A\u3002\u8FD4\u56DE JSON: {"findings": ["\u53D1\u73B01", ...], "experiments": [{"trigger":"\u89E6\u53D1\u539F\u56E0","observation":"\u89C2\u5BDF\u73B0\u8C61","action":"\u5EFA\u8BAE\u884C\u52A8","expected":"\u9884\u671F\u6548\u679C","target":"config\u6216protocol\u6216claude-md"}, ...]}\u3002target=claude-md \u8868\u793A\u4FEE\u6539 CLAUDE.md \u534F\u8BAE\u533A\u57DF\u3002\u53EA\u8FD4\u56DE JSON\uFF0C\u4E0D\u8981\u5176\u4ED6\u5185\u5BB9\u3002`;
   const result = await callClaude(JSON.stringify(stats), system);
   if (!result) return null;
   try {
@@ -1062,15 +1062,78 @@ async function llmReflect(stats) {
   }
   return null;
 }
+function fourDimensionAnalysis(stats) {
+  const findings = [];
+  const experiments = [];
+  const results = stats.taskResults ?? [];
+  const FAIL_RE = /fail|error|timeout|FAILED|异常|超时/i;
+  const failedWithSummary = results.filter((r) => r.status === "failed" && r.summary);
+  const frictionPatterns = /* @__PURE__ */ new Map();
+  for (const r of failedWithSummary) {
+    const matches = r.summary.match(FAIL_RE);
+    if (matches) {
+      const key = matches[0].toLowerCase();
+      frictionPatterns.set(key, (frictionPatterns.get(key) ?? 0) + 1);
+    }
+  }
+  for (const [pattern, count] of frictionPatterns) {
+    if (count >= 2) {
+      findings.push(`[friction] \u5931\u8D25\u6A21\u5F0F "${pattern}" \u51FA\u73B0 ${count} \u6B21`);
+      experiments.push({
+        trigger: `\u91CD\u590D\u5931\u8D25\u6A21\u5F0F: ${pattern}`,
+        observation: `${count} \u4E2A\u4EFB\u52A1\u56E0 "${pattern}" \u5931\u8D25`,
+        action: `\u5728\u5B50Agent\u63D0\u793A\u6A21\u677F\u4E2D\u6DFB\u52A0 "${pattern}" \u9884\u9632\u68C0\u67E5`,
+        expected: "\u51CF\u5C11\u540C\u7C7B\u5931\u8D25",
+        target: "claude-md"
+      });
+    }
+  }
+  const efficient = results.filter((r) => r.status === "done" && r.retries === 0);
+  if (efficient.length > 0 && stats.totalTasks > 0) {
+    const rate = (efficient.length / stats.totalTasks * 100).toFixed(0);
+    findings.push(`[delight] ${efficient.length}/${stats.totalTasks} \u4EFB\u52A1\u4E00\u6B21\u901A\u8FC7 (${rate}%)`);
+  }
+  const typeEntries = Object.entries(stats.tasksByType);
+  if (typeEntries.length > 0) {
+    findings.push(`[patterns] \u7C7B\u578B\u5206\u5E03: ${typeEntries.map(([t, n]) => `${t}=${n}`).join(", ")}`);
+  }
+  const keywords = /* @__PURE__ */ new Map();
+  for (const r of results) {
+    if (!r.summary) continue;
+    for (const w of r.summary.split(/\s+/).filter((w2) => w2.length > 2)) {
+      keywords.set(w, (keywords.get(w) ?? 0) + 1);
+    }
+  }
+  const topKw = [...keywords.entries()].filter(([, c]) => c >= 3).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  if (topKw.length) {
+    findings.push(`[patterns] \u9AD8\u9891\u5173\u952E\u8BCD: ${topKw.map(([w, c]) => `${w}(${c})`).join(", ")}`);
+  }
+  const skipped = results.filter((r) => r.status === "skipped");
+  if (skipped.length) {
+    findings.push(`[gaps] ${skipped.length} \u4E2A\u4EFB\u52A1\u88AB\u8DF3\u8FC7: ${skipped.map((r) => r.id).join(",")}`);
+  }
+  let chain = 0, maxChain = 0;
+  for (const r of results) {
+    chain = r.status === "failed" ? chain + 1 : 0;
+    maxChain = Math.max(maxChain, chain);
+  }
+  if (maxChain >= 2) {
+    findings.push(`[gaps] \u6700\u957F\u8FDE\u7EED\u5931\u8D25\u94FE: ${maxChain} \u4E2A\u4EFB\u52A1`);
+  }
+  return { findings, experiments };
+}
 function ruleReflect(stats) {
   const findings = [];
   const experiments = [];
   const results = stats.taskResults ?? [];
+  const fourD = fourDimensionAnalysis(stats);
+  findings.push(...fourD.findings);
+  experiments.push(...fourD.experiments);
   let streak = 0;
-  for (const r of results) {
-    streak = r.status === "failed" ? streak + 1 : 0;
+  for (let i = 0; i < results.length; i++) {
+    streak = results[i].status === "failed" ? streak + 1 : 0;
     if (streak >= 2) {
-      findings.push(`\u8FDE\u7EED\u5931\u8D25\u94FE\uFF1A\u4ECE\u4EFB\u52A1 ${results[results.indexOf(r) - 1].id} \u5F00\u59CB\u8FDE\u7EED\u5931\u8D25`);
+      findings.push(`\u8FDE\u7EED\u5931\u8D25\u94FE\uFF1A\u4ECE\u4EFB\u52A1 ${results[i - streak + 1].id} \u5F00\u59CB\u8FDE\u7EED\u5931\u8D25`);
       experiments.push({
         trigger: "\u8FDE\u7EED\u5931\u8D25\u94FE",
         observation: `${streak} \u4E2A\u4EFB\u52A1\u8FDE\u7EED\u5931\u8D25`,
@@ -1138,46 +1201,124 @@ async function safeRead(p, fallback) {
 var KNOWN_PARAMS = ["maxRetries", "timeout", "parallelLimit", "verifyTimeout"];
 function parseConfigAction(action) {
   for (const k of KNOWN_PARAMS) {
-    if (action.includes(k)) {
-      const m = action.match(/(\d+)/);
-      if (m) return { key: k, value: Number(m[1]) };
-    }
+    const re = new RegExp(k + "\\D*(\\d+)");
+    const m = action.match(re);
+    if (m) return { key: k, value: Number(m[1]) };
   }
   return null;
 }
+async function saveSnapshot(basePath2, files) {
+  const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+  const p = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", `snapshot-${ts}.json`);
+  const snapshot = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), files };
+  await (0, import_promises3.mkdir)((0, import_path4.dirname)(p), { recursive: true });
+  await (0, import_promises3.writeFile)(p, JSON.stringify(snapshot, null, 2), "utf-8");
+  return p;
+}
+async function loadLatestSnapshot(basePath2) {
+  const dir = (0, import_path4.join)(basePath2, ".flowpilot", "evolution");
+  try {
+    const files = (await (0, import_promises3.readdir)(dir)).filter((f) => f.startsWith("snapshot-") && f.endsWith(".json")).sort();
+    if (!files.length) return null;
+    return JSON.parse(await (0, import_promises3.readFile)((0, import_path4.join)(dir, files[files.length - 1]), "utf-8"));
+  } catch {
+    return null;
+  }
+}
+async function appendExperimentsMd(basePath2, expLog, report) {
+  const mdPath = (0, import_path4.join)(basePath2, ".flowpilot", "EXPERIMENTS.md");
+  const existing = await safeRead(mdPath, "# Evolution Experiments\n");
+  const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+  const applied = expLog.experiments.filter((e) => e.applied);
+  if (!applied.length) return;
+  const entries = applied.map(
+    (e) => `### [${date}] ${e.trigger}
+**\u89E6\u53D1**: ${e.trigger}
+**\u89C2\u5BDF**: ${e.observation}
+**\u884C\u52A8**: ${e.action} (target: ${e.target})
+**\u9884\u671F\u6548\u679C**: ${e.expected}
+**\u72B6\u6001**: ${expLog.status}
+`
+  ).join("\n");
+  await (0, import_promises3.mkdir)((0, import_path4.dirname)(mdPath), { recursive: true });
+  await (0, import_promises3.writeFile)(mdPath, existing.trimEnd() + "\n\n" + entries, "utf-8");
+}
 async function experiment(report, basePath2) {
-  const log2 = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), experiments: [] };
+  const log2 = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), experiments: [], status: "completed" };
   if (!report.experiments.length) return log2;
   const configPath = (0, import_path4.join)(basePath2, ".flowpilot", "config.json");
   const protocolPath = (0, import_path4.join)(basePath2, "FlowPilot", "src", "templates", "protocol.md");
-  for (const exp of report.experiments) {
-    const applied = { ...exp, applied: false, snapshotBefore: "" };
-    try {
-      if (exp.target === "config") {
-        const raw = await safeRead(configPath, "{}");
-        applied.snapshotBefore = raw;
-        const parsed = parseConfigAction(exp.action);
-        if (parsed) {
-          const cfg = JSON.parse(raw);
-          cfg[parsed.key] = parsed.value;
-          await (0, import_promises3.mkdir)((0, import_path4.dirname)(configPath), { recursive: true });
-          await (0, import_promises3.writeFile)(configPath, JSON.stringify(cfg, null, 2), "utf-8");
-          applied.applied = true;
-        }
-      } else if (exp.target === "protocol") {
-        const content = await safeRead(protocolPath, "");
-        applied.snapshotBefore = content;
-        const appendix = `
+  const claudeMdPath = (0, import_path4.join)(basePath2, "CLAUDE.md");
+  const configSnapshot = await safeRead(configPath, "{}");
+  const protocolSnapshot = await safeRead(protocolPath, "");
+  const claudeMdSnapshot = await safeRead(claudeMdPath, "");
+  const snapshotFile = await saveSnapshot(basePath2, { "config.json": configSnapshot, "protocol.md": protocolSnapshot, "CLAUDE.md": claudeMdSnapshot });
+  log2.snapshotFile = snapshotFile;
+  try {
+    let configObj = JSON.parse(configSnapshot);
+    let protocolContent = protocolSnapshot;
+    let claudeMdContent = claudeMdSnapshot;
+    let claudeMdExpCount = 0;
+    for (const exp of report.experiments) {
+      const applied = { ...exp, applied: false, snapshotBefore: "" };
+      try {
+        if (exp.target === "config") {
+          applied.snapshotBefore = configSnapshot;
+          const parsed = parseConfigAction(exp.action);
+          if (parsed) {
+            configObj = { ...configObj, [parsed.key]: parsed.value };
+            applied.applied = true;
+          }
+        } else if (exp.target === "protocol") {
+          applied.snapshotBefore = protocolSnapshot;
+          const appendix = `
 <!-- evolution: ${exp.trigger} -->
 > ${exp.action}
 `;
-        await (0, import_promises3.mkdir)((0, import_path4.dirname)(protocolPath), { recursive: true });
-        await (0, import_promises3.writeFile)(protocolPath, content + appendix, "utf-8");
-        applied.applied = true;
+          protocolContent += appendix;
+          applied.applied = true;
+        } else if (exp.target === "claude-md") {
+          applied.snapshotBefore = claudeMdSnapshot;
+          if (claudeMdExpCount >= 3) {
+          } else {
+            const stripComments = (s) => s.replace(/<!--/g, "").replace(/-->/g, "");
+            const safeTrigger = stripComments(exp.trigger);
+            const safeAction = stripComments(exp.action);
+            const endTag = "<!-- flowpilot:end -->";
+            const idx = claudeMdContent.indexOf(endTag);
+            if (idx >= 0) {
+              const insertion = `
+<!-- evolution: ${safeTrigger} -->
+> ${safeAction}
+`;
+              const startTag = "<!-- flowpilot:start -->";
+              const startIdx = claudeMdContent.indexOf(startTag);
+              const regionSize = idx + endTag.length - (startIdx >= 0 ? startIdx : 0) + insertion.length;
+              if (regionSize <= 10240) {
+                claudeMdContent = claudeMdContent.slice(0, idx) + insertion + claudeMdContent.slice(idx);
+                applied.applied = true;
+                claudeMdExpCount++;
+              }
+            }
+          }
+        }
+      } catch {
       }
-    } catch {
+      log2.experiments.push(applied);
     }
-    log2.experiments.push(applied);
+    if (log2.experiments.some((e) => e.applied && e.target === "config")) {
+      await (0, import_promises3.mkdir)((0, import_path4.dirname)(configPath), { recursive: true });
+      await (0, import_promises3.writeFile)(configPath, JSON.stringify(configObj, null, 2), "utf-8");
+    }
+    if (log2.experiments.some((e) => e.applied && e.target === "protocol")) {
+      await (0, import_promises3.mkdir)((0, import_path4.dirname)(protocolPath), { recursive: true });
+      await (0, import_promises3.writeFile)(protocolPath, protocolContent, "utf-8");
+    }
+    if (log2.experiments.some((e) => e.applied && e.target === "claude-md")) {
+      await (0, import_promises3.writeFile)(claudeMdPath, claudeMdContent, "utf-8");
+    }
+  } catch {
+    log2.status = "failed";
   }
   const logPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
   await (0, import_promises3.mkdir)((0, import_path4.dirname)(logPath), { recursive: true });
@@ -1188,6 +1329,7 @@ async function experiment(report, basePath2) {
   }
   existing.push(log2);
   await (0, import_promises3.writeFile)(logPath, JSON.stringify(existing, null, 2), "utf-8");
+  await appendExperimentsMd(basePath2, log2, report);
   return log2;
 }
 async function review(basePath2) {
@@ -1197,6 +1339,7 @@ async function review(basePath2) {
   const historyDir = (0, import_path4.join)(basePath2, ".flowpilot", "history");
   const configPath = (0, import_path4.join)(basePath2, ".flowpilot", "config.json");
   const protocolPath = (0, import_path4.join)(basePath2, "FlowPilot", "src", "templates", "protocol.md");
+  const claudeMdPath = (0, import_path4.join)(basePath2, "CLAUDE.md");
   const expPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
   let history = [];
   try {
@@ -1259,18 +1402,40 @@ async function review(basePath2) {
   } else {
     checks.push({ name: "experiments.json", passed: true, detail: "\u6587\u4EF6\u4E0D\u5B58\u5728\uFF0C\u8DF3\u8FC7" });
   }
+  const claudeMdRaw = await safeRead(claudeMdPath, "");
+  if (claudeMdRaw) {
+    const hasStart = claudeMdRaw.includes("<!-- flowpilot:start -->");
+    const hasEnd = claudeMdRaw.includes("<!-- flowpilot:end -->");
+    const intact = hasStart && hasEnd;
+    checks.push({ name: "CLAUDE.md", passed: intact, detail: intact ? "\u534F\u8BAE\u6807\u8BB0\u5B8C\u6574" : "\u534F\u8BAE\u6807\u8BB0\u7F3A\u5931\u6216\u635F\u574F" });
+    if (!intact && !rolledBack) {
+      rolledBack = true;
+      rollbackReason = "CLAUDE.md \u534F\u8BAE\u6807\u8BB0\u635F\u574F";
+    }
+  }
   if (rolledBack) {
     try {
       const logs = JSON.parse(await (0, import_promises3.readFile)(expPath, "utf-8"));
-      const last = logs[logs.length - 1];
-      if (last) {
-        for (const exp of last.experiments) {
-          if (!exp.applied || !exp.snapshotBefore) continue;
-          const target = exp.target === "config" ? configPath : protocolPath;
-          await (0, import_promises3.writeFile)(target, exp.snapshotBefore, "utf-8");
+      const firstExp = logs.find((l) => l.snapshotFile);
+      let snapshot = null;
+      if (firstExp?.snapshotFile) {
+        try {
+          snapshot = JSON.parse(await (0, import_promises3.readFile)(firstExp.snapshotFile, "utf-8"));
+        } catch {
         }
       }
-    } catch {
+      if (!snapshot) snapshot = await loadLatestSnapshot(basePath2);
+      if (snapshot) {
+        if (snapshot.files["config.json"]) await (0, import_promises3.writeFile)(configPath, snapshot.files["config.json"], "utf-8");
+        if (snapshot.files["protocol.md"]) await (0, import_promises3.writeFile)(protocolPath, snapshot.files["protocol.md"], "utf-8");
+        if (snapshot.files["CLAUDE.md"]) await (0, import_promises3.writeFile)(claudeMdPath, snapshot.files["CLAUDE.md"], "utf-8");
+      }
+      if (logs.length) {
+        logs[logs.length - 1].status = "skipped";
+        await (0, import_promises3.writeFile)(expPath, JSON.stringify(logs, null, 2), "utf-8");
+      }
+    } catch (e) {
+      log.warn(`[review] rollback failed: ${e}`);
     }
   }
   const result = {
@@ -1287,48 +1452,364 @@ async function review(basePath2) {
 }
 
 // src/infrastructure/memory.ts
+var import_promises6 = require("fs/promises");
+var import_path7 = require("path");
+var import_crypto2 = require("crypto");
+
+// src/infrastructure/lang-analyzers.ts
+var STOP_WORDS = {
+  en: /* @__PURE__ */ new Set(["the", "is", "at", "which", "on", "a", "an", "and", "or", "but", "in", "of", "to", "for", "with", "that", "this", "it", "be", "as", "are", "was", "were", "been", "being", "have", "has", "had", "do", "does", "did", "will", "would", "shall", "should", "may", "might", "can", "could", "not", "no", "nor", "so", "if", "then", "than", "too", "very", "just", "about", "above", "after", "before", "between", "into", "through", "during", "from", "up", "down", "out", "off", "over", "under", "again", "further", "once", "here", "there", "when", "where", "why", "how", "all", "each", "every", "both", "few", "more", "most", "other", "some", "such", "only", "own", "same", "also", "by", "i", "me", "my", "we", "our", "you", "your", "he", "him", "his", "she", "her", "they", "them", "their", "its", "what", "who", "whom"]),
+  zh: /* @__PURE__ */ new Set(["\u7684", "\u4E86", "\u5728", "\u662F", "\u6211", "\u6709", "\u548C", "\u5C31", "\u4E0D", "\u90FD", "\u800C", "\u53CA", "\u4E0E", "\u8FD9", "\u90A3", "\u4F60", "\u4ED6", "\u5979", "\u5B83", "\u4EEC", "\u4F1A", "\u80FD", "\u8981", "\u4E5F", "\u5F88", "\u628A", "\u88AB", "\u8BA9", "\u7ED9", "\u4ECE", "\u5230", "\u5BF9", "\u8BF4", "\u53BB", "\u6765", "\u505A", "\u53EF\u4EE5", "\u6CA1\u6709", "\u56E0\u4E3A", "\u6240\u4EE5", "\u5982\u679C", "\u4F46\u662F", "\u867D\u7136", "\u5DF2\u7ECF", "\u8FD8\u662F", "\u6216\u8005", "\u4EE5\u53CA", "\u5173\u4E8E"]),
+  ja: /* @__PURE__ */ new Set(["\u306E", "\u306B", "\u306F", "\u3092", "\u305F", "\u304C", "\u3067", "\u3066", "\u3068", "\u3057", "\u308C", "\u3055", "\u3042\u308B", "\u3044\u308B", "\u3082", "\u3059\u308B", "\u304B\u3089", "\u306A", "\u3053\u3068", "\u3088\u3046", "\u306A\u3044", "\u306A\u308B", "\u304A", "\u307E\u3059", "\u3067\u3059", "\u3060", "\u305D\u306E", "\u3053\u306E", "\u305D\u308C", "\u3053\u308C", "\u3042\u306E", "\u3069\u306E", "\u3078", "\u3088\u308A", "\u307E\u3067", "\u305F\u3081"]),
+  ko: /* @__PURE__ */ new Set(["\uC758", "\uAC00", "\uC774", "\uC740", "\uB294", "\uC744", "\uB97C", "\uC5D0", "\uC640", "\uACFC", "\uB3C4", "\uB85C", "\uC73C\uB85C", "\uC5D0\uC11C", "\uAE4C\uC9C0", "\uBD80\uD130", "\uB9CC", "\uBCF4\uB2E4", "\uCC98\uB7FC", "\uAC19\uC774", "\uD558\uB2E4", "\uC788\uB2E4", "\uB418\uB2E4", "\uC5C6\uB2E4", "\uC54A\uB2E4", "\uADF8", "\uC774", "\uC800", "\uAC83", "\uC218", "\uB4F1", "\uB54C"]),
+  fr: /* @__PURE__ */ new Set(["le", "la", "les", "de", "des", "un", "une", "et", "en", "du", "au", "aux", "ce", "ces", "que", "qui", "ne", "pas", "par", "pour", "sur", "avec", "dans", "est", "sont", "a", "ont", "il", "elle", "nous", "vous", "ils", "elles", "se", "son", "sa", "ses", "leur", "leurs", "mais", "ou", "donc", "car", "ni"]),
+  de: /* @__PURE__ */ new Set(["der", "die", "das", "ein", "eine", "und", "in", "von", "zu", "mit", "auf", "f\xFCr", "an", "bei", "nach", "\xFCber", "vor", "aus", "wie", "als", "oder", "aber", "wenn", "auch", "noch", "nur", "nicht", "ist", "sind", "hat", "haben", "wird", "werden", "ich", "du", "er", "sie", "es", "wir", "ihr"]),
+  es: /* @__PURE__ */ new Set(["el", "la", "los", "las", "de", "en", "un", "una", "y", "que", "del", "al", "es", "por", "con", "no", "se", "su", "para", "como", "m\xE1s", "pero", "sus", "le", "ya", "o", "fue", "ha", "son", "est\xE1", "muy", "tambi\xE9n", "desde", "todo", "nos", "cuando", "entre", "sin", "sobre", "ser", "tiene"]),
+  pt: /* @__PURE__ */ new Set(["o", "a", "os", "as", "de", "em", "um", "uma", "e", "que", "do", "da", "dos", "das", "no", "na", "nos", "nas", "por", "para", "com", "n\xE3o", "se", "seu", "sua", "mais", "mas", "como", "foi", "s\xE3o", "est\xE1", "tem", "j\xE1", "ou", "ser", "ter", "muito", "tamb\xE9m", "ao", "aos", "pela", "pelo"]),
+  ru: /* @__PURE__ */ new Set(["\u0438", "\u0432", "\u043D\u0435", "\u043D\u0430", "\u044F", "\u0447\u0442\u043E", "\u043E\u043D", "\u0441", "\u044D\u0442\u043E", "\u0430", "\u043A\u0430\u043A", "\u043D\u043E", "\u043E\u043D\u0430", "\u043E\u043D\u0438", "\u043C\u044B", "\u0432\u044B", "\u0432\u0441\u0435", "\u0435\u0433\u043E", "\u0435\u0451", "\u0438\u0445", "\u043E\u0442", "\u043F\u043E", "\u0437\u0430", "\u0434\u043B\u044F", "\u0438\u0437", "\u0434\u043E", "\u0442\u0430\u043A", "\u0436\u0435", "\u0442\u043E", "\u0431\u044B", "\u0431\u044B\u043B\u043E", "\u0431\u044B\u0442\u044C", "\u0443\u0436\u0435", "\u0435\u0449\u0451", "\u0438\u043B\u0438", "\u043D\u0438", "\u043D\u0435\u0442", "\u0434\u0430", "\u0435\u0441\u0442\u044C", "\u0431\u044B\u043B", "\u0431\u044B\u043B\u0430", "\u0431\u044B\u043B\u0438"]),
+  ar: /* @__PURE__ */ new Set(["\u0641\u064A", "\u0645\u0646", "\u0639\u0644\u0649", "\u0625\u0644\u0649", "\u0623\u0646", "\u0647\u0630\u0627", "\u0627\u0644\u062A\u064A", "\u0627\u0644\u0630\u064A", "\u0647\u0648", "\u0647\u064A", "\u0645\u0627", "\u0644\u0627", "\u0643\u0627\u0646", "\u0639\u0646", "\u0645\u0639", "\u0647\u0630\u0647", "\u0643\u0644", "\u0628\u064A\u0646", "\u0642\u062F", "\u0630\u0644\u0643", "\u0628\u0639\u062F", "\u0639\u0646\u062F", "\u0644\u0645", "\u0623\u0648", "\u062D\u062A\u0649", "\u0625\u0630\u0627", "\u062B\u0645", "\u0623\u064A", "\u0642\u0628\u0644", "\u0641\u0642\u0637", "\u0645\u0646\u0630", "\u0623\u0646\u0647", "\u0644\u0643\u0646", "\u0646\u062D\u0646", "\u0647\u0645", "\u0623\u0646\u0627", "\u0643\u0627\u0646\u062A"])
+};
+function stem(word) {
+  if (word.length < 4) return word;
+  let w = word;
+  if (w.endsWith("ies") && w.length > 4) w = w.slice(0, -3) + "i";
+  else if (w.endsWith("sses")) w = w.slice(0, -2);
+  else if (w.endsWith("ness")) w = w.slice(0, -4);
+  else if (w.endsWith("ment")) w = w.slice(0, -4);
+  else if (w.endsWith("ingly")) w = w.slice(0, -5);
+  else if (w.endsWith("edly")) w = w.slice(0, -4);
+  else if (w.endsWith("ing") && w.length > 5) w = w.slice(0, -3);
+  else if (w.endsWith("tion")) w = w.slice(0, -3) + "t";
+  else if (w.endsWith("sion")) w = w.slice(0, -3) + "s";
+  else if (w.endsWith("ful")) w = w.slice(0, -3);
+  else if (w.endsWith("ous")) w = w.slice(0, -3);
+  else if (w.endsWith("ive")) w = w.slice(0, -3);
+  else if (w.endsWith("able")) w = w.slice(0, -4);
+  else if (w.endsWith("ible")) w = w.slice(0, -4);
+  else if (w.endsWith("ally")) w = w.slice(0, -4) + "al";
+  else if (w.endsWith("ly") && w.length > 4) w = w.slice(0, -2);
+  else if (w.endsWith("ed") && w.length > 4) w = w.slice(0, -2);
+  else if (w.endsWith("er") && w.length > 4) w = w.slice(0, -2);
+  else if (w.endsWith("es") && w.length > 4) w = w.slice(0, -2);
+  else if (w.endsWith("s") && !w.endsWith("ss") && w.length > 3) w = w.slice(0, -1);
+  if (w.endsWith("ational")) w = w.slice(0, -7) + "ate";
+  else if (w.endsWith("izer")) w = w.slice(0, -1);
+  else if (w.endsWith("fulness")) w = w.slice(0, -4);
+  return w.length >= 2 ? w : word;
+}
+function isJapaneseKana(cp) {
+  return cp >= 12352 && cp <= 12447 || cp >= 12448 && cp <= 12543;
+}
+function isHangul(cp) {
+  return cp >= 44032 && cp <= 55215 || cp >= 4352 && cp <= 4607;
+}
+function isCJKIdeograph(cp) {
+  return cp >= 19968 && cp <= 40959 || cp >= 13312 && cp <= 19903 || cp >= 131072 && cp <= 173791 || cp >= 63744 && cp <= 64255;
+}
+function isCyrillic(cp) {
+  return cp >= 1024 && cp <= 1279;
+}
+function isArabic(cp) {
+  return cp >= 1536 && cp <= 1791 || cp >= 1872 && cp <= 1919;
+}
+var LATIN_LANG_MARKERS = [
+  ["fr", /\b(le|la|les|des|une|est|dans|pour|avec|sont|nous|vous|cette|aussi|mais|comme|très|être|avoir|fait|tout|quel|cette|ces|aux|sur|par|qui|que)\b/gi],
+  ["de", /\b(der|die|das|ein|eine|und|ist|sind|nicht|auf|für|mit|auch|noch|nur|oder|aber|wenn|wird|haben|über|nach|vor|aus|wie|als|ich|wir|ihr)\b/gi],
+  ["es", /\b(el|los|las|una|del|por|con|para|como|más|pero|fue|está|muy|también|desde|todo|cuando|entre|sin|sobre|tiene|puede|hay|ser|este|esta|estos)\b/gi],
+  ["pt", /\b(os|uma|das|dos|pela|pelo|para|com|não|mais|mas|como|foi|são|está|tem|muito|também|seu|sua|nos|nas|quando|entre|desde|pode|ser|ter|este|esta)\b/gi]
+];
+function detectLanguage(text) {
+  const sample = text.slice(0, 500);
+  if (!sample.trim()) return "en";
+  let kana = 0, hangul = 0, cjk = 0, cyrillic = 0, arabic = 0, latin = 0, total = 0;
+  for (const ch of sample) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp <= 32) continue;
+    total++;
+    if (isJapaneseKana(cp)) kana++;
+    else if (isHangul(cp)) hangul++;
+    else if (isCJKIdeograph(cp)) cjk++;
+    else if (isCyrillic(cp)) cyrillic++;
+    else if (isArabic(cp)) arabic++;
+    else if (cp >= 65 && cp <= 90 || cp >= 97 && cp <= 122 || cp >= 192 && cp <= 591) latin++;
+  }
+  if (total === 0) return "en";
+  if (kana / total > 0.1) return "ja";
+  if (hangul / total > 0.1) return "ko";
+  if (cjk / total > 0.15) return "zh";
+  if (cyrillic / total > 0.15) return "ru";
+  if (arabic / total > 0.15) return "ar";
+  if (latin / total > 0.4) {
+    let bestLang = "en", bestScore = 0;
+    for (const [lang, re] of LATIN_LANG_MARKERS) {
+      const matches = sample.match(re);
+      const score = matches ? matches.length : 0;
+      if (score > bestScore) {
+        bestScore = score;
+        bestLang = lang;
+      }
+    }
+    return bestScore >= 3 ? bestLang : "en";
+  }
+  return "en";
+}
+function removeStopWords(tokens, lang) {
+  const stops = STOP_WORDS[lang];
+  if (!stops) return tokens;
+  return tokens.filter((t) => !stops.has(t));
+}
+function analyze(tokens, lang) {
+  const detectedLang = lang ?? "en";
+  let result = removeStopWords(tokens, detectedLang);
+  if (detectedLang === "en") result = result.map(stem);
+  return { tokens: result, lang: detectedLang };
+}
+
+// src/infrastructure/embedding.ts
+var import_https2 = require("https");
+var import_crypto = require("crypto");
 var import_promises4 = require("fs/promises");
 var import_path5 = require("path");
-var import_crypto = require("crypto");
-var BM25_K1 = 1.2;
-var BM25_B = 0.75;
-var MEMORY_FILE = "memory.json";
-var DF_FILE = "memory-df.json";
-var SNAPSHOT_FILE = "memory-snapshot.json";
-var VECTOR_FILE = "vectors.json";
-var EVERGREEN_SOURCES = ["architecture", "identity", "decision"];
-var CACHE_FILE = "memory-cache.json";
-var CACHE_MAX = 50;
-var CACHE_PRUNE_RATIO = 0.1;
+var TIMEOUT_MS = 15e3;
+var CACHE_FILE = "embedding-cache.json";
+var memCache = null;
 function sha256(text) {
   return (0, import_crypto.createHash)("sha256").update(text).digest("hex");
 }
 function cachePath(basePath2) {
   return (0, import_path5.join)(basePath2, ".flowpilot", CACHE_FILE);
 }
+async function loadEmbeddingCache(basePath2) {
+  if (memCache) return memCache;
+  try {
+    memCache = JSON.parse(await (0, import_promises4.readFile)(cachePath(basePath2), "utf-8"));
+    return memCache;
+  } catch {
+    memCache = /* @__PURE__ */ Object.create(null);
+    return memCache;
+  }
+}
+async function saveEmbeddingCache(basePath2, cache) {
+  const p = cachePath(basePath2);
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
+  await (0, import_promises4.writeFile)(p, JSON.stringify(cache), "utf-8");
+}
+function getConfig() {
+  const apiKey = process.env.EMBEDDING_API_KEY;
+  if (!apiKey) return null;
+  const rawUrl = process.env.EMBEDDING_API_URL || "https://api.voyageai.com/v1/embeddings";
+  const model = process.env.EMBEDDING_MODEL || "voyage-3-lite";
+  try {
+    return { url: new URL(rawUrl), apiKey, model };
+  } catch {
+    return null;
+  }
+}
+function callEmbeddingAPI(text, config) {
+  return new Promise((resolve2) => {
+    const body = JSON.stringify({ input: text, model: config.model });
+    const req = (0, import_https2.request)({
+      hostname: config.url.hostname,
+      port: config.url.port || void 0,
+      path: config.url.pathname,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${config.apiKey}`
+      }
+    }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => data += chunk);
+      res.on("end", () => {
+        try {
+          if (res.statusCode !== 200) {
+            resolve2(null);
+            return;
+          }
+          const json = JSON.parse(data);
+          const embedding = json.data?.[0]?.embedding;
+          resolve2(Array.isArray(embedding) ? embedding : null);
+        } catch {
+          resolve2(null);
+        }
+      });
+    });
+    req.on("error", () => resolve2(null));
+    req.setTimeout(TIMEOUT_MS, () => {
+      req.destroy();
+      resolve2(null);
+    });
+    req.write(body);
+    req.end();
+  });
+}
+async function embedText(text, basePath2) {
+  const config = getConfig();
+  if (!config) return null;
+  const hash = sha256(text);
+  if (basePath2) {
+    const cache = await loadEmbeddingCache(basePath2);
+    if (cache[hash]) return cache[hash];
+  }
+  const vector = await callEmbeddingAPI(text, config);
+  if (!vector) {
+    log.debug("embedding: API \u8C03\u7528\u5931\u8D25\uFF0C\u964D\u7EA7");
+    return null;
+  }
+  if (basePath2) {
+    const cache = await loadEmbeddingCache(basePath2);
+    memCache = { ...cache, [hash]: vector };
+    await saveEmbeddingCache(basePath2, memCache);
+  }
+  log.debug(`embedding: \u83B7\u53D6 ${vector.length} \u7EF4\u5411\u91CF`);
+  return vector;
+}
+var VISION_TIMEOUT_MS = 3e4;
+async function describeImage(imageUrl) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+  return new Promise((resolve2) => {
+    const body = JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 300,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "image", source: { type: "url", url: imageUrl } },
+          { type: "text", text: "\u7528\u7B80\u77ED\u6587\u672C\u63CF\u8FF0\u8FD9\u5F20\u56FE\u7247\u7684\u5185\u5BB9\uFF0C\u4E0D\u8D85\u8FC7200\u5B57\u3002" }
+        ]
+      }]
+    });
+    const req = (0, import_https2.request)({
+      hostname: "api.anthropic.com",
+      path: "/v1/messages",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01"
+      }
+    }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => data += chunk);
+      res.on("end", () => {
+        try {
+          if (res.statusCode !== 200) {
+            resolve2(null);
+            return;
+          }
+          const json = JSON.parse(data);
+          const text = json.content?.[0]?.text;
+          resolve2(typeof text === "string" ? text : null);
+        } catch {
+          resolve2(null);
+        }
+      });
+    });
+    req.on("error", () => resolve2(null));
+    req.setTimeout(VISION_TIMEOUT_MS, () => {
+      req.destroy();
+      resolve2(null);
+    });
+    req.write(body);
+    req.end();
+  });
+}
+
+// src/infrastructure/vector-store.ts
+var import_promises5 = require("fs/promises");
+var import_path6 = require("path");
+var DENSE_VECTOR_FILE = "dense-vectors.json";
+function denseVectorPath(dir) {
+  return (0, import_path6.join)(dir, ".flowpilot", DENSE_VECTOR_FILE);
+}
+async function loadDenseVectors(dir) {
+  try {
+    return JSON.parse(await (0, import_promises5.readFile)(denseVectorPath(dir), "utf-8"));
+  } catch {
+    return [];
+  }
+}
+async function saveDenseVectors(dir, entries) {
+  const p = denseVectorPath(dir);
+  await (0, import_promises5.mkdir)((0, import_path6.dirname)(p), { recursive: true });
+  await (0, import_promises5.writeFile)(p, JSON.stringify(entries), "utf-8");
+}
+function denseCosineSim(a, b) {
+  if (a.length !== b.length || !a.length) return 0;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (!na || !nb) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+function denseSearch(query, entries, topK) {
+  return entries.map((e) => ({ id: e.id, score: denseCosineSim(query, e.vector) })).filter((r) => r.score > 0).sort((a, b) => b.score - a.score).slice(0, topK);
+}
+
+// src/infrastructure/memory.ts
+var BM25_K1 = 1.2;
+var BM25_B = 0.75;
+var SPARSE_DIM_BITS = 20;
+var SPARSE_DIM_MASK = (1 << SPARSE_DIM_BITS) - 1;
+function termHash(term) {
+  let h = 2166136261;
+  for (let i = 0; i < term.length; i++) {
+    h ^= term.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0 & SPARSE_DIM_MASK;
+}
+var MEMORY_FILE = "memory.json";
+var DF_FILE = "memory-df.json";
+var SNAPSHOT_FILE = "memory-snapshot.json";
+var VECTOR_FILE = "vectors.json";
+var EVERGREEN_SOURCES = ["architecture", "identity", "decision"];
+var CACHE_FILE2 = "memory-cache.json";
+var CACHE_MAX = 50;
+var CACHE_TTL_MS = 24 * 60 * 60 * 1e3;
+var dfDirty = false;
+function sha2562(text) {
+  return (0, import_crypto2.createHash)("sha256").update(text).digest("hex");
+}
+function cachePath2(basePath2) {
+  return (0, import_path7.join)(basePath2, ".flowpilot", CACHE_FILE2);
+}
 async function loadCache(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises4.readFile)(cachePath(basePath2), "utf-8"));
+    const cache = JSON.parse(await (0, import_promises6.readFile)(cachePath2(basePath2), "utf-8"));
+    const now = Date.now();
+    for (const k of Object.keys(cache.entries)) {
+      if (now - (cache.entries[k].createdAt ?? 0) > CACHE_TTL_MS) delete cache.entries[k];
+    }
+    return cache;
   } catch {
     return { entries: {} };
   }
 }
 async function saveCache(basePath2, cache) {
-  const p = cachePath(basePath2);
-  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
+  const p = cachePath2(basePath2);
+  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
+  const now = Date.now();
+  for (const k of Object.keys(cache.entries)) {
+    if (now - (cache.entries[k].createdAt ?? 0) > CACHE_TTL_MS) delete cache.entries[k];
+  }
   const keys = Object.keys(cache.entries);
   if (keys.length > CACHE_MAX) {
     const sorted = keys.sort(
-      (a, b) => cache.entries[a].timestamp.localeCompare(cache.entries[b].timestamp)
+      (a, b) => (cache.entries[a].createdAt ?? 0) - (cache.entries[b].createdAt ?? 0)
     );
-    const pruneCount = Math.ceil(keys.length * CACHE_PRUNE_RATIO);
+    const pruneCount = Math.ceil(keys.length * 0.25);
     for (const k of sorted.slice(0, pruneCount)) delete cache.entries[k];
   }
-  await (0, import_promises4.writeFile)(p, JSON.stringify(cache), "utf-8");
+  await (0, import_promises6.writeFile)(p, JSON.stringify(cache), "utf-8");
 }
 async function clearCache(basePath2) {
   try {
-    await (0, import_promises4.unlink)(cachePath(basePath2));
+    await (0, import_promises6.unlink)(cachePath2(basePath2));
   } catch {
   }
 }
@@ -1338,33 +1819,33 @@ function temporalDecayScore(entry, halfLifeDays = 30) {
   return Math.exp(-Math.LN2 / halfLifeDays * ageDays);
 }
 function memoryPath(basePath2) {
-  return (0, import_path5.join)(basePath2, ".flowpilot", MEMORY_FILE);
+  return (0, import_path7.join)(basePath2, ".flowpilot", MEMORY_FILE);
 }
 function dfPath(basePath2) {
-  return (0, import_path5.join)(basePath2, ".flowpilot", DF_FILE);
+  return (0, import_path7.join)(basePath2, ".flowpilot", DF_FILE);
 }
 function snapshotPath(basePath2) {
-  return (0, import_path5.join)(basePath2, ".flowpilot", SNAPSHOT_FILE);
+  return (0, import_path7.join)(basePath2, ".flowpilot", SNAPSHOT_FILE);
 }
 function vectorFilePath(basePath2) {
-  return (0, import_path5.join)(basePath2, ".flowpilot", VECTOR_FILE);
+  return (0, import_path7.join)(basePath2, ".flowpilot", VECTOR_FILE);
 }
 async function loadVectors(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises4.readFile)(vectorFilePath(basePath2), "utf-8"));
+    return JSON.parse(await (0, import_promises6.readFile)(vectorFilePath(basePath2), "utf-8"));
   } catch {
     return [];
   }
 }
 async function saveVectors(basePath2, vectors) {
   const p = vectorFilePath(basePath2);
-  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
-  await (0, import_promises4.writeFile)(p, JSON.stringify(vectors), "utf-8");
+  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
+  await (0, import_promises6.writeFile)(p, JSON.stringify(vectors), "utf-8");
 }
 function vectorSearch(queryVec, vectors, entries, k) {
   const contentMap = new Map(entries.map((e) => [e.content, e]));
   return vectors.map((v) => {
-    const stored = new Map(Object.entries(v.vector));
+    const stored = new Map(Object.entries(v.vector).map(([k2, val]) => [Number(k2), val]));
     const entry = contentMap.get(v.content);
     if (!entry) return null;
     return { entry, score: cosineSimilarity(queryVec, stored) };
@@ -1373,23 +1854,40 @@ function vectorSearch(queryVec, vectors, entries, k) {
 async function rebuildVectorIndex(basePath2, active, stats) {
   const vectors = active.map((e) => ({
     content: e.content,
-    vector: Object.fromEntries(bm25Vector(tokenize(e.content), stats))
+    vector: Object.fromEntries(bm25Vector(tokenize(e.content), stats, detectLanguage(e.content)))
   }));
   await saveVectors(basePath2, vectors);
 }
-var CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g;
+function isCJKRune(cp) {
+  return cp >= 19968 && cp <= 40959 || cp >= 13312 && cp <= 19903 || cp >= 131072 && cp <= 173791 || cp >= 173824 && cp <= 177983 || cp >= 177984 && cp <= 178207 || cp >= 178208 && cp <= 183983 || cp >= 183984 && cp <= 191471 || cp >= 63744 && cp <= 64255 || cp >= 12288 && cp <= 12351 || cp >= 12352 && cp <= 12447 || cp >= 12448 && cp <= 12543 || cp >= 44032 && cp <= 55215 || cp >= 4352 && cp <= 4607;
+}
+function fastDetectLanguage(text) {
+  let cjk = 0, total = 0;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp <= 32) continue;
+    total++;
+    if (isCJKRune(cp)) cjk++;
+  }
+  if (total === 0) return "en";
+  return cjk / total > 0.15 ? "cjk" : "en";
+}
 function tokenize(text) {
+  const lang = detectLanguage(text);
   const lower = text.toLowerCase();
-  const tokens = [];
+  const rawTokens = [];
   for (const m of lower.matchAll(/[a-z0-9_]{2,}|[a-z]/g)) {
-    tokens.push(m[0]);
+    rawTokens.push(m[0]);
   }
-  const cjk = [...lower.matchAll(CJK_RE)].map((m) => m[0]);
+  const cjk = [];
+  for (const ch of lower) {
+    if (isCJKRune(ch.codePointAt(0) ?? 0)) cjk.push(ch);
+  }
   for (let i = 0; i < cjk.length; i++) {
-    tokens.push(cjk[i]);
-    if (i + 1 < cjk.length) tokens.push(cjk[i] + cjk[i + 1]);
+    rawTokens.push(cjk[i]);
+    if (i + 1 < cjk.length) rawTokens.push(cjk[i] + cjk[i + 1]);
   }
-  return tokens;
+  return analyze(rawTokens, lang).tokens;
 }
 function termFrequency(tokens) {
   const tf = /* @__PURE__ */ new Map();
@@ -1398,39 +1896,67 @@ function termFrequency(tokens) {
 }
 async function loadDf(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises4.readFile)(dfPath(basePath2), "utf-8"));
+    const stats = JSON.parse(await (0, import_promises6.readFile)(dfPath(basePath2), "utf-8"));
+    const cleaned = {};
+    for (const [k, v] of Object.entries(stats.df)) {
+      if (k.includes(":")) cleaned[k] = v;
+    }
+    stats.df = cleaned;
+    return stats;
   } catch {
     return { docCount: 0, df: {}, avgDocLen: 0 };
   }
 }
 async function saveDf(basePath2, stats) {
   const p = dfPath(basePath2);
-  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
-  await (0, import_promises4.writeFile)(p, JSON.stringify(stats), "utf-8");
+  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
+  await (0, import_promises6.writeFile)(p, JSON.stringify(stats), "utf-8");
+  dfDirty = false;
 }
+var _lastDfStats = null;
 function rebuildDf(entries) {
   const active = entries.filter((e) => !e.archived);
   const df = {};
   let totalLen = 0;
   for (const e of active) {
+    const lang = detectLanguage(e.content);
     const tokens = tokenize(e.content);
     totalLen += tokens.length;
     const unique = new Set(tokens);
-    for (const t of unique) df[t] = (df[t] ?? 0) + 1;
+    for (const t of unique) {
+      const key = `${lang}:${t}`;
+      df[key] = (df[key] ?? 0) + 1;
+    }
   }
   return { docCount: active.length, df, avgDocLen: active.length ? totalLen / active.length : 0 };
 }
-function bm25Vector(tokens, stats) {
+function lookupDf(stats, term, lang) {
+  return stats.df[`${lang}:${term}`] ?? stats.df[term] ?? 0;
+}
+function bm25Vector(tokens, stats, lang = "en") {
   const tf = termFrequency(tokens);
   const vec = /* @__PURE__ */ new Map();
   const N = Math.max(stats.docCount, 1);
   const avgDl = stats.avgDocLen || 1;
   const docLen = tokens.length;
   for (const [term, freq] of tf) {
-    const dfVal = stats.df[term] ?? 0;
+    const dfVal = lookupDf(stats, term, lang);
     const idf = Math.log(1 + (N - dfVal + 0.5) / (dfVal + 0.5));
     const tfNorm = freq * (BM25_K1 + 1) / (freq + BM25_K1 * (1 - BM25_B + BM25_B * docLen / avgDl));
-    vec.set(term, tfNorm * idf);
+    const w = tfNorm * idf;
+    if (w === 0) continue;
+    const idx = termHash(term);
+    vec.set(idx, (vec.get(idx) ?? 0) + w);
+  }
+  return vec;
+}
+function bm25QueryVector(tokens, stats, lang = "en") {
+  const tf = termFrequency(tokens);
+  const vec = /* @__PURE__ */ new Map();
+  for (const [term, freq] of tf) {
+    if (lookupDf(stats, term, lang) === 0) continue;
+    const idx = termHash(term);
+    vec.set(idx, (vec.get(idx) ?? 0) + freq);
   }
   return vec;
 }
@@ -1447,49 +1973,81 @@ function cosineSimilarity(a, b) {
 }
 async function loadMemory(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises4.readFile)(memoryPath(basePath2), "utf-8"));
+    return JSON.parse(await (0, import_promises6.readFile)(memoryPath(basePath2), "utf-8"));
   } catch {
     return [];
   }
 }
 async function saveMemory(basePath2, entries) {
   const p = memoryPath(basePath2);
-  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
-  await (0, import_promises4.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
+  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
+  await (0, import_promises6.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
+}
+async function resolveSearchableText(entry) {
+  const ct = entry.contentType ?? "text";
+  if (ct === "text") return entry;
+  if (ct === "image") {
+    const url = entry.metadata?.imageUrl;
+    if (!url) return entry;
+    const desc = await describeImage(url) ?? url;
+    return { ...entry, content: desc, metadata: { ...entry.metadata, description: desc } };
+  }
+  if (ct === "mixed") {
+    const desc = entry.metadata?.description ?? "";
+    const merged = desc ? `${entry.content}
+${desc}` : entry.content;
+    return { ...entry, content: merged };
+  }
+  return entry;
 }
 async function appendMemory(basePath2, entry) {
+  const resolved = await resolveSearchableText(entry);
   const entries = await loadMemory(basePath2);
   const stats = rebuildDf(entries);
-  const queryTokens = tokenize(entry.content);
-  const queryVec = bm25Vector(queryTokens, stats);
+  const entryLang = detectLanguage(resolved.content);
+  const queryTokens = tokenize(resolved.content);
+  const queryVec = bm25Vector(queryTokens, stats, entryLang);
   const idx = entries.findIndex((e) => {
     if (e.archived) return false;
-    const vec2 = bm25Vector(tokenize(e.content), stats);
+    const vec2 = bm25Vector(tokenize(e.content), stats, detectLanguage(e.content));
     return cosineSimilarity(queryVec, vec2) > 0.8;
   });
   if (idx >= 0) {
     const oldContent = entries[idx].content;
     const updated = entries.map(
-      (e, i) => i === idx ? { ...e, content: entry.content, timestamp: entry.timestamp, source: entry.source } : e
+      (e, i) => i === idx ? { ...e, content: resolved.content, timestamp: resolved.timestamp, source: resolved.source, ...resolved.contentType ? { contentType: resolved.contentType } : {}, ...resolved.metadata ? { metadata: resolved.metadata } : {} } : e
     );
     log.debug(`memory: \u66F4\u65B0\u5DF2\u6709\u6761\u76EE (\u76F8\u4F3C\u5EA6>0.8)`);
     await saveMemory(basePath2, updated);
     const vectors2 = await loadVectors(basePath2);
     await saveVectors(basePath2, vectors2.filter((v) => v.content !== oldContent));
+    const denseVecs = await loadDenseVectors(basePath2);
+    await saveDenseVectors(basePath2, denseVecs.filter((v) => v.id !== sha256(oldContent)));
   } else {
-    const newEntries = [...entries, { ...entry, refs: 0, archived: false }];
+    const newEntries = [...entries, { ...resolved, refs: 0, archived: false }];
     log.debug(`memory: \u65B0\u589E\u6761\u76EE, \u603B\u8BA1 ${newEntries.length}`);
     await saveMemory(basePath2, newEntries);
   }
   const saved = await loadMemory(basePath2);
   const newStats = rebuildDf(saved);
+  dfDirty = true;
+  _lastDfStats = newStats;
   await saveDf(basePath2, newStats);
-  const vec = bm25Vector(tokenize(entry.content), newStats);
+  const vec = bm25Vector(tokenize(resolved.content), newStats, entryLang);
   const vecRecord = Object.fromEntries(vec);
   const vectors = await loadVectors(basePath2);
-  const vi = vectors.findIndex((v) => v.content === entry.content);
-  const newVectors = vi >= 0 ? vectors.map((v, i) => i === vi ? { content: entry.content, vector: vecRecord } : v) : [...vectors, { content: entry.content, vector: vecRecord }];
+  const vi = vectors.findIndex((v) => v.content === resolved.content);
+  const newVectors = vi >= 0 ? vectors.map((v, i) => i === vi ? { content: resolved.content, vector: vecRecord } : v) : [...vectors, { content: resolved.content, vector: vecRecord }];
   await saveVectors(basePath2, newVectors);
+  const denseVec = await embedText(resolved.content, basePath2);
+  if (denseVec) {
+    const denseVecs = await loadDenseVectors(basePath2);
+    const resolvedHash = sha256(resolved.content);
+    const di = denseVecs.findIndex((v) => v.id === resolvedHash);
+    const newDense = { id: resolvedHash, vector: denseVec };
+    const updatedDense = di >= 0 ? denseVecs.map((v, i) => i === di ? newDense : v) : [...denseVecs, newDense];
+    await saveDenseVectors(basePath2, updatedDense);
+  }
   await clearCache(basePath2);
 }
 function mmrRerank(candidates, k, lambda = 0.7) {
@@ -1530,31 +2088,44 @@ function rrfFuse(sources) {
   }
   return [...scores.values()].sort((a, b) => b.score - a.score);
 }
-async function queryMemory(basePath2, taskDescription) {
-  const cacheKey = sha256(taskDescription);
+async function queryMemory(basePath2, taskDescription, contentTypeFilter) {
+  const cacheKey = sha2562(taskDescription + (contentTypeFilter ?? ""));
   const cache = await loadCache(basePath2);
   if (cache.entries[cacheKey]) {
     log.debug("memory: \u7F13\u5B58\u547D\u4E2D");
     return cache.entries[cacheKey].results;
   }
   const entries = await loadMemory(basePath2);
-  const active = entries.filter((e) => !e.archived);
+  let active = entries.filter((e) => !e.archived);
+  if (contentTypeFilter) {
+    active = active.filter((e) => (e.contentType ?? "text") === contentTypeFilter);
+  }
   if (!active.length) return [];
   const stats = await loadDf(basePath2);
   const fallback = stats.docCount > 0 ? stats : rebuildDf(entries);
-  const queryVec = bm25Vector(tokenize(taskDescription), fallback);
+  const queryLang = detectLanguage(taskDescription);
+  const queryVec = bm25QueryVector(tokenize(taskDescription), fallback, queryLang);
   const source1 = active.map((e) => {
-    const vec = bm25Vector(tokenize(e.content), fallback);
+    const vec = bm25Vector(tokenize(e.content), fallback, detectLanguage(e.content));
     return { entry: e, score: cosineSimilarity(queryVec, vec) * temporalDecayScore(e), vec };
   }).filter((s) => s.score > 0.05);
   const vectors = await loadVectors(basePath2);
   const source2 = vectorSearch(queryVec, vectors, active, 10);
-  const fused = rrfFuse([
+  const rrfSources = [
     source1.map((s) => ({ entry: s.entry, score: s.score })),
     source2
-  ]);
+  ];
+  const denseQueryVec = await embedText(taskDescription, basePath2);
+  if (denseQueryVec) {
+    const denseVecs = await loadDenseVectors(basePath2);
+    const hashMap = new Map(active.map((e) => [sha256(e.content), e]));
+    const denseHits = denseSearch(denseQueryVec, denseVecs, 10);
+    const source3 = denseHits.map((h) => ({ entry: hashMap.get(h.id), score: h.score })).filter((h) => h.entry !== void 0);
+    if (source3.length) rrfSources.push(source3);
+  }
+  const fused = rrfFuse(rrfSources);
   const candidates = fused.map((f) => {
-    const vec = bm25Vector(tokenize(f.entry.content), fallback);
+    const vec = bm25Vector(tokenize(f.entry.content), fallback, detectLanguage(f.entry.content));
     return { entry: f.entry, score: f.score, vec };
   });
   const reranked = mmrRerank(candidates, 5);
@@ -1565,7 +2136,7 @@ async function queryMemory(basePath2, taskDescription) {
     log.debug(`memory: \u67E5\u8BE2\u547D\u4E2D ${reranked.length} \u6761`);
   }
   const results = reranked.map((s) => ({ ...s.entry, refs: s.entry.refs + 1 }));
-  cache.entries[cacheKey] = { results, timestamp: (/* @__PURE__ */ new Date()).toISOString() };
+  cache.entries[cacheKey] = { results, timestamp: (/* @__PURE__ */ new Date()).toISOString(), createdAt: Date.now() };
   await saveCache(basePath2, cache);
   return results;
 }
@@ -1585,18 +2156,18 @@ async function decayMemory(basePath2) {
   }
   return count;
 }
-async function saveSnapshot(basePath2, entries) {
+async function saveSnapshot2(basePath2, entries) {
   const p = snapshotPath(basePath2);
-  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
-  await (0, import_promises4.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
+  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
+  await (0, import_promises6.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
 }
 async function compactMemory(basePath2, targetCount) {
   const entries = await loadMemory(basePath2);
   const active = entries.filter((e) => !e.archived);
   if (active.length <= 1) return 0;
-  await saveSnapshot(basePath2, entries);
+  await saveSnapshot2(basePath2, entries);
   const stats = rebuildDf(entries);
-  const vecs = active.map((e) => bm25Vector(tokenize(e.content), stats));
+  const vecs = active.map((e) => bm25Vector(tokenize(e.content), stats, detectLanguage(e.content)));
   const merged = /* @__PURE__ */ new Set();
   const result = [...entries.filter((e) => e.archived)];
   for (let i = 0; i < active.length; i++) {
@@ -1621,6 +2192,8 @@ async function compactMemory(basePath2, targetCount) {
     const final = result.filter((e) => !toRemove.has(e));
     await saveMemory(basePath2, final);
     const finalStats = rebuildDf(final);
+    dfDirty = true;
+    _lastDfStats = finalStats;
     await saveDf(basePath2, finalStats);
     await rebuildVectorIndex(basePath2, final.filter((e) => !e.archived), finalStats);
     await clearCache(basePath2);
@@ -1629,6 +2202,8 @@ async function compactMemory(basePath2, targetCount) {
   }
   await saveMemory(basePath2, result);
   const resultStats = rebuildDf(result);
+  dfDirty = true;
+  _lastDfStats = resultStats;
   await saveDf(basePath2, resultStats);
   await rebuildVectorIndex(basePath2, result.filter((e) => !e.archived), resultStats);
   await clearCache(basePath2);
@@ -1638,6 +2213,9 @@ async function compactMemory(basePath2, targetCount) {
 }
 
 // src/infrastructure/truncation.ts
+function estimateCharsPerToken(text) {
+  return fastDetectLanguage(text) === "cjk" ? 1.5 : 3.5;
+}
 function truncateHeadTail(text, maxChars) {
   if (text.length <= maxChars) return text;
   const head = Math.floor(maxChars * 0.7);
@@ -1648,10 +2226,91 @@ function truncateHeadTail(text, maxChars) {
 
 ${text.slice(-tail)}`;
 }
+function computeMaxChars(contextWindow = 128e3, sample) {
+  const cpt = sample ? estimateCharsPerToken(sample) : 3.5;
+  return Math.floor(contextWindow * 0.3 * cpt);
+}
 
 // src/infrastructure/loop-detector.ts
-var import_promises5 = require("fs/promises");
-var import_path6 = require("path");
+var import_promises8 = require("fs/promises");
+var import_path9 = require("path");
+
+// src/infrastructure/heartbeat.ts
+var import_promises7 = require("fs/promises");
+var import_path8 = require("path");
+var TASK_TIMEOUT_MS = 30 * 60 * 1e3;
+var MEMORY_COMPACT_THRESHOLD = 100;
+var DEFAULT_INTERVAL_MS = 5 * 60 * 1e3;
+function isWithinActiveHours(cfg) {
+  if (!cfg?.activeHoursStart && cfg?.activeHoursStart !== 0) return true;
+  const now = cfg.timezone ? new Date((/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: cfg.timezone })) : /* @__PURE__ */ new Date();
+  const hour = now.getHours();
+  const day = now.getDay();
+  if (cfg.activeDays?.length && !cfg.activeDays.includes(day)) return false;
+  const start = cfg.activeHoursStart;
+  const end = cfg.activeHoursEnd ?? 23;
+  return start <= end ? hour >= start && hour <= end : hour >= start || hour <= end;
+}
+async function runHeartbeat(basePath2, config) {
+  if (!isWithinActiveHours(config)) return { warnings: [], actions: [] };
+  const warnings = [];
+  const actions = [];
+  try {
+    const raw = await (0, import_promises7.readFile)((0, import_path8.join)(basePath2, ".workflow", "progress.json"), "utf-8");
+    const data = JSON.parse(raw);
+    if (data.status === "running") {
+      const active = data.tasks.filter((t) => t.status === "active");
+      if (active.length) {
+        const window = await loadWindow(basePath2);
+        const lastTs = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
+        if (lastTs && Date.now() - lastTs > TASK_TIMEOUT_MS) {
+          warnings.push(`[TIMEOUT] \u4EFB\u52A1 ${active.map((t) => t.id).join(",")} \u8D85\u8FC730\u5206\u949F\u65E0checkpoint`);
+        }
+      }
+    }
+  } catch {
+  }
+  try {
+    const memories = await loadMemory(basePath2);
+    const activeCount = memories.filter((e) => !e.archived).length;
+    if (activeCount > MEMORY_COMPACT_THRESHOLD) {
+      await compactMemory(basePath2);
+      actions.push(`compacted memory from ${activeCount} entries`);
+      warnings.push(`[MEMORY] \u6D3B\u8DC3\u8BB0\u5FC6 ${activeCount} \u6761\uFF0C\u5DF2\u81EA\u52A8\u538B\u7F29`);
+    }
+  } catch {
+  }
+  try {
+    const dfStats = await loadDf(basePath2);
+    if (dfStats.docCount > 0) {
+      const memories = await loadMemory(basePath2);
+      const rebuilt = rebuildDf(memories);
+      const diff = Math.abs(dfStats.docCount - rebuilt.docCount) / Math.max(dfStats.docCount, 1);
+      if (diff > 0.1) {
+        await saveDf(basePath2, rebuilt);
+        actions.push("rebuilt DF stats");
+        warnings.push(`[DF] docCount \u504F\u5DEE ${(diff * 100).toFixed(0)}%\uFF0C\u5DF2\u91CD\u5EFA`);
+      }
+    }
+  } catch {
+  }
+  if (warnings.length) log.info(`[heartbeat] ${warnings.join("; ")}`);
+  return { warnings, actions };
+}
+function startHeartbeat(basePath2, intervalMs = DEFAULT_INTERVAL_MS, config) {
+  const timer = setInterval(() => {
+    runHeartbeat(basePath2, config).catch(() => {
+    });
+  }, intervalMs);
+  timer.unref();
+  log.debug(`[heartbeat] started (interval=${intervalMs}ms)`);
+  return () => {
+    clearInterval(timer);
+    log.debug("[heartbeat] stopped");
+  };
+}
+
+// src/infrastructure/loop-detector.ts
 var WINDOW_SIZE = 20;
 var STATE_FILE = "loop-state.json";
 function fnv1a(str) {
@@ -1677,19 +2336,19 @@ function similarity(a, b) {
   return inter / (sa.size + sb.size - inter);
 }
 function statePath(basePath2) {
-  return (0, import_path6.join)(basePath2, ".workflow", STATE_FILE);
+  return (0, import_path9.join)(basePath2, ".workflow", STATE_FILE);
 }
 async function loadWindow(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises5.readFile)(statePath(basePath2), "utf-8"));
+    return JSON.parse(await (0, import_promises8.readFile)(statePath(basePath2), "utf-8"));
   } catch {
     return [];
   }
 }
 async function saveWindow(basePath2, window) {
   const p = statePath(basePath2);
-  await (0, import_promises5.mkdir)((0, import_path6.dirname)(p), { recursive: true });
-  await (0, import_promises5.writeFile)(p, JSON.stringify(window), "utf-8");
+  await (0, import_promises8.mkdir)((0, import_path9.dirname)(p), { recursive: true });
+  await (0, import_promises8.writeFile)(p, JSON.stringify(window), "utf-8");
 }
 function repeatedNoProgress(window) {
   if (window.length < 3) return null;
@@ -1732,7 +2391,8 @@ function globalCircuitBreaker(window) {
   }
   return null;
 }
-async function detect(basePath2, taskId, summary, failed) {
+async function detect(basePath2, taskId, summary, failed, activeHours) {
+  if (!isWithinActiveHours(activeHours)) return null;
   const window = await loadWindow(basePath2);
   const record = {
     taskId,
@@ -1747,25 +2407,26 @@ async function detect(basePath2, taskId, summary, failed) {
 }
 
 // src/application/workflow-service.ts
-var import_promises6 = require("fs/promises");
-var import_path7 = require("path");
+var import_promises9 = require("fs/promises");
+var import_path10 = require("path");
 var WorkflowService = class {
   constructor(repo2, parse) {
     this.repo = repo2;
     this.parse = parse;
   }
+  stopHeartbeat = null;
   loopWarningPath() {
-    return (0, import_path7.join)(this.repo.projectRoot(), ".workflow", "loop-warning.txt");
+    return (0, import_path10.join)(this.repo.projectRoot(), ".workflow", "loop-warning.txt");
   }
   async saveLoopWarning(msg) {
     const p = this.loopWarningPath();
-    await (0, import_promises6.mkdir)((0, import_path7.join)(this.repo.projectRoot(), ".workflow"), { recursive: true });
-    await (0, import_promises6.writeFile)(p, msg, "utf-8");
+    await (0, import_promises9.mkdir)((0, import_path10.join)(this.repo.projectRoot(), ".workflow"), { recursive: true });
+    await (0, import_promises9.writeFile)(p, msg, "utf-8");
   }
   async loadAndClearLoopWarning() {
     try {
-      const msg = await (0, import_promises6.readFile)(this.loopWarningPath(), "utf-8");
-      await (0, import_promises6.unlink)(this.loopWarningPath());
+      const msg = await (0, import_promises9.readFile)(this.loopWarningPath(), "utf-8");
+      await (0, import_promises9.unlink)(this.loopWarningPath());
       return msg || null;
     } catch {
       return null;
@@ -1773,12 +2434,12 @@ var WorkflowService = class {
   }
   /** init: 解析任务markdown → 生成progress/tasks */
   async init(tasksMd, force = false) {
-    const reviewResult = await review(this.repo.projectRoot());
-    if (reviewResult.rolledBack) {
-      log.info(`[\u81EA\u6108] \u5DF2\u56DE\u6EDA\u4E0A\u8F6E\u5B9E\u9A8C: ${reviewResult.rollbackReason}`);
-    }
-    for (const check of reviewResult.checks.filter((c) => !c.passed)) {
-      log.info(`[\u81EA\u6108] \u68C0\u67E5\u672A\u901A\u8FC7: ${check.name} - ${check.detail}`);
+    try {
+      const reviewResult = await review(this.repo.projectRoot());
+      if (reviewResult.rolledBack) log.info(`[\u81EA\u6108] \u5DF2\u56DE\u6EDA: ${reviewResult.rollbackReason}`);
+      for (const c of reviewResult.checks.filter((c2) => !c2.passed)) log.info(`[\u81EA\u6108] ${c.name}: ${c.detail}`);
+    } catch (e) {
+      log.debug(`[\u81EA\u6108] review \u8DF3\u8FC7: ${e}`);
     }
     const existing = await this.repo.loadProgress();
     if (existing && existing.status === "running" && !force) {
@@ -1817,6 +2478,8 @@ ${def.description}
     if (memories.filter((e) => !e.archived).length > 50) {
       await compactMemory(this.repo.projectRoot());
     }
+    this.stopHeartbeat?.();
+    this.stopHeartbeat = startHeartbeat(this.repo.projectRoot());
     return data;
   }
   /** next: 获取下一个可执行任务（含依赖上下文） */
@@ -1946,7 +2609,9 @@ ${loopWarning}`);
 ${warns.join("\n")}` : msg2;
       }
       if (!detail.trim()) throw new Error(`\u4EFB\u52A1 ${id} checkpoint\u5185\u5BB9\u4E0D\u80FD\u4E3A\u7A7A`);
-      const summaryLine = detail.split("\n")[0].slice(0, 80);
+      const maxChars = computeMaxChars(128e3, detail);
+      const truncated = detail.length > maxChars ? truncateHeadTail(detail, maxChars) : detail;
+      const summaryLine = truncated.split("\n")[0].slice(0, 80);
       const newData = completeTask(data, id, summaryLine);
       log.debug(`checkpoint ${id}: \u5B8C\u6210, summary="${summaryLine}"`);
       await this.repo.saveProgress(newData);
@@ -2001,6 +2666,8 @@ ${detail}
     }
     const doneCount = newData.tasks.filter((t) => t.status === "done").length;
     const total = newData.tasks.length;
+    this.stopHeartbeat?.();
+    this.stopHeartbeat = startHeartbeat(this.repo.projectRoot());
     if (resetId) {
       return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${newData.name}
 \u8FDB\u5EA6: ${doneCount}/${total}
@@ -2090,6 +2757,8 @@ ${detail}
     log.debug(`finish: status=${data.status}`);
     if (data.status === "idle" || data.status === "completed") return "\u5DE5\u4F5C\u6D41\u5DF2\u5B8C\u6210\uFF0C\u65E0\u9700\u91CD\u590Dfinish";
     if (!isAllDone(data.tasks)) throw new Error("\u8FD8\u6709\u672A\u5B8C\u6210\u7684\u4EFB\u52A1\uFF0C\u8BF7\u5148\u5B8C\u6210\u6240\u6709\u4EFB\u52A1");
+    this.stopHeartbeat?.();
+    this.stopHeartbeat = null;
     const result = this.repo.verify();
     log.debug(`finish: verify passed=${result.passed}`);
     if (!result.passed) {
@@ -2332,35 +3001,10 @@ ${entry}`;
     }
     return null;
   }
-  /** 心跳自检：任务超时 + 记忆膨胀 + DF一致性 */
+  /** 心跳自检：委托给 heartbeat 模块 */
   async healthCheck() {
-    const warnings = [];
-    const data = await this.repo.loadProgress();
-    if (!data || data.status !== "running") return warnings;
-    const active = data.tasks.filter((t) => t.status === "active");
-    if (active.length) {
-      const window = await loadWindow(this.repo.projectRoot());
-      const lastCp = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
-      if (lastCp && Date.now() - lastCp > 30 * 60 * 1e3) {
-        warnings.push(`[TIMEOUT] \u6D3B\u8DC3\u4EFB\u52A1 ${active.map((t) => t.id).join(",")} \u8D85\u8FC730\u5206\u949F\u65E0checkpoint`);
-      }
-    }
-    const memories = await loadMemory(this.repo.projectRoot());
-    const activeCount = memories.filter((e) => !e.archived).length;
-    if (activeCount > 100) {
-      await compactMemory(this.repo.projectRoot());
-      warnings.push(`[MEMORY] \u6D3B\u8DC3\u8BB0\u5FC6 ${activeCount} \u6761\uFF0C\u5DF2\u81EA\u52A8\u538B\u7F29`);
-    }
-    const dfStats = await loadDf(this.repo.projectRoot());
-    if (dfStats.docCount > 0) {
-      const rebuilt = rebuildDf(memories);
-      const diff = Math.abs(dfStats.docCount - rebuilt.docCount) / Math.max(dfStats.docCount, 1);
-      if (diff > 0.1) {
-        await saveDf(this.repo.projectRoot(), rebuilt);
-        warnings.push(`[DF] docCount \u504F\u5DEE ${(diff * 100).toFixed(0)}%\uFF0C\u5DF2\u91CD\u5EFA`);
-      }
-    }
-    return warnings;
+    const result = await runHeartbeat(this.repo.projectRoot());
+    return result.warnings;
   }
   async requireProgress() {
     const data = await this.repo.loadProgress();
@@ -2372,7 +3016,7 @@ ${entry}`;
 
 // src/interfaces/cli.ts
 var import_fs3 = require("fs");
-var import_path8 = require("path");
+var import_path11 = require("path");
 
 // src/interfaces/formatter.ts
 var ICON = {
@@ -2505,8 +3149,8 @@ var CLI = class {
           }
         }
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
-          const filePath = (0, import_path8.resolve)(rest[fileIdx + 1]);
-          if ((0, import_path8.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
+          const filePath = (0, import_path11.resolve)(rest[fileIdx + 1]);
+          if ((0, import_path11.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
           detail = (0, import_fs3.readFileSync)(filePath, "utf-8");
         } else if (rest.length > 1 && fileIdx < 0 && filesIdx < 0) {
           detail = rest.slice(1).join(" ");
