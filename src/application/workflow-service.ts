@@ -276,6 +276,14 @@ export class WorkflowService {
           await this.saveLoopWarning(`[LOOP WARNING - ${loopResult.strategy}] ${loopResult.message}`);
         }
 
+        // 失败路径也写记忆（提取失败原因中的知识）
+        for (const entry of await extractAll(detail, `task-${id}-fail`)) {
+          await appendMemory(this.repo.projectRoot(), {
+            content: entry.content, source: entry.source,
+            timestamp: new Date().toISOString(),
+          });
+        }
+
         const { result, data: newData } = failTask(data, id);
         await this.repo.saveProgress(newData);
         log.debug(`checkpoint ${id}: failTask result=${result}, retries=${task.retries + 1}`);

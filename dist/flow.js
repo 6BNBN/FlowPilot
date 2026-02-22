@@ -2755,6 +2755,13 @@ ${loopWarning}`);
           log.step("loop_detected", loopResult2.message, { taskId: id, data: { strategy: loopResult2.strategy } });
           await this.saveLoopWarning(`[LOOP WARNING - ${loopResult2.strategy}] ${loopResult2.message}`);
         }
+        for (const entry of await extractAll(detail, `task-${id}-fail`)) {
+          await appendMemory(this.repo.projectRoot(), {
+            content: entry.content,
+            source: entry.source,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString()
+          });
+        }
         const { result, data: newData2 } = failTask(data, id);
         await this.repo.saveProgress(newData2);
         log.debug(`checkpoint ${id}: failTask result=${result}, retries=${task.retries + 1}`);
