@@ -292,8 +292,14 @@ echo '\u6458\u8981 [REMEMBER] \u5173\u952E\u77E5\u8BC6\u70B9 [DECISION] \u91CD\u
 1. Run \`node flow.js finish\` \u2014 runs verify (build/test/lint). If fail \u2192 dispatch sub-agent to fix \u2192 retry finish.
 2. When finish returns "\u9A8C\u8BC1\u901A\u8FC7\uFF0C\u8BF7\u6D3E\u5B50Agent\u6267\u884C code-review" \u2192 dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
 3. Run \`node flow.js review\` to mark code-review done.
-4. Run \`node flow.js finish\` again \u2014 verify passes + review done \u2192 final commit \u2192 idle.
-**Loop: finish(verify) \u2192 review(code-review) \u2192 fix \u2192 finish again. Both gates must pass.**
+4. **AI \u53CD\u601D\uFF08\u8FDB\u5316\u5F15\u64CE\uFF09**: dispatch a sub-agent to analyze the workflow. Sub-agent MUST:
+   - Read \`.flowpilot/history/\` files to understand workflow stats
+   - Read \`.flowpilot/evolution/\` files to see past experiments
+   - Analyze: what went well, what could improve, config optimization opportunities
+   - Pipe structured findings into: \`echo '[CONFIG] \u5C06 parallelLimit \u63D0\u5347\u81F3 4\\n[PROTOCOL] \u5B50Agent\u5E94\u5148\u9A8C\u8BC1\u73AF\u5883\u518D\u7F16\u7801' | node flow.js evolve\`
+   - Tags: \`[CONFIG]\` for config changes, \`[PROTOCOL]\` for CLAUDE.md protocol changes
+5. Run \`node flow.js finish\` again \u2014 verify passes + review done \u2192 final commit \u2192 idle.
+**Loop: finish(verify) \u2192 review(code-review) \u2192 evolve(AI\u53CD\u601D) \u2192 fix \u2192 finish again. All gates must pass.**
 
 <!-- flowpilot:end -->`;
 
@@ -1238,6 +1244,26 @@ function fourDimensionAnalysis(stats) {
   if (efficient.length > 0 && stats.totalTasks > 0) {
     const rate = (efficient.length / stats.totalTasks * 100).toFixed(0);
     findings.push(`[delight] ${efficient.length}/${stats.totalTasks} \u4EFB\u52A1\u4E00\u6B21\u901A\u8FC7 (${rate}%)`);
+    if (efficient.length === stats.totalTasks && stats.totalTasks >= 3) {
+      experiments.push({
+        trigger: "\u5168\u90E8\u4E00\u6B21\u901A\u8FC7",
+        observation: `${stats.totalTasks} \u4E2A\u4EFB\u52A1\u96F6\u91CD\u8BD5`,
+        action: "\u5C06 parallelLimit \u63D0\u5347\u81F3 " + Math.min(stats.totalTasks, 5),
+        expected: "\u63D0\u9AD8\u5E76\u884C\u5EA6",
+        target: "config"
+      });
+    }
+  }
+  const retriedButDone = results.filter((r) => r.status === "done" && r.retries > 0);
+  if (retriedButDone.length) {
+    findings.push(`[delight] ${retriedButDone.length} \u4E2A\u4EFB\u52A1\u7ECF\u91CD\u8BD5\u540E\u6210\u529F`);
+    experiments.push({
+      trigger: "\u91CD\u8BD5\u540E\u6210\u529F",
+      observation: `${retriedButDone.map((r) => r.id).join(",")} \u9700\u8981\u91CD\u8BD5`,
+      action: "\u5728\u5B50Agent\u63D0\u793A\u6A21\u677F\u4E2D\u5F3A\u8C03\u5148\u9A8C\u8BC1\u73AF\u5883\u518D\u52A8\u624B\u7F16\u7801",
+      expected: "\u51CF\u5C11\u9996\u6B21\u5931\u8D25\u7387",
+      target: "claude-md"
+    });
   }
   const typeEntries = Object.entries(stats.tasksByType);
   if (typeEntries.length > 0) {
@@ -1350,6 +1376,18 @@ function parseConfigAction(action) {
     const re = new RegExp(k + "\\D*(\\d+)");
     const m = action.match(re);
     if (m) return { key: k, value: Number(m[1]) };
+  }
+  const CN_MAP = {
+    "\u5E76\u884C": "parallelLimit",
+    "\u91CD\u8BD5": "maxRetries",
+    "\u8D85\u65F6": "timeout",
+    "\u9A8C\u8BC1\u8D85\u65F6": "verifyTimeout"
+  };
+  for (const [cn, key] of Object.entries(CN_MAP)) {
+    if (action.includes(cn)) {
+      const m = action.match(/(\d+)/);
+      if (m) return { key, value: Number(m[1]) };
+    }
   }
   return null;
 }
@@ -3029,6 +3067,29 @@ ${stats}
     if (!memories.length) return "\u65E0\u76F8\u5173\u8BB0\u5FC6";
     return memories.map((m) => `- [${m.source}] ${m.content}`).join("\n");
   }
+  /** evolve: 接收CC子Agent的反思结果，执行进化实验 */
+  async evolve(reflectionText) {
+    const report = await reflect({ totalTasks: 0, doneCount: 0, failCount: 0, skipCount: 0, retryTotal: 0, tasksByType: {}, failsByType: {}, taskResults: [] }, this.repo.projectRoot());
+    const lines = reflectionText.split("\n").filter((l) => l.trim());
+    const experiments = [];
+    for (const line of lines) {
+      const m = line.match(/^\[(.+?)\]\s*(.+)/);
+      if (m) {
+        const tag = m[1].toLowerCase();
+        const target = tag.includes("config") ? "config" : "claude-md";
+        experiments.push({ trigger: "cc-ai-reflect", observation: m[2], action: m[2], expected: "\u57FA\u4E8EAI\u5206\u6790\u7684\u6539\u8FDB", target });
+      }
+    }
+    if (!experiments.length && lines.length) {
+      for (const line of lines.slice(0, 3)) {
+        experiments.push({ trigger: "cc-ai-reflect", observation: line, action: line, expected: "\u57FA\u4E8EAI\u5206\u6790\u7684\u6539\u8FDB", target: "claude-md" });
+      }
+    }
+    if (!experiments.length) return "\u65E0\u53EF\u6267\u884C\u7684\u8FDB\u5316\u5EFA\u8BAE";
+    const merged = { ...report, experiments: [...report.experiments, ...experiments] };
+    await experiment(merged, this.repo.projectRoot());
+    return `\u5DF2\u5E94\u7528 ${experiments.length} \u6761\u8FDB\u5316\u5EFA\u8BAE`;
+  }
   /** status: 全局进度 */
   async status() {
     return this.repo.loadProgress();
@@ -3351,6 +3412,11 @@ var CLI = class {
         if (!id) throw new Error("\u9700\u8981\u4EFB\u52A1ID");
         return await s.rollback(id);
       }
+      case "evolve": {
+        const text = await readStdinIfPiped();
+        if (!text.trim()) throw new Error("\u9700\u8981\u901A\u8FC7 stdin \u4F20\u5165\u53CD\u601D\u7ED3\u679C");
+        return await s.evolve(text.trim());
+      }
       case "recall": {
         const query = rest.join(" ");
         if (!query) throw new Error("\u9700\u8981\u67E5\u8BE2\u5173\u952E\u8BCD");
@@ -3381,6 +3447,7 @@ var USAGE = `\u7528\u6CD5: node flow.js [--verbose] <command>
   resume               \u4E2D\u65AD\u6062\u590D
   abort                \u4E2D\u6B62\u5DE5\u4F5C\u6D41\u5E76\u6E05\u7406 .workflow/ \u76EE\u5F55
   rollback <id>        \u56DE\u6EDA\u5230\u6307\u5B9A\u4EFB\u52A1\u7684\u5FEB\u7167 (git revert + \u91CD\u7F6E\u540E\u7EED\u4EFB\u52A1)
+  evolve               \u63A5\u6536AI\u53CD\u601D\u7ED3\u679C\u5E76\u6267\u884C\u8FDB\u5316 (stdin\u4F20\u5165)
   recall <\u5173\u952E\u8BCD>       \u67E5\u8BE2\u76F8\u5173\u8BB0\u5FC6
   add <\u63CF\u8FF0>           \u8FFD\u52A0\u4EFB\u52A1 [--type frontend|backend|general]
 

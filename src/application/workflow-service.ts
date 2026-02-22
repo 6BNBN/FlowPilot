@@ -573,6 +573,32 @@ export class WorkflowService {
     return memories.map(m => `- [${m.source}] ${m.content}`).join('\n');
   }
 
+  /** evolve: 接收CC子Agent的反思结果，执行进化实验 */
+  async evolve(reflectionText: string): Promise<string> {
+    const report = await reflect({ totalTasks: 0, doneCount: 0, failCount: 0, skipCount: 0, retryTotal: 0, tasksByType: {}, failsByType: {}, taskResults: [] }, this.repo.projectRoot());
+    // 解析子Agent的结构化反思
+    const lines = reflectionText.split('\n').filter(l => l.trim());
+    const experiments: Array<{ trigger: string; observation: string; action: string; expected: string; target: 'config' | 'claude-md' }> = [];
+    for (const line of lines) {
+      const m = line.match(/^\[(.+?)\]\s*(.+)/);
+      if (m) {
+        const tag = m[1].toLowerCase();
+        const target = tag.includes('config') ? 'config' as const : 'claude-md' as const;
+        experiments.push({ trigger: 'cc-ai-reflect', observation: m[2], action: m[2], expected: '基于AI分析的改进', target });
+      }
+    }
+    if (!experiments.length && lines.length) {
+      // 无标签时全部作为 claude-md 实验
+      for (const line of lines.slice(0, 3)) {
+        experiments.push({ trigger: 'cc-ai-reflect', observation: line, action: line, expected: '基于AI分析的改进', target: 'claude-md' });
+      }
+    }
+    if (!experiments.length) return '无可执行的进化建议';
+    const merged = { ...report, experiments: [...report.experiments, ...experiments] };
+    await experiment(merged, this.repo.projectRoot());
+    return `已应用 ${experiments.length} 条进化建议`;
+  }
+
   /** status: 全局进度 */
   async status(): Promise<ProgressData | null> {
     return this.repo.loadProgress();

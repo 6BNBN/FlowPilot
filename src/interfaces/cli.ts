@@ -118,6 +118,12 @@ export class CLI {
         return await s.rollback(id);
       }
 
+      case 'evolve': {
+        const text = await readStdinIfPiped();
+        if (!text.trim()) throw new Error('需要通过 stdin 传入反思结果');
+        return await s.evolve(text.trim());
+      }
+
       case 'recall': {
         const query = rest.join(' ');
         if (!query) throw new Error('需要查询关键词');
@@ -151,6 +157,7 @@ const USAGE = `用法: node flow.js [--verbose] <command>
   resume               中断恢复
   abort                中止工作流并清理 .workflow/ 目录
   rollback <id>        回滚到指定任务的快照 (git revert + 重置后续任务)
+  evolve               接收AI反思结果并执行进化 (stdin传入)
   recall <关键词>       查询相关记忆
   add <描述>           追加任务 [--type frontend|backend|general]
 

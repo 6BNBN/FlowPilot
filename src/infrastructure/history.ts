@@ -154,11 +154,28 @@ function fourDimensionAnalysis(stats: WorkflowStats): { findings: string[]; expe
     }
   }
 
-  // delight: 一次通过、无重试的高效任务
+  // delight: 一次通过、无重试的高效任务 → 成功路径也产出实验
   const efficient = results.filter(r => r.status === 'done' && r.retries === 0);
   if (efficient.length > 0 && stats.totalTasks > 0) {
     const rate = ((efficient.length / stats.totalTasks) * 100).toFixed(0);
     findings.push(`[delight] ${efficient.length}/${stats.totalTasks} 任务一次通过 (${rate}%)`);
+    if (efficient.length === stats.totalTasks && stats.totalTasks >= 3) {
+      experiments.push({
+        trigger: '全部一次通过', observation: `${stats.totalTasks} 个任务零重试`,
+        action: '将 parallelLimit 提升至 ' + Math.min(stats.totalTasks, 5), expected: '提高并行度',
+        target: 'config',
+      });
+    }
+  }
+  // 成功但有重试的任务 → 建议加前置检查
+  const retriedButDone = results.filter(r => r.status === 'done' && r.retries > 0);
+  if (retriedButDone.length) {
+    findings.push(`[delight] ${retriedButDone.length} 个任务经重试后成功`);
+    experiments.push({
+      trigger: '重试后成功', observation: `${retriedButDone.map(r => r.id).join(',')} 需要重试`,
+      action: '在子Agent提示模板中强调先验证环境再动手编码', expected: '减少首次失败率',
+      target: 'claude-md',
+    });
   }
 
   // patterns: 任务类型分布 + summary 关键词
@@ -305,6 +322,16 @@ function parseConfigAction(action: string): { key: string; value: number } | nul
     const re = new RegExp(k + '\\D*(\\d+)');
     const m = action.match(re);
     if (m) return { key: k, value: Number(m[1]) };
+  }
+  // 中文关键词映射
+  const CN_MAP: Record<string, string> = {
+    '并行': 'parallelLimit', '重试': 'maxRetries', '超时': 'timeout', '验证超时': 'verifyTimeout',
+  };
+  for (const [cn, key] of Object.entries(CN_MAP)) {
+    if (action.includes(cn)) {
+      const m = action.match(/(\d+)/);
+      if (m) return { key, value: Number(m[1]) };
+    }
   }
   return null;
 }
