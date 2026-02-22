@@ -2650,7 +2650,8 @@ ${loopWarning}`);
       if (task.status !== "active") {
         throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u53EA\u6709 active \u72B6\u6001\u53EF\u4EE5 checkpoint`);
       }
-      if (detail.startsWith("FAILED")) {
+      const isFailed = detail.startsWith("FAILED") || detail.length < 200 && /\b(fail|error|crash|timeout|限流|崩溃|超时|rate.?limit)\b/i.test(detail);
+      if (isFailed) {
         await this.appendFailureContext(id, task, detail);
         const patternWarn = await this.detectFailurePattern(id, task);
         const loopResult2 = await detect(this.repo.projectRoot(), id, detail, true);
