@@ -2490,6 +2490,30 @@ var WorkflowService = class {
       return null;
     }
   }
+  activatedPath() {
+    return (0, import_path10.join)(this.repo.projectRoot(), ".workflow", "activated.json");
+  }
+  async recordActivation(ids) {
+    let map = {};
+    try {
+      map = JSON.parse(await (0, import_promises9.readFile)(this.activatedPath(), "utf-8"));
+    } catch {
+    }
+    const now = Date.now();
+    for (const id of ids) map[id] = { time: now, pid: process.pid };
+    await (0, import_promises9.writeFile)(this.activatedPath(), JSON.stringify(map), "utf-8");
+  }
+  /** 跨进程激活时长(ms)，同进程返回 Infinity（跳过检查） */
+  async getActivationAge(id) {
+    try {
+      const map = JSON.parse(await (0, import_promises9.readFile)(this.activatedPath(), "utf-8"));
+      const entry = map[id];
+      if (!entry || entry.pid === process.pid) return Infinity;
+      return Date.now() - entry.time;
+    } catch {
+      return Infinity;
+    }
+  }
   /** init: 解析任务markdown → 生成progress/tasks */
   async init(tasksMd, force = false) {
     try {
@@ -2562,6 +2586,7 @@ ${def.description}
       log.debug(`next: \u6FC0\u6D3B\u4EFB\u52A1 ${task.id} (deps: ${task.deps.join(",") || "\u65E0"})`);
       const activated = cascaded.map((t) => t.id === task.id ? { ...t, status: "active" } : t);
       await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
+      await this.recordActivation([task.id]);
       await runLifecycleHook("onTaskStart", this.repo.projectRoot(), { TASK_ID: task.id, TASK_TITLE: task.title });
       const parts = [];
       const summary = await this.repo.loadSummary();
@@ -2610,6 +2635,7 @@ ${loopWarning}`);
       const activeIds = new Set(tasks.map((t) => t.id));
       const activated = cascaded.map((t) => activeIds.has(t.id) ? { ...t, status: "active" } : t);
       await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
+      await this.recordActivation(tasks.map((t) => t.id));
       for (const t of tasks) {
         await runLifecycleHook("onTaskStart", this.repo.projectRoot(), { TASK_ID: t.id, TASK_TITLE: t.title });
       }
@@ -2650,7 +2676,9 @@ ${loopWarning}`);
       if (task.status !== "active") {
         throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u53EA\u6709 active \u72B6\u6001\u53EF\u4EE5 checkpoint`);
       }
-      const isFailed = detail.startsWith("FAILED") || detail.length < 200 && /\b(fail|error|crash|timeout|rate.?limit)\b/i.test(detail) || detail.length < 200 && /限流|崩溃|超时|失败|异常|中断|未完成|无法/.test(detail);
+      const MIN_WORK_TIME = 3e4;
+      const age = await this.getActivationAge(id);
+      const isFailed = detail.startsWith("FAILED") || detail.length < 200 && /\b(fail|error|crash|timeout|rate.?limit)\b/i.test(detail) || detail.length < 200 && /限流|崩溃|超时|失败|异常|中断|未完成|无法/.test(detail) || age < MIN_WORK_TIME;
       if (isFailed) {
         await this.appendFailureContext(id, task, detail);
         const patternWarn = await this.detectFailurePattern(id, task);

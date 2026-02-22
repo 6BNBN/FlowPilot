@@ -44,6 +44,26 @@ export class WorkflowService {
     } catch { return null; }
   }
 
+  private activatedPath(): string { return join(this.repo.projectRoot(), '.workflow', 'activated.json'); }
+
+  private async recordActivation(ids: string[]): Promise<void> {
+    let map: Record<string, { time: number; pid: number }> = {};
+    try { map = JSON.parse(await readFile(this.activatedPath(), 'utf-8')); } catch {}
+    const now = Date.now();
+    for (const id of ids) map[id] = { time: now, pid: process.pid };
+    await writeFile(this.activatedPath(), JSON.stringify(map), 'utf-8');
+  }
+
+  /** 跨进程激活时长(ms)，同进程返回 Infinity（跳过检查） */
+  private async getActivationAge(id: string): Promise<number> {
+    try {
+      const map = JSON.parse(await readFile(this.activatedPath(), 'utf-8'));
+      const entry = map[id];
+      if (!entry || entry.pid === process.pid) return Infinity;
+      return Date.now() - entry.time;
+    } catch { return Infinity; }
+  }
+
   /** init: 解析任务markdown → 生成progress/tasks */
   async init(tasksMd: string, force = false): Promise<ProgressData> {
     // 自愈检查：验证上轮实验效果
@@ -129,6 +149,7 @@ export class WorkflowService {
       log.debug(`next: 激活任务 ${task.id} (deps: ${task.deps.join(',') || '无'})`);
       const activated = cascaded.map(t => t.id === task.id ? { ...t, status: 'active' as const } : t);
       await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
+      await this.recordActivation([task.id]);
       await runLifecycleHook('onTaskStart', this.repo.projectRoot(), { TASK_ID: task.id, TASK_TITLE: task.title });
 
       // 拼装上下文：summary + 依赖任务产出
@@ -189,6 +210,7 @@ export class WorkflowService {
       const activeIds = new Set(tasks.map(t => t.id));
       const activated = cascaded.map(t => activeIds.has(t.id) ? { ...t, status: 'active' as const } : t);
       await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
+      await this.recordActivation(tasks.map(t => t.id));
       for (const t of tasks) {
         await runLifecycleHook('onTaskStart', this.repo.projectRoot(), { TASK_ID: t.id, TASK_TITLE: t.title });
       }
@@ -233,9 +255,13 @@ export class WorkflowService {
         throw new Error(`任务 ${id} 状态为 ${task.status}，只有 active 状态可以 checkpoint`);
       }
 
+      const MIN_WORK_TIME = 30_000;
+      const age = await this.getActivationAge(id);
+
       const isFailed = detail.startsWith('FAILED')
         || (detail.length < 200 && /\b(fail|error|crash|timeout|rate.?limit)\b/i.test(detail))
-        || (detail.length < 200 && /限流|崩溃|超时|失败|异常|中断|未完成|无法/.test(detail));
+        || (detail.length < 200 && /限流|崩溃|超时|失败|异常|中断|未完成|无法/.test(detail))
+        || age < MIN_WORK_TIME;
 
       if (isFailed) {
         // 记录失败原因到 context
