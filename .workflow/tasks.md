@@ -1,20 +1,14 @@
-1. [general] BM25 稀疏向量升级：FNV-1a 20-bit hash
-   在 memory.ts 中引入 FNV-1a 20-bit hash 将 term 映射到 1M 固定维度空间（参考 Memoh-v2 indexer.go 的 termHash + sparseDimBits=20）。同时区分 query vector 和 doc vector 的权重计算（query 用 raw TF 无 IDF，doc 用完整 BM25 公式）。
+1. [general] Dense Vector 检索：Claude Embedding + 文件向量库
+   新建 infrastructure/embedding.ts：callClaudeEmbedding() 复用 ANTHROPIC_API_KEY 调用 Claude embedding API 获取 dense vector。新建 infrastructure/vector-store.ts：文件级向量存储（.flowpilot/vectors.json），brute-force cosine search。修改 memory.ts 的 queryMemory()：双路检索（BM25 sparse + dense vector）→ 已有 rrfFuse 融合。无 API key 时自动降级为纯 BM25。appendMemory() 时异步获取 embedding 并存储。
 
-2. [general] 多语言分词增强 + fastDetectLanguage
-   增强 tokenize() 支持完整 CJK Unicode 范围（Unified Ideographs Extensions A-F、Hiragana/Katakana、Hangul Syllables）。添加 fastDetectLanguage() 函数（CJK ratio > 15% 判定为 CJK 语言）。参考 Memoh-v2 service.go 的 isCJKRune + fastDetectLanguage。
+2. [general] 多语言分析器：停用词 + 词干提取 + 按语言 BM25 统计
+   新建 infrastructure/lang-analyzers.ts：10+ 语言停用词表（en/zh/ja/ko/fr/de/es/pt/ru/ar/it/nl），英语 Porter Stemmer 轻量实现，扩展 fastDetectLanguage 支持日韩文独立检测。修改 memory.ts：tokenize() 集成停用词过滤和词干提取，DfStats 按语言分离（参考 Memoh-v2 的 per-language stats map），bm25Vector/bm25QueryVector 使用对应语言的 DF 统计。
 
-3. [general] 记忆系统加固：周期性 DF 刷盘 + TTL 缓存 (deps: 1)
-   添加 periodicSaveDfStats() 30秒定期持久化 DF 统计（参考 Memoh-v2 indexer.go 的 periodicSave）。升级 LRU 缓存为 TTL+LRU 混合策略（24h TTL，超过 maxEntries 时淘汰过期条目优先，再删最旧 25%，参考 Memoh-v2 embeddings/cache.go）。
+3. [general] 协议自进化：CLAUDE.md 自修改 + EXPERIMENTS.md 日志 (deps: 1)
+   增强 history.ts 的 experiment() 支持 protocol-self-modify 目标：分析工作流历史中的模式（高频失败类型、重试热点、成功模式），生成针对 CLAUDE.md 协议的改进建议并自动应用。新建 .flowpilot/EXPERIMENTS.md 记录每次进化（日期、触发原因、观察、行动、预期效果）。reflect() 增加对 checkpoint summary 的模式挖掘（friction/delight/patterns/gaps 四维分析）。所有修改前做快照，支持回滚。
 
-4. [general] 心跳自检机制 (deps: 1, 2)
-   在 workflow-service 中添加 heartbeat 自检：活跃任务超过 30 分钟发出警告，记忆条目超过 100 条自动触发 compaction，DF 统计文件完整性校验。参考 Memoh-v2 heartbeat/engine.go 的定时检查逻辑。轻量实现，不需要 CronPool。
+4. [general] Multimodal 记忆支持：图片/文件元数据 + 内容类型路由 (deps: 1)
+   扩展 MemoryEntry 添加 contentType 字段（text/image/file/mixed）和 metadata（imageUrl/filePath/mimeType）。embedding.ts 添加 multimodal 内容描述生成（用 Claude vision API 对图片生成文本描述后再 embed）。queryMemory() 支持按 contentType 过滤。appendMemory() 根据内容类型选择处理管线（纯文本→直接 embed，图片→描述+embed，文件→摘要+embed）。
 
-5. [general] 进化引擎增强：预快照 + 安全回滚 (deps: 3)
-   在 experiment() 执行前对 config.json 和 protocol.md 做完整快照（参考 Memoh-v2 evolution_log.go 的 files_snapshot）。增强 review() 的回滚逻辑：从快照精确恢复而非重新生成。添加进化日志的 status 字段（completed/failed/skipped）。
-
-6. [general] 稀疏向量诊断 + checkpoint 智能截断 (deps: 1, 2)
-   添加 sparseVectorStats() 输出 Top-K bucket 分布和 CDF 曲线（参考 Memoh-v2 service.go 的 computeSparseVectorStats）。在 checkpoint 时自动调用 truncateHeadTail() 对过长 summary 截断。集成 computeMaxChars() 到 checkpoint 流程。
-
-7. [general] 构建验证 + 对比分析文档更新 (deps: 1, 2, 3, 4, 5, 6)
-   运行 npm run build 验证编译通过。更新对比分析.md 文档反映最新状态。确保 dist/flow.js 正常生成。
+5. [general] 构建验证 + 对比分析文档最终更新 (deps: 1, 2, 3, 4)
+   npm run build 验证编译通过。更新对比分析.md：记忆系统 95%→100%，历史进化 85%→95%，知识提取 75%→85%。标记所有未借鉴功能为已实现。

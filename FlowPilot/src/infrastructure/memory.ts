@@ -8,7 +8,7 @@ import { join, dirname } from 'path';
 import { createHash } from 'crypto';
 import { log } from './logger';
 import { detectLanguage as detectLangCode, analyze } from './lang-analyzers';
-import { embedText, describeImage } from './embedding';
+import { embedText, describeImage, sha256 as contentHash } from './embedding';
 import { loadDenseVectors, saveDenseVectors, denseSearch, type DenseVectorEntry } from './vector-store';
 
 /** 记忆内容类型 */
@@ -272,7 +272,14 @@ function termFrequency(tokens: string[]): Map<string, number> {
 /** 加载 DF 统计 */
 export async function loadDf(basePath: string): Promise<DfStats> {
   try {
-    return JSON.parse(await readFile(dfPath(basePath), 'utf-8'));
+    const stats: DfStats = JSON.parse(await readFile(dfPath(basePath), 'utf-8'));
+    // Filter out bare (non-namespaced) keys — lookupDf handles fallback reads
+    const cleaned: Record<string, number> = {};
+    for (const [k, v] of Object.entries(stats.df)) {
+      if (k.includes(':')) cleaned[k] = v;
+    }
+    stats.df = cleaned;
+    return stats;
   } catch {
     return { docCount: 0, df: {}, avgDocLen: 0 };
   }
@@ -421,14 +428,14 @@ export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'r
   if (idx >= 0) {
     const oldContent = entries[idx].content;
     const updated = entries.map((e, i) =>
-      i === idx ? { ...e, content: resolved.content, timestamp: resolved.timestamp, source: resolved.source, contentType: resolved.contentType, metadata: resolved.metadata } : e
+      i === idx ? { ...e, content: resolved.content, timestamp: resolved.timestamp, source: resolved.source, ...(resolved.contentType ? { contentType: resolved.contentType } : {}), ...(resolved.metadata ? { metadata: resolved.metadata } : {}) } : e
     );
     log.debug(`memory: 更新已有条目 (相似度>0.8)`);
     await saveMemory(basePath, updated);
     const vectors = await loadVectors(basePath);
     await saveVectors(basePath, vectors.filter(v => v.content !== oldContent));
     const denseVecs = await loadDenseVectors(basePath);
-    await saveDenseVectors(basePath, denseVecs.filter(v => v.id !== oldContent));
+    await saveDenseVectors(basePath, denseVecs.filter(v => v.id !== contentHash(oldContent)));
   } else {
     const newEntries = [...entries, { ...resolved, refs: 0, archived: false }];
     log.debug(`memory: 新增条目, 总计 ${newEntries.length}`);
@@ -454,8 +461,9 @@ export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'r
   const denseVec = await embedText(resolved.content, basePath);
   if (denseVec) {
     const denseVecs = await loadDenseVectors(basePath);
-    const di = denseVecs.findIndex(v => v.id === resolved.content);
-    const newDense: DenseVectorEntry = { id: resolved.content, vector: denseVec };
+    const resolvedHash = contentHash(resolved.content);
+    const di = denseVecs.findIndex(v => v.id === resolvedHash);
+    const newDense: DenseVectorEntry = { id: resolvedHash, vector: denseVec };
     const updatedDense = di >= 0
       ? denseVecs.map((v, i) => i === di ? newDense : v)
       : [...denseVecs, newDense];
@@ -547,10 +555,10 @@ export async function queryMemory(basePath: string, taskDescription: string, con
   const denseQueryVec = await embedText(taskDescription, basePath);
   if (denseQueryVec) {
     const denseVecs = await loadDenseVectors(basePath);
-    const contentMap = new Map(active.map(e => [e.content, e]));
+    const hashMap = new Map(active.map(e => [contentHash(e.content), e]));
     const denseHits = denseSearch(denseQueryVec, denseVecs, 10);
     const source3 = denseHits
-      .map(h => ({ entry: contentMap.get(h.id), score: h.score }))
+      .map(h => ({ entry: hashMap.get(h.id), score: h.score }))
       .filter((h): h is { entry: MemoryEntry; score: number } => h.entry !== undefined);
     if (source3.length) rrfSources.push(source3);
   }

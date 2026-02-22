@@ -267,6 +267,7 @@ export interface ExperimentLog {
   timestamp: string;
   experiments: AppliedExperiment[];
   status: 'completed' | 'failed' | 'skipped';
+  snapshotFile?: string;
 }
 
 /** 文件快照（参考 Memoh-v2 files_snapshot） */
@@ -365,12 +366,15 @@ export async function experiment(
   const configSnapshot = await safeRead(configPath, '{}');
   const protocolSnapshot = await safeRead(protocolPath, '');
   const claudeMdSnapshot = await safeRead(claudeMdPath, '');
-  await saveSnapshot(basePath, { 'config.json': configSnapshot, 'protocol.md': protocolSnapshot, 'CLAUDE.md': claudeMdSnapshot });
+  const snapshotFile = await saveSnapshot(basePath, { 'config.json': configSnapshot, 'protocol.md': protocolSnapshot, 'CLAUDE.md': claudeMdSnapshot });
+  log.snapshotFile = snapshotFile;
 
   try {
     let configObj = JSON.parse(configSnapshot);
     let protocolContent = protocolSnapshot;
     let claudeMdContent = claudeMdSnapshot;
+
+    let claudeMdExpCount = 0;
 
     for (const exp of report.experiments) {
       const applied: AppliedExperiment = { ...exp, applied: false, snapshotBefore: '' };
@@ -389,13 +393,24 @@ export async function experiment(
           applied.applied = true;
         } else if (exp.target === 'claude-md') {
           applied.snapshotBefore = claudeMdSnapshot;
-          // 只在 flowpilot 协议区域内追加
-          const endTag = '<!-- flowpilot:end -->';
-          const idx = claudeMdContent.indexOf(endTag);
-          if (idx >= 0) {
-            const insertion = `\n<!-- evolution: ${exp.trigger} -->\n> ${exp.action}\n`;
-            claudeMdContent = claudeMdContent.slice(0, idx) + insertion + claudeMdContent.slice(idx);
-            applied.applied = true;
+          if (claudeMdExpCount >= 3) { /* max 3 claude-md experiments per cycle */ }
+          else {
+            const stripComments = (s: string) => s.replace(/<!--/g, '').replace(/-->/g, '');
+            const safeTrigger = stripComments(exp.trigger);
+            const safeAction = stripComments(exp.action);
+            const endTag = '<!-- flowpilot:end -->';
+            const idx = claudeMdContent.indexOf(endTag);
+            if (idx >= 0) {
+              const insertion = `\n<!-- evolution: ${safeTrigger} -->\n> ${safeAction}\n`;
+              const startTag = '<!-- flowpilot:start -->';
+              const startIdx = claudeMdContent.indexOf(startTag);
+              const regionSize = (idx + endTag.length) - (startIdx >= 0 ? startIdx : 0) + insertion.length;
+              if (regionSize <= 10_240) {
+                claudeMdContent = claudeMdContent.slice(0, idx) + insertion + claudeMdContent.slice(idx);
+                applied.applied = true;
+                claudeMdExpCount++;
+              }
+            }
           }
         }
       } catch { /* 降级：applied 保持 false */ }
@@ -532,17 +547,22 @@ export async function review(basePath: string): Promise<ReviewResult> {
     }
   }
 
-  // 4. 自动回滚：从预快照精确恢复（而非 snapshotBefore）
+  // 4. 自动回滚：从实验日志中记录的快照精确恢复
   if (rolledBack) {
     try {
-      const snapshot = await loadLatestSnapshot(basePath);
+      const logs: ExperimentLog[] = JSON.parse(await readFile(expPath, 'utf-8'));
+      const firstExp = logs.find(l => l.snapshotFile);
+      let snapshot: FilesSnapshot | null = null;
+      if (firstExp?.snapshotFile) {
+        try { snapshot = JSON.parse(await readFile(firstExp.snapshotFile, 'utf-8')); } catch { /* fallback below */ }
+      }
+      if (!snapshot) snapshot = await loadLatestSnapshot(basePath);
       if (snapshot) {
         if (snapshot.files['config.json']) await writeFile(configPath, snapshot.files['config.json'], 'utf-8');
         if (snapshot.files['protocol.md']) await writeFile(protocolPath, snapshot.files['protocol.md'], 'utf-8');
         if (snapshot.files['CLAUDE.md']) await writeFile(claudeMdPath, snapshot.files['CLAUDE.md'], 'utf-8');
       }
       // 标记最近实验为 skipped
-      const logs: ExperimentLog[] = JSON.parse(await readFile(expPath, 'utf-8'));
       if (logs.length) {
         logs[logs.length - 1].status = 'skipped';
         await writeFile(expPath, JSON.stringify(logs, null, 2), 'utf-8');

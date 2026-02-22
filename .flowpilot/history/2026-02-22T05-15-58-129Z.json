@@ -1,0 +1,46 @@
+{
+  "name": "",
+  "totalTasks": 5,
+  "doneCount": 5,
+  "skipCount": 0,
+  "failCount": 0,
+  "retryTotal": 0,
+  "tasksByType": {
+    "general": 5
+  },
+  "failsByType": {},
+  "taskResults": [
+    {
+      "id": "001",
+      "type": "general",
+      "status": "done",
+      "retries": 0
+    },
+    {
+      "id": "002",
+      "type": "general",
+      "status": "done",
+      "retries": 0
+    },
+    {
+      "id": "003",
+      "type": "general",
+      "status": "done",
+      "retries": 0
+    },
+    {
+      "id": "004",
+      "type": "general",
+      "status": "done",
+      "retries": 0
+    },
+    {
+      "id": "005",
+      "type": "general",
+      "status": "done",
+      "retries": 0
+    }
+  ],
+  "startTime": "2026-02-21T19:57:57.487Z",
+  "endTime": "2026-02-22T05:15:58.129Z"
+}

@@ -1,3 +1,3 @@
-# task-004: 心跳自检机制
+# task-004: Multimodal 记忆支持：图片/文件元数据 + 内容类型路由
 
-心跳自检模块：新建 heartbeat.ts（runHeartbeat + startHeartbeat/stop），集成到 workflow-service init/resume/finish 生命周期，重构 healthCheck 委托给 heartbeat 模块
+Multimodal记忆支持：MemoryEntry添加contentType/metadata字段，embedding.ts添加describeImage()，appendMemory()内容类型路由，queryMemory()支持contentType过滤

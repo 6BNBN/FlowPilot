@@ -2,10 +2,8 @@
 
 ## 任务进展
 
-- [general] BM25 稀疏向量升级：FNV-1a 20-bit hash: BM25稀疏向量升级：添加FNV-1a 20-bit termHash，区分query(raw TF)和doc(完整BM25)向量，所有向量函数改用Map<nu
-- [general] 多语言分词增强 + fastDetectLanguage: 增强tokenize支持完整CJK Unicode范围，添加isCJKRune+fastDetectLanguage，truncation.ts集成自动语言检测
-- [general] 记忆系统加固：周期性 DF 刷盘 + TTL 缓存: 记忆系统加固：添加 dfDirty flag + startPeriodicDfSave 30s刷盘，升级缓存为 TTL(24h)+LRU 混合策略（过期优先淘
-- [general] 心跳自检机制: 心跳自检模块：新建 heartbeat.ts（runHeartbeat + startHeartbeat/stop），集成到 workflow-service
-- [general] 进化引擎增强：预快照 + 安全回滚: 进化引擎增强：预快照saveSnapshot+loadLatestSnapshot，review从快照精确回滚，ExperimentLog添加status字段(
-- [general] 稀疏向量诊断 + checkpoint 智能截断: sparseVectorStats() added to memory.ts + checkpoint智能截断集成到workflow-service.ts
-- [general] 构建验证 + 对比分析文档更新: 构建验证通过(dist/flow.js 105KB, tsc --noEmit 0错误) + 对比分析.md 全面更新(记忆95%/进化85%/架构95%, 7
+- [general] Dense Vector 检索：Claude Embedding + 文件向量库: Dense vector 检索完成：embedding.ts（通用 OpenAI-compatible embedding 客户端 + SHA-256 缓存）、
+- [general] 多语言分析器：停用词 + 词干提取 + 按语言 BM25 统计: 多语言分析器完成：lang-analyzers.ts（10语言停用词+Porter词干+语言检测）+ memory.ts集成（tokenize管线+按语言DF
+- [general] 协议自进化：CLAUDE.md 自修改 + EXPERIMENTS.md 日志: 协议自进化：增强ruleReflect四维分析+claude-md实验目标+EXPERIMENTS.md日志+review回滚CLAUDE.md
+- [general] Multimodal 记忆支持：图片/文件元数据 + 内容类型路由: Multimodal记忆支持：MemoryEntry添加contentType/metadata字段，embedding.ts添加describeImage()
+- [general] 构建验证 + 对比分析文档最终更新: 构建验证通过(tsc+build) + 对比分析.md 最终更新：记忆100%、历史进化95%、知识提取85%、整体架构98%

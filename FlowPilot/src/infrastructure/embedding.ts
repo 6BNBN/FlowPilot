@@ -20,7 +20,7 @@ interface EmbeddingCache {
 
 let memCache: EmbeddingCache | null = null;
 
-function sha256(text: string): string {
+export function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
@@ -47,7 +47,7 @@ async function saveEmbeddingCache(basePath: string, cache: EmbeddingCache): Prom
 
 /** 获取 embedding 配置，无 key 返回 null */
 function getConfig(): { url: URL; apiKey: string; model: string } | null {
-  const apiKey = process.env.EMBEDDING_API_KEY || process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.EMBEDDING_API_KEY;
   if (!apiKey) return null;
   const rawUrl = process.env.EMBEDDING_API_URL || 'https://api.voyageai.com/v1/embeddings';
   const model = process.env.EMBEDDING_MODEL || 'voyage-3-lite';
@@ -115,9 +115,8 @@ export async function embedText(text: string, basePath?: string): Promise<number
   // 写入缓存
   if (basePath) {
     const cache = await loadEmbeddingCache(basePath);
-    cache[hash] = vector;
-    memCache = cache;
-    await saveEmbeddingCache(basePath, cache);
+    memCache = { ...cache, [hash]: vector };
+    await saveEmbeddingCache(basePath, memCache);
   }
 
   log.debug(`embedding: 获取 ${vector.length} 维向量`);
