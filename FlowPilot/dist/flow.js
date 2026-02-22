@@ -2650,7 +2650,7 @@ ${loopWarning}`);
       if (task.status !== "active") {
         throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u53EA\u6709 active \u72B6\u6001\u53EF\u4EE5 checkpoint`);
       }
-      if (detail === "FAILED") {
+      if (detail.startsWith("FAILED")) {
         await this.appendFailureContext(id, task, detail);
         const patternWarn = await this.detectFailurePattern(id, task);
         const loopResult2 = await detect(this.repo.projectRoot(), id, detail, true);
