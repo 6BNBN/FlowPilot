@@ -233,7 +233,7 @@ export class WorkflowService {
         throw new Error(`任务 ${id} 状态为 ${task.status}，只有 active 状态可以 checkpoint`);
       }
 
-      if (detail === 'FAILED') {
+      if (detail.startsWith('FAILED')) {
         // 记录失败原因到 context
         await this.appendFailureContext(id, task, detail);
         // 检测重复失败模式
