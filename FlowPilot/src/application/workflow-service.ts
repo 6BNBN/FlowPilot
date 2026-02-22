@@ -234,7 +234,8 @@ export class WorkflowService {
       }
 
       const isFailed = detail.startsWith('FAILED')
-        || (detail.length < 200 && /\b(fail|error|crash|timeout|限流|崩溃|超时|rate.?limit)\b/i.test(detail));
+        || (detail.length < 200 && /\b(fail|error|crash|timeout|rate.?limit)\b/i.test(detail))
+        || (detail.length < 200 && /限流|崩溃|超时|失败|异常|中断|未完成|无法/.test(detail));
 
       if (isFailed) {
         // 记录失败原因到 context
