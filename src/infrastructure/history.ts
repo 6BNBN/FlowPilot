@@ -327,7 +327,8 @@ function parseConfigAction(action: string): { key: string; value: number } | nul
   const CN_MAP: Record<string, string> = {
     '并行': 'parallelLimit', '重试': 'maxRetries', '超时': 'timeout', '验证超时': 'verifyTimeout',
   };
-  for (const [cn, key] of Object.entries(CN_MAP)) {
+  const cnEntries = Object.entries(CN_MAP).sort((a, b) => b[0].length - a[0].length);
+  for (const [cn, key] of cnEntries) {
     if (action.includes(cn)) {
       const m = action.match(/(\d+)/);
       if (m) return { key, value: Number(m[1]) };
@@ -385,7 +386,7 @@ export async function experiment(
   const log: ExperimentLog = { timestamp: new Date().toISOString(), experiments: [], status: 'completed' };
   if (!report.experiments.length) return log;
 
-  const configPath = join(basePath, '.flowpilot', 'config.json');
+  const configPath = join(basePath, '.workflow', 'config.json');
 
   // 预快照：实验前保存完整文件内容
   const configSnapshot = await safeRead(configPath, '{}');
@@ -462,8 +463,7 @@ export async function review(basePath: string): Promise<ReviewResult> {
   let rollbackReason: string | undefined;
 
   const historyDir = join(basePath, '.flowpilot', 'history');
-  const configPath = join(basePath, '.flowpilot', 'config.json');
-  const claudeMdPath = join(basePath, 'CLAUDE.md');
+  const configPath = join(basePath, '.workflow', 'config.json');
   const expPath = join(basePath, '.flowpilot', 'evolution', 'experiments.json');
 
   // 1. 加载历史（最近两轮）
@@ -523,19 +523,6 @@ export async function review(basePath: string): Promise<ReviewResult> {
     checks.push({ name: 'experiments.json', passed: true, detail: '文件不存在，跳过' });
   }
 
-  // CLAUDE.md 完整性：协议标记必须成对存在
-  const claudeMdRaw = await safeRead(claudeMdPath, '');
-  if (claudeMdRaw) {
-    const hasStart = claudeMdRaw.includes('<!-- flowpilot:start -->');
-    const hasEnd = claudeMdRaw.includes('<!-- flowpilot:end -->');
-    const intact = hasStart && hasEnd;
-    checks.push({ name: 'CLAUDE.md', passed: intact, detail: intact ? '协议标记完整' : '协议标记缺失或损坏' });
-    if (!intact && !rolledBack) {
-      rolledBack = true;
-      rollbackReason = 'CLAUDE.md 协议标记损坏';
-    }
-  }
-
   // 4. 自动回滚：从实验日志中记录的快照精确恢复
   if (rolledBack) {
     try {
@@ -548,7 +535,6 @@ export async function review(basePath: string): Promise<ReviewResult> {
       if (!snapshot) snapshot = await loadLatestSnapshot(basePath);
       if (snapshot) {
         if (snapshot.files['config.json']) await writeFile(configPath, snapshot.files['config.json'], 'utf-8');
-        if (snapshot.files['CLAUDE.md']) await writeFile(claudeMdPath, snapshot.files['CLAUDE.md'], 'utf-8');
       }
       // 标记最近实验为 skipped
       if (logs.length) {

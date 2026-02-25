@@ -3,7 +3,7 @@
  * @description 工作流应用服务 - 11个用例
  */
 
-import type { ProgressData, TaskEntry } from '../domain/types';
+import type { ProgressData, TaskEntry, WorkflowStats } from '../domain/types';
 import type { WorkflowDefinition } from '../domain/workflow';
 import type { WorkflowRepository } from '../domain/repository';
 import { makeTaskId, cascadeSkip, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
@@ -164,8 +164,9 @@ export class WorkflowService {
 
       // 注入相关永久记忆
       const memories = await queryMemory(this.repo.projectRoot(), `${task.title} ${task.description}`);
-      if (memories.length) {
-        parts.push('## 相关记忆\n\n' + memories.map(m => `- ${m.content}`).join('\n'));
+      const useful = memories.filter(m => m.content.length > 20);
+      if (useful.length) {
+        parts.push('## 相关记忆\n\n' + useful.map(m => `- [${m.source}] ${m.content}`).join('\n'));
       }
 
       // 注入循环检测警告
@@ -240,8 +241,9 @@ export class WorkflowService {
         }
         // 注入相关永久记忆
         const memories = await queryMemory(this.repo.projectRoot(), `${task.title} ${task.description}`);
-        if (memories.length) {
-          parts.push('## 相关记忆\n\n' + memories.map(m => `- ${m.content}`).join('\n'));
+        const useful = memories.filter(m => m.content.length > 20);
+        if (useful.length) {
+          parts.push('## 相关记忆\n\n' + useful.map(m => `- [${m.source}] ${m.content}`).join('\n'));
         }
         // 注入循环检测警告
         if (loopWarning) {
@@ -275,6 +277,9 @@ export class WorkflowService {
       const MIN_WORK_TIME = 30_000;
       const age = await this.getActivationAge(id);
 
+      // 预加载现有记忆，供 extractAll 去重
+      const existingMems = (await loadMemory(this.repo.projectRoot())).filter(m => !m.archived).map(m => m.content);
+
       const isFailed = detail.startsWith('FAILED')
         || (detail.length < 200 && /\b(fail|error|crash|timeout|rate.?limit)\b/i.test(detail))
         || (detail.length < 200 && /限流|崩溃|超时|失败|异常|中断|未完成|无法/.test(detail))
@@ -294,7 +299,7 @@ export class WorkflowService {
         }
 
         // 失败路径也写记忆（提取失败原因中的知识）
-        for (const entry of await extractAll(detail, `task-${id}-fail`)) {
+        for (const entry of await extractAll(detail, `task-${id}-fail`, existingMems)) {
           await appendMemory(this.repo.projectRoot(), {
             content: entry.content, source: entry.source,
             timestamp: new Date().toISOString(),
@@ -308,7 +313,7 @@ export class WorkflowService {
         log.debug(`checkpoint ${id}: failTask result=${result}, retries=${task.retries + 1}`);
         const msg = result === 'retry'
           ? `任务 ${id} 失败(第${task.retries + 1}次)，将重试`
-          : `任务 ${id} 连续失败3次，已跳过`;
+          : `任务 ${id} 连续失败${maxRetries}次，已跳过`;
         const warns = [patternWarn, loopResult ? `[LOOP] ${loopResult.message}` : null].filter(Boolean);
         return warns.length ? `${msg}\n${warns.join('\n')}` : msg;
       }
@@ -327,7 +332,7 @@ export class WorkflowService {
       await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
 
       // 智能提取知识写入永久记忆
-      for (const entry of await extractAll(detail, `task-${id}`)) {
+      for (const entry of await extractAll(detail, `task-${id}`, existingMems)) {
         await appendMemory(this.repo.projectRoot(), {
           content: entry.content,
           source: entry.source,
@@ -594,7 +599,16 @@ export class WorkflowService {
 
   /** evolve: 接收CC子Agent的反思结果，执行进化实验 */
   async evolve(reflectionText: string): Promise<string> {
-    const report = await reflect({ totalTasks: 0, doneCount: 0, failCount: 0, skipCount: 0, retryTotal: 0, tasksByType: {}, failsByType: {}, taskResults: [] }, this.repo.projectRoot());
+    // 尝试从当前进度获取真实 stats
+    let stats: WorkflowStats;
+    try {
+      const data = await this.repo.loadProgress();
+      if (!data) throw new Error('no progress');
+      stats = collectStats(data);
+    } catch {
+      stats = { name: '', totalTasks: 0, doneCount: 0, skipCount: 0, failCount: 0, retryTotal: 0, tasksByType: {}, failsByType: {}, taskResults: [], startTime: new Date().toISOString(), endTime: new Date().toISOString() };
+    }
+    const report = await reflect(stats, this.repo.projectRoot());
     // 解析子Agent的结构化反思
     const lines = reflectionText.split('\n').filter(l => l.trim());
     const experiments: Array<{ trigger: string; observation: string; action: string; expected: string; target: 'config' | 'claude-md' }> = [];

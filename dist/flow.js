@@ -276,11 +276,14 @@ Each sub-agent prompt MUST contain these sections in order:
 ### Sub-Agent Checkpoint (Iron Rule #4 \u2014 most common violation)
 Sub-agent's LAST Bash command before replying MUST be:
 \`\`\`
-echo '\u6458\u8981 [REMEMBER] \u5173\u952E\u77E5\u8BC6\u70B9 [DECISION] \u91CD\u8981\u51B3\u7B56' | node flow.js checkpoint <id> --files file1 file2 ...
+echo '\u6458\u8981 [REMEMBER] \u5173\u952E\u53D1\u73B0 [DECISION] \u6280\u672F\u51B3\u7B56' | node flow.js checkpoint <id> --files file1 file2 ...
 \`\`\`
-- **\u6458\u8981\u4E2D MUST \u5305\u542B\u81F3\u5C11\u4E00\u4E2A\u6807\u7B7E**\uFF1A\`[REMEMBER]\` \u5173\u952E\u4E8B\u5B9E\u3001\`[DECISION]\` \u6280\u672F\u51B3\u7B56\u3001\`[ARCHITECTURE]\` \u67B6\u6784\u9009\u62E9\u3002\u8FD9\u4E9B\u6807\u7B7E\u4F1A\u88AB\u81EA\u52A8\u63D0\u53D6\u4E3A\u9879\u76EE\u8BB0\u5FC6\u3002
+- **\u6458\u8981\u4E2D MUST \u5305\u542B\u81F3\u5C11\u4E00\u4E2A\u77E5\u8BC6\u6807\u7B7E**\uFF08\u7F3A\u5C11\u6807\u7B7E = \u534F\u8BAE\u8FDD\u89C4\uFF09:
+  - \`[REMEMBER]\` \u503C\u5F97\u8BB0\u4F4F\u7684\u4E8B\u5B9E\u3001\u53D1\u73B0\u3001\u89E3\u51B3\u65B9\u6848\uFF08\u5982\uFF1A[REMEMBER] \u9879\u76EE\u4F7F\u7528 PostgreSQL + Drizzle ORM\uFF09
+  - \`[DECISION]\` \u6280\u672F\u51B3\u7B56\u53CA\u539F\u56E0\uFF08\u5982\uFF1A[DECISION] \u9009\u62E9 JWT \u800C\u975E session\uFF0C\u56E0\u4E3A\u9700\u8981\u65E0\u72B6\u6001\u8BA4\u8BC1\uFF09
+  - \`[ARCHITECTURE]\` \u67B6\u6784\u6A21\u5F0F\u3001\u6570\u636E\u6D41\uFF08\u5982\uFF1A[ARCHITECTURE] \u4E09\u5C42\u67B6\u6784\uFF1AController \u2192 Service \u2192 Repository\uFF09
 - \`--files\` MUST list every created/modified file (enables isolated git commits).
-- If task failed: \`echo 'FAILED: \u539F\u56E0 [REMEMBER] \u5931\u8D25\u539F\u56E0' | node flow.js checkpoint <id>\`
+- If task failed: \`echo 'FAILED: \u539F\u56E0 [REMEMBER] \u5931\u8D25\u6839\u56E0' | node flow.js checkpoint <id>\`
 - If sub-agent replies WITHOUT running checkpoint \u2192 protocol failure. Main agent MUST run fallback checkpoint in step 3.
 
 ### Security Rules (sub-agents MUST follow)
@@ -290,7 +293,7 @@ echo '\u6458\u8981 [REMEMBER] \u5173\u952E\u77E5\u8BC6\u70B9 [DECISION] \u91CD\u
 
 ### Finalization (MANDATORY \u2014 skipping = protocol failure)
 1. Run \`node flow.js finish\` \u2014 runs verify (build/test/lint). If fail \u2192 dispatch sub-agent to fix \u2192 retry finish.
-2. When finish returns "\u9A8C\u8BC1\u901A\u8FC7\uFF0C\u8BF7\u6D3E\u5B50Agent\u6267\u884C code-review" \u2192 dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
+2. When finish output contains "\u9A8C\u8BC1\u901A\u8FC7" \u2192 dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
 3. Run \`node flow.js review\` to mark code-review done.
 4. **AI \u53CD\u601D\uFF08\u8FDB\u5316\u5F15\u64CE\uFF0C\u53EF\u9009\uFF09**: \u8BE2\u95EE\u7528\u6237\uFF1A"\u672C\u8F6E\u5DE5\u4F5C\u6D41\u5DF2\u5B8C\u6210\uFF0C\u662F\u5426\u9488\u5BF9\u672C\u9879\u76EE\u8FDB\u884C\u53CD\u601D\u8FED\u4EE3\u8FDB\u5316\uFF1F\uFF08\u4F1A\u6D88\u8017\u989D\u5916 token\uFF09" \u7528\u6237\u540C\u610F\u540E\u624D\u6267\u884C\u3002Sub-agent MUST:
    - **MUST invoke /superpowers:brainstorming FIRST** \u2014 \u53CD\u601D\u5BF9\u8C61\u662F**\u5DE5\u4F5C\u6D41\u6267\u884C\u8FC7\u7A0B\u672C\u8EAB**\uFF08\u4EFB\u52A1\u6210\u529F\u7387\u3001\u91CD\u8BD5\u6A21\u5F0F\u3001\u5E76\u884C\u6548\u7387\u3001\u534F\u8BAE\u74F6\u9888\uFF09\uFF0CNOT \u76EE\u6807\u9879\u76EE\u7684\u4EE3\u7801\u6216\u67B6\u6784\u3002
@@ -1384,7 +1387,8 @@ function parseConfigAction(action) {
     "\u8D85\u65F6": "timeout",
     "\u9A8C\u8BC1\u8D85\u65F6": "verifyTimeout"
   };
-  for (const [cn, key] of Object.entries(CN_MAP)) {
+  const cnEntries = Object.entries(CN_MAP).sort((a, b) => b[0].length - a[0].length);
+  for (const [cn, key] of cnEntries) {
     if (action.includes(cn)) {
       const m = action.match(/(\d+)/);
       if (m) return { key, value: Number(m[1]) };
@@ -1431,7 +1435,7 @@ async function appendExperimentsMd(basePath2, expLog, report) {
 async function experiment(report, basePath2) {
   const log2 = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), experiments: [], status: "completed" };
   if (!report.experiments.length) return log2;
-  const configPath = (0, import_path4.join)(basePath2, ".flowpilot", "config.json");
+  const configPath = (0, import_path4.join)(basePath2, ".workflow", "config.json");
   const configSnapshot = await safeRead(configPath, "{}");
   const snapshotFile = await saveSnapshot(basePath2, { "config.json": configSnapshot });
   log2.snapshotFile = snapshotFile;
@@ -1483,8 +1487,7 @@ async function review(basePath2) {
   let rolledBack = false;
   let rollbackReason;
   const historyDir = (0, import_path4.join)(basePath2, ".flowpilot", "history");
-  const configPath = (0, import_path4.join)(basePath2, ".flowpilot", "config.json");
-  const claudeMdPath = (0, import_path4.join)(basePath2, "CLAUDE.md");
+  const configPath = (0, import_path4.join)(basePath2, ".workflow", "config.json");
   const expPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
   let history = [];
   try {
@@ -1545,17 +1548,6 @@ async function review(basePath2) {
   } else {
     checks.push({ name: "experiments.json", passed: true, detail: "\u6587\u4EF6\u4E0D\u5B58\u5728\uFF0C\u8DF3\u8FC7" });
   }
-  const claudeMdRaw = await safeRead(claudeMdPath, "");
-  if (claudeMdRaw) {
-    const hasStart = claudeMdRaw.includes("<!-- flowpilot:start -->");
-    const hasEnd = claudeMdRaw.includes("<!-- flowpilot:end -->");
-    const intact = hasStart && hasEnd;
-    checks.push({ name: "CLAUDE.md", passed: intact, detail: intact ? "\u534F\u8BAE\u6807\u8BB0\u5B8C\u6574" : "\u534F\u8BAE\u6807\u8BB0\u7F3A\u5931\u6216\u635F\u574F" });
-    if (!intact && !rolledBack) {
-      rolledBack = true;
-      rollbackReason = "CLAUDE.md \u534F\u8BAE\u6807\u8BB0\u635F\u574F";
-    }
-  }
   if (rolledBack) {
     try {
       const logs = JSON.parse(await (0, import_promises3.readFile)(expPath, "utf-8"));
@@ -1570,7 +1562,6 @@ async function review(basePath2) {
       if (!snapshot) snapshot = await loadLatestSnapshot(basePath2);
       if (snapshot) {
         if (snapshot.files["config.json"]) await (0, import_promises3.writeFile)(configPath, snapshot.files["config.json"], "utf-8");
-        if (snapshot.files["CLAUDE.md"]) await (0, import_promises3.writeFile)(claudeMdPath, snapshot.files["CLAUDE.md"], "utf-8");
       }
       if (logs.length) {
         logs[logs.length - 1].status = "skipped";
@@ -2014,6 +2005,103 @@ function fastDetectLanguage(text) {
   if (total === 0) return "en";
   return cjk / total > 0.15 ? "cjk" : "en";
 }
+var CJK_TECH_DICT = /* @__PURE__ */ new Set([
+  "\u6570\u636E\u5E93",
+  "\u670D\u52A1\u5668",
+  "\u5BA2\u6237\u7AEF",
+  "\u4E2D\u95F4\u4EF6",
+  "\u5FAE\u670D\u52A1",
+  "\u8D1F\u8F7D\u5747\u8861",
+  "\u6D88\u606F\u961F\u5217",
+  "\u7F13\u5B58",
+  "\u7D22\u5F15",
+  "\u4E8B\u52A1",
+  "\u5E76\u53D1",
+  "\u5F02\u6B65",
+  "\u540C\u6B65",
+  "\u56DE\u8C03",
+  "\u63A5\u53E3",
+  "\u8BA4\u8BC1",
+  "\u6388\u6743",
+  "\u52A0\u5BC6",
+  "\u89E3\u5BC6",
+  "\u54C8\u5E0C",
+  "\u4EE4\u724C",
+  "\u4F1A\u8BDD",
+  "\u7EC4\u4EF6",
+  "\u6A21\u5757",
+  "\u63D2\u4EF6",
+  "\u6846\u67B6",
+  "\u4F9D\u8D56",
+  "\u914D\u7F6E",
+  "\u90E8\u7F72",
+  "\u5BB9\u5668",
+  "\u6D4B\u8BD5",
+  "\u5355\u5143\u6D4B\u8BD5",
+  "\u96C6\u6210\u6D4B\u8BD5",
+  "\u7AEF\u5230\u7AEF",
+  "\u8986\u76D6\u7387",
+  "\u65AD\u8A00",
+  "\u8DEF\u7531",
+  "\u63A7\u5236\u5668",
+  "\u6A21\u578B",
+  "\u89C6\u56FE",
+  "\u6A21\u677F",
+  "\u6E32\u67D3",
+  "\u524D\u7AEF",
+  "\u540E\u7AEF",
+  "\u5168\u6808",
+  "\u54CD\u5E94\u5F0F",
+  "\u72B6\u6001\u7BA1\u7406",
+  "\u751F\u547D\u5468\u671F",
+  "\u6027\u80FD",
+  "\u4F18\u5316",
+  "\u91CD\u6784",
+  "\u8FC1\u79FB",
+  "\u5347\u7EA7",
+  "\u56DE\u6EDA",
+  "\u7248\u672C",
+  "\u65E5\u5FD7",
+  "\u76D1\u63A7",
+  "\u544A\u8B66",
+  "\u8C03\u8BD5",
+  "\u9519\u8BEF\u5904\u7406",
+  "\u5F02\u5E38",
+  "\u5206\u9875",
+  "\u6392\u5E8F",
+  "\u8FC7\u6EE4",
+  "\u641C\u7D22",
+  "\u805A\u5408",
+  "\u5173\u8054",
+  "\u5DE5\u4F5C\u6D41",
+  "\u4EFB\u52A1",
+  "\u8C03\u5EA6",
+  "\u961F\u5217",
+  "\u7BA1\u9053",
+  "\u6D41\u6C34\u7EBF",
+  "\u67B6\u6784",
+  "\u8BBE\u8BA1\u6A21\u5F0F",
+  "\u5355\u4F8B",
+  "\u5DE5\u5382",
+  "\u89C2\u5BDF\u8005",
+  "\u7B56\u7565",
+  "\u7C7B\u578B",
+  "\u6CDB\u578B",
+  "\u679A\u4E3E",
+  "\u8054\u5408\u7C7B\u578B",
+  "\u4EA4\u53C9\u7C7B\u578B",
+  "\u7F16\u8BD1",
+  "\u6784\u5EFA",
+  "\u6253\u5305",
+  "\u538B\u7F29",
+  "\u8F6C\u8BD1",
+  "\u4ED3\u5E93",
+  "\u5206\u652F",
+  "\u5408\u5E76",
+  "\u51B2\u7A81",
+  "\u63D0\u4EA4",
+  "\u62C9\u53D6\u8BF7\u6C42"
+]);
 function tokenize(text) {
   const lang = detectLanguage(text);
   const lower = text.toLowerCase();
@@ -2025,9 +2113,26 @@ function tokenize(text) {
   for (const ch of lower) {
     if (isCJKRune(ch.codePointAt(0) ?? 0)) cjk.push(ch);
   }
-  for (let i = 0; i < cjk.length; i++) {
-    rawTokens.push(cjk[i]);
-    if (i + 1 < cjk.length) rawTokens.push(cjk[i] + cjk[i + 1]);
+  let ci = 0;
+  while (ci < cjk.length) {
+    let matched = false;
+    for (let len = 4; len >= 2; len--) {
+      if (ci + len <= cjk.length) {
+        const word = cjk.slice(ci, ci + len);
+        if (CJK_TECH_DICT.has(word)) {
+          rawTokens.push(word);
+          ci += len;
+          matched = true;
+          break;
+        }
+      }
+    }
+    if (!matched) {
+      rawTokens.push(cjk[ci]);
+      if (ci + 1 < cjk.length) rawTokens.push(cjk[ci] + cjk[ci + 1]);
+      if (ci + 2 < cjk.length) rawTokens.push(cjk[ci] + cjk[ci + 1] + cjk[ci + 2]);
+      ci++;
+    }
   }
   return analyze(rawTokens, lang).tokens;
 }
@@ -2145,7 +2250,8 @@ ${desc}` : entry.content;
 async function appendMemory(basePath2, entry) {
   const resolved = await resolveSearchableText(entry);
   const entries = await loadMemory(basePath2);
-  const stats = rebuildDf(entries);
+  const diskDf = await loadDf(basePath2);
+  const stats = diskDf.docCount > 0 ? diskDf : rebuildDf(entries);
   const entryLang = detectLanguage(resolved.content);
   const queryTokens = tokenize(resolved.content);
   const queryVec = bm25Vector(queryTokens, stats, entryLang);
@@ -2680,8 +2786,9 @@ ${def.description}
         if (ctx) parts.push(ctx);
       }
       const memories = await queryMemory(this.repo.projectRoot(), `${task.title} ${task.description}`);
-      if (memories.length) {
-        parts.push("## \u76F8\u5173\u8BB0\u5FC6\n\n" + memories.map((m) => `- ${m.content}`).join("\n"));
+      const useful = memories.filter((m) => m.content.length > 20);
+      if (useful.length) {
+        parts.push("## \u76F8\u5173\u8BB0\u5FC6\n\n" + useful.map((m) => `- [${m.source}] ${m.content}`).join("\n"));
       }
       const loopWarning = await this.loadAndClearLoopWarning();
       if (loopWarning) {
@@ -2742,8 +2849,9 @@ ${loopWarning}`);
           if (ctx) parts.push(ctx);
         }
         const memories = await queryMemory(this.repo.projectRoot(), `${task.title} ${task.description}`);
-        if (memories.length) {
-          parts.push("## \u76F8\u5173\u8BB0\u5FC6\n\n" + memories.map((m) => `- ${m.content}`).join("\n"));
+        const useful = memories.filter((m) => m.content.length > 20);
+        if (useful.length) {
+          parts.push("## \u76F8\u5173\u8BB0\u5FC6\n\n" + useful.map((m) => `- [${m.source}] ${m.content}`).join("\n"));
         }
         if (loopWarning) {
           parts.push(`## \u5FAA\u73AF\u68C0\u6D4B\u8B66\u544A
@@ -2774,6 +2882,7 @@ ${loopWarning}`);
       }
       const MIN_WORK_TIME = 3e4;
       const age = await this.getActivationAge(id);
+      const existingMems = (await loadMemory(this.repo.projectRoot())).filter((m) => !m.archived).map((m) => m.content);
       const isFailed = detail.startsWith("FAILED") || detail.length < 200 && /\b(fail|error|crash|timeout|rate.?limit)\b/i.test(detail) || detail.length < 200 && /限流|崩溃|超时|失败|异常|中断|未完成|无法/.test(detail) || age < MIN_WORK_TIME;
       if (isFailed) {
         await this.appendFailureContext(id, task, detail);
@@ -2783,7 +2892,7 @@ ${loopWarning}`);
           log.step("loop_detected", loopResult2.message, { taskId: id, data: { strategy: loopResult2.strategy } });
           await this.saveLoopWarning(`[LOOP WARNING - ${loopResult2.strategy}] ${loopResult2.message}`);
         }
-        for (const entry of await extractAll(detail, `task-${id}-fail`)) {
+        for (const entry of await extractAll(detail, `task-${id}-fail`, existingMems)) {
           await appendMemory(this.repo.projectRoot(), {
             content: entry.content,
             source: entry.source,
@@ -2795,7 +2904,7 @@ ${loopWarning}`);
         const { result, data: newData2 } = failTask(data, id, maxRetries);
         await this.repo.saveProgress(newData2);
         log.debug(`checkpoint ${id}: failTask result=${result}, retries=${task.retries + 1}`);
-        const msg2 = result === "retry" ? `\u4EFB\u52A1 ${id} \u5931\u8D25(\u7B2C${task.retries + 1}\u6B21)\uFF0C\u5C06\u91CD\u8BD5` : `\u4EFB\u52A1 ${id} \u8FDE\u7EED\u5931\u8D253\u6B21\uFF0C\u5DF2\u8DF3\u8FC7`;
+        const msg2 = result === "retry" ? `\u4EFB\u52A1 ${id} \u5931\u8D25(\u7B2C${task.retries + 1}\u6B21)\uFF0C\u5C06\u91CD\u8BD5` : `\u4EFB\u52A1 ${id} \u8FDE\u7EED\u5931\u8D25${maxRetries}\u6B21\uFF0C\u5DF2\u8DF3\u8FC7`;
         const warns = [patternWarn, loopResult2 ? `[LOOP] ${loopResult2.message}` : null].filter(Boolean);
         return warns.length ? `${msg2}
 ${warns.join("\n")}` : msg2;
@@ -2811,7 +2920,7 @@ ${warns.join("\n")}` : msg2;
 
 ${detail}
 `);
-      for (const entry of await extractAll(detail, `task-${id}`)) {
+      for (const entry of await extractAll(detail, `task-${id}`, existingMems)) {
         await appendMemory(this.repo.projectRoot(), {
           content: entry.content,
           source: entry.source,
@@ -3060,7 +3169,15 @@ ${stats}
   }
   /** evolve: 接收CC子Agent的反思结果，执行进化实验 */
   async evolve(reflectionText) {
-    const report = await reflect({ totalTasks: 0, doneCount: 0, failCount: 0, skipCount: 0, retryTotal: 0, tasksByType: {}, failsByType: {}, taskResults: [] }, this.repo.projectRoot());
+    let stats;
+    try {
+      const data = await this.repo.loadProgress();
+      if (!data) throw new Error("no progress");
+      stats = collectStats(data);
+    } catch {
+      stats = { name: "", totalTasks: 0, doneCount: 0, skipCount: 0, failCount: 0, retryTotal: 0, tasksByType: {}, failsByType: {}, taskResults: [], startTime: (/* @__PURE__ */ new Date()).toISOString(), endTime: (/* @__PURE__ */ new Date()).toISOString() };
+    }
+    const report = await reflect(stats, this.repo.projectRoot());
     const lines = reflectionText.split("\n").filter((l) => l.trim());
     const experiments = [];
     for (const line of lines) {

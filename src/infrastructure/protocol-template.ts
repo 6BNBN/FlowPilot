@@ -72,11 +72,14 @@ Each sub-agent prompt MUST contain these sections in order:
 ### Sub-Agent Checkpoint (Iron Rule #4 — most common violation)
 Sub-agent's LAST Bash command before replying MUST be:
 \`\`\`
-echo '摘要 [REMEMBER] 关键知识点 [DECISION] 重要决策' | node flow.js checkpoint <id> --files file1 file2 ...
+echo '摘要 [REMEMBER] 关键发现 [DECISION] 技术决策' | node flow.js checkpoint <id> --files file1 file2 ...
 \`\`\`
-- **摘要中 MUST 包含至少一个标签**：\`[REMEMBER]\` 关键事实、\`[DECISION]\` 技术决策、\`[ARCHITECTURE]\` 架构选择。这些标签会被自动提取为项目记忆。
+- **摘要中 MUST 包含至少一个知识标签**（缺少标签 = 协议违规）:
+  - \`[REMEMBER]\` 值得记住的事实、发现、解决方案（如：[REMEMBER] 项目使用 PostgreSQL + Drizzle ORM）
+  - \`[DECISION]\` 技术决策及原因（如：[DECISION] 选择 JWT 而非 session，因为需要无状态认证）
+  - \`[ARCHITECTURE]\` 架构模式、数据流（如：[ARCHITECTURE] 三层架构：Controller → Service → Repository）
 - \`--files\` MUST list every created/modified file (enables isolated git commits).
-- If task failed: \`echo 'FAILED: 原因 [REMEMBER] 失败原因' | node flow.js checkpoint <id>\`
+- If task failed: \`echo 'FAILED: 原因 [REMEMBER] 失败根因' | node flow.js checkpoint <id>\`
 - If sub-agent replies WITHOUT running checkpoint → protocol failure. Main agent MUST run fallback checkpoint in step 3.
 
 ### Security Rules (sub-agents MUST follow)
@@ -86,7 +89,7 @@ echo '摘要 [REMEMBER] 关键知识点 [DECISION] 重要决策' | node flow.js 
 
 ### Finalization (MANDATORY — skipping = protocol failure)
 1. Run \`node flow.js finish\` — runs verify (build/test/lint). If fail → dispatch sub-agent to fix → retry finish.
-2. When finish returns "验证通过，请派子Agent执行 code-review" → dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
+2. When finish output contains "验证通过" → dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
 3. Run \`node flow.js review\` to mark code-review done.
 4. **AI 反思（进化引擎，可选）**: 询问用户："本轮工作流已完成，是否针对本项目进行反思迭代进化？（会消耗额外 token）" 用户同意后才执行。Sub-agent MUST:
    - **MUST invoke /superpowers:brainstorming FIRST** — 反思对象是**工作流执行过程本身**（任务成功率、重试模式、并行效率、协议瓶颈），NOT 目标项目的代码或架构。

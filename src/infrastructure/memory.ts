@@ -231,7 +231,26 @@ export function fastDetectLanguage(text: string): 'cjk' | 'en' {
   return cjk / total > 0.15 ? 'cjk' : 'en';
 }
 
-/** 多语言分词：CJK 单字+双字gram、拉丁词、数字、下划线标识符 + 停用词过滤 + 英语词干提取 */
+/** 常用中文技术词表（前向最大匹配优先） */
+const CJK_TECH_DICT = new Set([
+  '数据库', '服务器', '客户端', '中间件', '微服务', '负载均衡', '消息队列',
+  '缓存', '索引', '事务', '并发', '异步', '同步', '回调', '接口',
+  '认证', '授权', '加密', '解密', '哈希', '令牌', '会话',
+  '组件', '模块', '插件', '框架', '依赖', '配置', '部署', '容器',
+  '测试', '单元测试', '集成测试', '端到端', '覆盖率', '断言',
+  '路由', '控制器', '模型', '视图', '模板', '渲染',
+  '前端', '后端', '全栈', '响应式', '状态管理', '生命周期',
+  '性能', '优化', '重构', '迁移', '升级', '回滚', '版本',
+  '日志', '监控', '告警', '调试', '错误处理', '异常',
+  '分页', '排序', '过滤', '搜索', '聚合', '关联',
+  '工作流', '任务', '调度', '队列', '管道', '流水线',
+  '架构', '设计模式', '单例', '工厂', '观察者', '策略',
+  '类型', '泛型', '枚举', '联合类型', '交叉类型',
+  '编译', '构建', '打包', '压缩', '转译',
+  '仓库', '分支', '合并', '冲突', '提交', '拉取请求',
+]);
+
+/** 多语言分词：CJK 前向最大匹配+bigram兜底、拉丁词、数字、下划线标识符 + 停用词过滤 + 英语词干提取 */
 function tokenize(text: string): string[] {
   const lang = detectLangCode(text);
   const lower = text.toLowerCase();
@@ -243,9 +262,29 @@ function tokenize(text: string): string[] {
   for (const ch of lower) {
     if (isCJKRune(ch.codePointAt(0) ?? 0)) cjk.push(ch);
   }
-  for (let i = 0; i < cjk.length; i++) {
-    rawTokens.push(cjk[i]);
-    if (i + 1 < cjk.length) rawTokens.push(cjk[i] + cjk[i + 1]);
+  // CJK: 前向最大匹配 + bigram/trigram 兜底
+  let ci = 0;
+  while (ci < cjk.length) {
+    let matched = false;
+    // 尝试 4-3-2 字词表匹配
+    for (let len = 4; len >= 2; len--) {
+      if (ci + len <= cjk.length) {
+        const word = cjk.slice(ci, ci + len);
+        if (CJK_TECH_DICT.has(word)) {
+          rawTokens.push(word);
+          ci += len;
+          matched = true;
+          break;
+        }
+      }
+    }
+    if (!matched) {
+      // 单字 + bigram + trigram 兜底
+      rawTokens.push(cjk[ci]);
+      if (ci + 1 < cjk.length) rawTokens.push(cjk[ci] + cjk[ci + 1]);
+      if (ci + 2 < cjk.length) rawTokens.push(cjk[ci] + cjk[ci + 1] + cjk[ci + 2]);
+      ci++;
+    }
   }
   return analyze(rawTokens, lang).tokens;
 }
@@ -414,7 +453,9 @@ async function resolveSearchableText(entry: Omit<MemoryEntry, 'refs' | 'archived
 export async function appendMemory(basePath: string, entry: Omit<MemoryEntry, 'refs' | 'archived'>): Promise<void> {
   const resolved = await resolveSearchableText(entry);
   const entries = await loadMemory(basePath);
-  const stats = rebuildDf(entries);
+  // 重复检测用磁盘 DF（避免写入前全量 rebuildDf，写入后会再 rebuild）
+  const diskDf = await loadDf(basePath);
+  const stats = diskDf.docCount > 0 ? diskDf : rebuildDf(entries);
   const entryLang = detectLangCode(resolved.content);
   const queryTokens = tokenize(resolved.content);
   const queryVec = bm25Vector(queryTokens, stats, entryLang);
