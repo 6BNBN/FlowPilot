@@ -160,8 +160,8 @@ describe('WorkflowService 集成测试', () => {
     await svc.init(md);
     const batch1 = await svc.nextBatch();
     // 记忆内容包含"文档"关键词，与任务003匹配
-    await svc.checkpoint('001', '[REMEMBER] 编写文档时需要包含数据库说明');
-    await svc.checkpoint('002', '前端完成');
+    await svc.checkpoint('001', '[REMEMBER] 编写文档时需要包含数据库表结构说明和字段类型的详细描述');
+    await svc.checkpoint('002', '前端页面开发完成，实现了用户登录和注册功能，使用React组件化架构');
     const batch2 = await svc.nextBatch();
     expect(batch2[0]?.context).toContain('相关记忆');
   });
