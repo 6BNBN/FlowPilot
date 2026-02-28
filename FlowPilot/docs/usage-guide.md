@@ -92,6 +92,8 @@ CC：恢复工作流: 博客系统 | 进度: 7/12 | 继续执行
 | `node flow.js review` | 标记code-review已完成（finish前必须执行） |
 | `node flow.js finish` | 智能收尾（验证+汇报跳过失败项+提交，需先review） |
 | `node flow.js add <描述> [--type T]` | 追加新任务（参数顺序任意） |
+| `node flow.js recall <关键词>` | 检索历史记忆（BM25 + MMR + 时间衰减） |
+| `node flow.js evolve` | 接收 AI 反思结果并执行进化（stdin 传入） |
 
 > 注意：正常使用时你不需要手动执行这些命令，CC 会按协议自动调用。
 
@@ -291,9 +293,62 @@ flow next --batch → 重新并行派发这3个任务
 | C/C++ | CMakeLists.txt | cmake --build/ctest |
 | 通用 | Makefile | make build/test/lint |
 
+## 长期记忆系统
+
+FlowPilot 内置跨工作流的永久记忆系统，让 AI 在多轮开发中积累项目知识，避免重复犯错。
+
+### 知识标签
+
+子Agent 在 checkpoint 时可以用标签标记关键信息，这些信息会被自动提取并永久保存：
+
+| 标签 | 用途 | 示例 |
+|------|------|------|
+| `[REMEMBER]` | 值得记住的事实、发现、解决方案 | `[REMEMBER] 项目使用 PostgreSQL + Drizzle ORM` |
+| `[DECISION]` | 技术决策及原因 | `[DECISION] 选择 JWT 而非 session，因为需要无状态认证` |
+| `[ARCHITECTURE]` | 架构模式、数据流 | `[ARCHITECTURE] 三层架构：Controller → Service → Repository` |
+
+checkpoint 示例：
+```bash
+echo '完成用户模块 [REMEMBER] 密码用bcrypt加密 [DECISION] 选择JWT认证' | node flow.js checkpoint 001 --files src/auth.ts
+```
+
+### 知识提取路径
+
+记忆提取支持双路径，自动选择最优方式：
+
+| 路径 | 条件 | 能力 |
+|------|------|------|
+| LLM 智能提取 | 有 `ANTHROPIC_API_KEY` | Extract→Decide 两阶段：先提取关键事实，再与已有记忆去重决策（ADD/UPDATE/SKIP） |
+| 规则引擎 | 无 API Key 或 LLM 调用失败 | 标签行提取 + 中英文决策模式匹配 + 技术栈/配置项识别 |
+
+两条路径都会处理 `[REMEMBER]`/`[DECISION]`/`[ARCHITECTURE]` 标签。LLM 路径额外能从自然语言中提取隐含知识。
+
+### 检索引擎
+
+查询记忆时使用三源融合检索：
+
+1. **BM25 稀疏检索** — 多语言分词（CJK 前向最大匹配 + 拉丁词干提取）+ BM25 余弦相似度 + 时间衰减
+2. **BM25 向量检索** — FNV-1a 20-bit 稀疏向量索引，余弦相似度 top-k
+3. **Dense embedding 检索** — 调用 embedding API 生成稠密向量（需 API Key）
+
+三源结果通过 **RRF（Reciprocal Rank Fusion）** 融合，再经 **MMR（Maximal Marginal Relevance）** 重排序，平衡相关性与多样性。
+
+时间衰减：`score = exp(-ln2/halfLife * ageDays)`，半衰期 30 天。标记为 `architecture`/`decision`/`identity` 来源的条目不衰减（evergreen）。
+
+### recall 命令
+
+手动检索历史记忆：
+
+```bash
+node flow.js recall "数据库设计"
+node flow.js recall "authentication strategy"
+```
+
+返回最相关的 5 条记忆，按融合得分排序。正常工作流中 `next` 命令会自动查询相关记忆并注入任务上下文，无需手动 recall。
+
 ## 自我进化系统
 
-FlowPilot 内置三阶段自我进化循环，灵感来自 [Memoh-v2](https://github.com/Kxiandaoyan/Memoh-v2) 的有机进化架构。每轮工作流结束后自动反思和优化，无需手动触发。
+FlowPilot 内置三阶段自我进化循环，灵感来自 [Memoh-v2](https://github.com/Kxiandaoyan/Memoh-v2) 的有机进化架构。每轮工作流结束后自动反思和优化，无需手动触发。**成功和失败的工作流都会触发进化**——成功时提炼最佳实践，失败时分析根因并调整策略。
 
 ### 三阶段循环
 
@@ -321,6 +376,41 @@ FlowPilot 内置三阶段自我进化循环，灵感来自 [Memoh-v2](https://gi
 - 对比最近两轮工作流的 failRate、skipRate、retryRate
 - 任一指标恶化超过 10 个百分点 → 自动回滚到实验前快照
 - 检查 config.json 合法性、protocol.md 完整性
+
+### 完整进化闭环
+
+进化不是独立步骤，而是嵌入在收尾流程中的完整闭环：
+
+```
+finish(verify) → review(code-review) → evolve → finish(再次verify)
+```
+
+具体流程：
+1. `flow finish` — 运行 build/test/lint 验证
+2. 验证通过后提示执行 code-review → `flow review` 标记完成
+3. `flow finish` 再次执行 → 触发 reflect + experiment（自动进化）
+4. 如果验证失败 → 修复后重新 finish，循环直到两个门（verify + review）都通过
+
+### 进化结果消费
+
+Experiment 阶段自动调整的参数会在下一轮工作流中生效：
+
+| 参数 | 说明 | 调整场景 |
+|------|------|---------|
+| `maxRetries` | 任务最大重试次数 | 重试热点多时增大，全部成功时减小 |
+| `parallelLimit` | 最大并行子Agent数 | 并行冲突多时减小 |
+| `hints` | 协议模板追加的经验规则 | 从失败模式中提炼的具体建议 |
+| `verifyTimeout` | 验证超时时间 | 验证超时时增大 |
+
+### evolve 命令
+
+手动触发进化（通常由协议自动调用）：
+
+```bash
+echo '反思结果JSON' | node flow.js evolve
+```
+
+接收 AI 反思结果（JSON 格式）并执行 experiment 阶段的参数调整。正常工作流中 `finish` 会自动触发，无需手动执行。
 
 ### 进化数据存储
 
@@ -356,6 +446,29 @@ rollbackEvolution(index)  # index 为进化日志索引
 | 无 API Key | 纯规则引擎（连续失败/类型集中/重试热点/跳过率） |
 | API 调用失败 | 静默降级到规则引擎，不中断工作流 |
 | 无历史数据 | 所有检查直接 pass，不做回滚 |
+
+## 环境变量配置
+
+| 变量 | 必需 | 说明 |
+|------|------|------|
+| `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` | 是 | 设为 `1` 启用 Agent Teams（在 `~/.claude/settings.json` 的 `env` 中配置） |
+| `ANTHROPIC_API_KEY` | 否 | Anthropic API Key，启用 LLM 智能提取和深度反思分析 |
+| `ANTHROPIC_AUTH_TOKEN` | 否 | 替代 `ANTHROPIC_API_KEY` 的认证令牌（二选一即可） |
+| `ANTHROPIC_BASE_URL` | 否 | 自定义 API 地址，默认 `https://api.anthropic.com` |
+
+配置方式（在 `~/.claude/settings.json` 中）：
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "ANTHROPIC_API_KEY": "sk-ant-...",
+    "ANTHROPIC_BASE_URL": "https://api.anthropic.com"
+  }
+}
+```
+
+> 不配置 API Key 时，记忆提取和进化反思都会降级为纯规则引擎模式，核心功能不受影响。
 
 ## 常见问题
 

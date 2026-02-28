@@ -9,7 +9,14 @@
 1. Make sure Node.js is installed (version 20+)
 2. Enable Agent Teams: add `"env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }` to `~/.claude/settings.json`
 3. Install plugins: run `/plugin` in CC, install `superpowers`, `frontend-design`, `feature-dev`, `code-review`, `context7`
-4. Build the tool:
+4. (Optional) Configure environment variables to enable LLM-powered smart extraction and deep analysis:
+   ```bash
+   # Add to the env section of ~/.claude/settings.json:
+   export ANTHROPIC_API_KEY="sk-ant-..."       # or ANTHROPIC_AUTH_TOKEN
+   export ANTHROPIC_BASE_URL="https://api.anthropic.com"  # optional, custom API endpoint
+   ```
+   > Works fine without these — memory extraction falls back to rule engine mode.
+5. Build the tool:
    ```bash
    cd FlowPilot-directory
    npm install && npm run build
@@ -38,6 +45,11 @@ Build a blog system with user registration/login, article publishing, and commen
 ```
 
 CC will automatically decompose tasks, write code, commit to git, until everything is done. Just sit back and watch.
+
+> Tip: Sub-agents can use knowledge tags in their checkpoint summaries to record key information. These are permanently saved and searchable across workflows:
+> - `[REMEMBER]` Facts worth remembering (e.g., `[REMEMBER] Project uses PostgreSQL + Drizzle ORM`)
+> - `[DECISION]` Technical decisions (e.g., `[DECISION] Chose JWT over sessions for stateless auth`)
+> - `[ARCHITECTURE]` Architecture patterns (e.g., `[ARCHITECTURE] Three-layer: Controller → Service → Repository`)
 
 ## Add Features to an Existing Project
 

@@ -92,6 +92,8 @@ CC: Resuming workflow: Blog System | Progress: 7/12 | Continuing execution
 | `node flow.js review` | Mark code-review as done (required before finish) |
 | `node flow.js finish` | Smart finalization (verify+report skipped/failed+commit, requires review) |
 | `node flow.js add <desc> [--type T]` | Add new task (argument order flexible) |
+| `node flow.js recall <keyword>` | Search historical memories (BM25 + MMR + temporal decay) |
+| `node flow.js evolve` | Accept AI reflection results and apply evolution (stdin) |
 
 > Note: During normal use you don't need to run these commands manually — CC calls them automatically per protocol.
 
@@ -291,6 +293,29 @@ During finalization, `flow finish` auto-detects and runs verification:
 | C/C++ | CMakeLists.txt | cmake --build/ctest |
 | Generic | Makefile | make build/test/lint |
 
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` | Yes | Set to `1` to enable Agent Teams (configure in `env` section of `~/.claude/settings.json`) |
+| `ANTHROPIC_API_KEY` | No | Anthropic API Key, enables LLM smart extraction and deep reflection analysis |
+| `ANTHROPIC_AUTH_TOKEN` | No | Alternative to `ANTHROPIC_API_KEY` (use either one) |
+| `ANTHROPIC_BASE_URL` | No | Custom API endpoint, defaults to `https://api.anthropic.com` |
+
+Configuration (in `~/.claude/settings.json`):
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "ANTHROPIC_API_KEY": "sk-ant-...",
+    "ANTHROPIC_BASE_URL": "https://api.anthropic.com"
+  }
+}
+```
+
+> Without an API Key, memory extraction and evolution reflection both fall back to pure rule engine mode. Core functionality is unaffected.
+
 ## FAQ
 
 **Q: What happens if Agent Teams isn't enabled?**
@@ -314,9 +339,62 @@ During development, committing is recommended so team members can see task progr
 **Q: Will summaries get too long with many tasks?**
 No. After 10+ completed tasks, summaries auto-compress by type, keeping only the 3 most recent task names per group.
 
+## Long-Term Memory System
+
+FlowPilot includes a cross-workflow persistent memory system that lets AI accumulate project knowledge across multiple development rounds, avoiding repeated mistakes.
+
+### Knowledge Tags
+
+Sub-agents can tag key information during checkpoint. Tagged content is automatically extracted and permanently saved:
+
+| Tag | Purpose | Example |
+|-----|---------|---------|
+| `[REMEMBER]` | Facts, discoveries, solutions worth remembering | `[REMEMBER] Project uses PostgreSQL + Drizzle ORM` |
+| `[DECISION]` | Technical decisions and rationale | `[DECISION] Chose JWT over sessions for stateless auth` |
+| `[ARCHITECTURE]` | Architecture patterns, data flows | `[ARCHITECTURE] Three-layer: Controller → Service → Repository` |
+
+Checkpoint example:
+```bash
+echo 'Completed auth module [REMEMBER] passwords use bcrypt [DECISION] chose JWT auth' | node flow.js checkpoint 001 --files src/auth.ts
+```
+
+### Knowledge Extraction Paths
+
+Memory extraction supports dual paths, automatically selecting the optimal approach:
+
+| Path | Condition | Capability |
+|------|-----------|------------|
+| LLM Smart Extraction | `ANTHROPIC_API_KEY` present | Two-phase Extract→Decide: first extracts key facts, then deduplicates against existing memories (ADD/UPDATE/SKIP) |
+| Rule Engine | No API Key or LLM call fails | Tagged line extraction + decision pattern matching (CN/EN) + tech stack/config detection |
+
+Both paths process `[REMEMBER]`/`[DECISION]`/`[ARCHITECTURE]` tags. The LLM path additionally extracts implicit knowledge from natural language.
+
+### Search Engine
+
+Memory queries use three-source fusion retrieval:
+
+1. **BM25 Sparse Search** — Multilingual tokenization (CJK forward maximum matching + Latin stemming) + BM25 cosine similarity + temporal decay
+2. **BM25 Vector Search** — FNV-1a 20-bit sparse vector index, cosine similarity top-k
+3. **Dense Embedding Search** — Calls embedding API for dense vectors (requires API Key)
+
+Results from all three sources are fused via **RRF (Reciprocal Rank Fusion)**, then reranked with **MMR (Maximal Marginal Relevance)** to balance relevance and diversity.
+
+Temporal decay: `score = exp(-ln2/halfLife * ageDays)`, half-life 30 days. Entries sourced from `architecture`/`decision`/`identity` never decay (evergreen).
+
+### recall Command
+
+Manually search historical memories:
+
+```bash
+node flow.js recall "database design"
+node flow.js recall "authentication strategy"
+```
+
+Returns the top 5 most relevant memories, sorted by fused score. During normal workflows, the `next` command automatically queries related memories and injects them into task context — no manual recall needed.
+
 ## Self-Evolution System
 
-FlowPilot includes a three-phase self-evolution cycle, inspired by [Memoh-v2](https://github.com/Kxiandaoyan/Memoh-v2)'s organic evolution architecture. Automatically reflects and optimizes after each workflow round — no manual trigger needed.
+FlowPilot includes a three-phase self-evolution cycle, inspired by [Memoh-v2](https://github.com/Kxiandaoyan/Memoh-v2)'s organic evolution architecture. Automatically reflects and optimizes after each workflow round — no manual trigger needed. **Both successful and failed workflows trigger evolution** — successes distill best practices, failures analyze root causes and adjust strategies.
 
 ### Three-Phase Cycle
 
@@ -344,6 +422,41 @@ Validates previous experiment results:
 - Compares failRate, skipRate, retryRate between last two workflow rounds
 - Any metric worsened by >10 percentage points → auto-rollback to pre-experiment snapshot
 - Checks config.json validity and protocol.md integrity
+
+### Complete Evolution Loop
+
+Evolution isn't a standalone step — it's a complete closed loop embedded in the finalization process:
+
+```
+finish(verify) → review(code-review) → evolve → finish(verify again)
+```
+
+Detailed flow:
+1. `flow finish` — runs build/test/lint verification
+2. On pass, prompts for code-review → `flow review` marks it done
+3. `flow finish` again → triggers reflect + experiment (auto-evolution)
+4. If verification fails → fix issues, re-run finish, loop until both gates (verify + review) pass
+
+### Evolution Result Consumption
+
+Parameters adjusted during the Experiment phase take effect in the next workflow round:
+
+| Parameter | Description | Adjustment Scenario |
+|-----------|-------------|-------------------|
+| `maxRetries` | Max task retry count | Increased when retry hotspots are frequent, decreased when all succeed |
+| `parallelLimit` | Max parallel sub-agents | Decreased when parallel conflicts occur |
+| `hints` | Experience rules appended to protocol template | Specific advice distilled from failure patterns |
+| `verifyTimeout` | Verification timeout | Increased when verification times out |
+
+### evolve Command
+
+Manually trigger evolution (normally called automatically by the protocol):
+
+```bash
+echo 'reflection result JSON' | node flow.js evolve
+```
+
+Accepts AI reflection results (JSON format) and executes the Experiment phase parameter adjustments. During normal workflows, `finish` triggers this automatically — no manual execution needed.
 
 ### Evolution Data Storage
 

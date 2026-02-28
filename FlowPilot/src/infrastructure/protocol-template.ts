@@ -11,6 +11,7 @@ Run \`node flow.js resume\`:
 
 ### Ad-hoc Dispatch (one-off tasks, no workflow init)
 Dispatch sub-agent(s) via Task tool. No init/checkpoint/finish needed. Iron Rule #4 does NOT apply (no task ID exists). Main agent MAY use Read/Glob/Grep directly for trivial lookups (e.g. reading a single file) — Iron Rule #2 is relaxed in Ad-hoc mode only.
+**记忆查询**: 回答用户问题前，先运行 \`node flow.js recall <关键词>\` 检索历史记忆，将结果作为回答的参考依据。
 
 ### Iron Rules (violating ANY = protocol failure)
 1. **NEVER use TaskCreate / TaskUpdate / TaskList** — use ONLY \`node flow.js xxx\`.
@@ -19,6 +20,11 @@ Dispatch sub-agent(s) via Task tool. No init/checkpoint/finish needed. Iron Rule
 4. **Sub-agents MUST run checkpoint with --files before replying** — \`echo 'summary' | node flow.js checkpoint <id> --files file1 file2\` is the LAST command before reply. MUST list all created/modified files. Skipping = protocol failure.
 
 ### Requirement Decomposition
+**Step 0 — Auto-detect (ALWAYS run first):**
+1. If user's message directly contains a task list (numbered items or checkbox items) → pipe it into \`node flow.js init\` directly, skip to **Execution Loop**.
+2. Search project root for \`tasks.md\` (run \`ls tasks.md 2>/dev/null\`). If found → ask user: "发现项目中有 tasks.md，是否作为本次工作流的任务列表？" If user confirms → \`cat tasks.md | node flow.js init\`, skip to **Execution Loop**. If user declines → continue to Path A/B.
+
+**Path A — Standard (default):**
 1. Dispatch a sub-agent to read requirement docs and return a summary.
 2. Use /superpowers:brainstorming to brainstorm and produce a task list.
 3. Pipe into init using this **exact format**:
@@ -32,6 +38,16 @@ cat <<'EOF' | node flow.js init
 EOF
 \`\`\`
 Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, indented lines = description.
+
+**Path B — OpenSpec (if \`openspec/\` directory exists AND \`openspec\` CLI is available):**
+1. Verify: run \`npx openspec --version\`. If command fails → fall back to **Path A**.
+2. Run \`/opsx:new <change-name>\` to create a change.
+3. Run \`/opsx:ff\` to fast-forward (generates proposal → specs → design → tasks).
+4. Pipe the generated tasks.md into init:
+\`\`\`bash
+cat openspec/changes/<change-name>/tasks.md | node flow.js init
+\`\`\`
+OpenSpec checkbox format (\`- [ ] 1.1 Task\`) is auto-detected. Group N tasks depend on group N-1.
 
 ### Execution Loop
 1. Run \`node flow.js next --batch\`. **NOTE: this command will REFUSE to return tasks if any previous task is still \`active\`. You must checkpoint or resume first.**
@@ -56,10 +72,14 @@ Each sub-agent prompt MUST contain these sections in order:
 ### Sub-Agent Checkpoint (Iron Rule #4 — most common violation)
 Sub-agent's LAST Bash command before replying MUST be:
 \`\`\`
-echo '一句话摘要' | node flow.js checkpoint <id> --files file1 file2 ...
+echo '摘要 [REMEMBER] 关键发现 [DECISION] 技术决策' | node flow.js checkpoint <id> --files file1 file2 ...
 \`\`\`
+- **摘要中 MUST 包含至少一个知识标签**（缺少标签 = 协议违规）:
+  - \`[REMEMBER]\` 值得记住的事实、发现、解决方案（如：[REMEMBER] 项目使用 PostgreSQL + Drizzle ORM）
+  - \`[DECISION]\` 技术决策及原因（如：[DECISION] 选择 JWT 而非 session，因为需要无状态认证）
+  - \`[ARCHITECTURE]\` 架构模式、数据流（如：[ARCHITECTURE] 三层架构：Controller → Service → Repository）
 - \`--files\` MUST list every created/modified file (enables isolated git commits).
-- If task failed: \`echo 'FAILED' | node flow.js checkpoint <id>\`
+- If task failed: \`echo 'FAILED: 原因 [REMEMBER] 失败根因' | node flow.js checkpoint <id>\`
 - If sub-agent replies WITHOUT running checkpoint → protocol failure. Main agent MUST run fallback checkpoint in step 3.
 
 ### Security Rules (sub-agents MUST follow)
@@ -69,9 +89,16 @@ echo '一句话摘要' | node flow.js checkpoint <id> --files file1 file2 ...
 
 ### Finalization (MANDATORY — skipping = protocol failure)
 1. Run \`node flow.js finish\` — runs verify (build/test/lint). If fail → dispatch sub-agent to fix → retry finish.
-2. When finish returns "验证通过，请派子Agent执行 code-review" → dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
+2. When finish output contains "验证通过" → dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
 3. Run \`node flow.js review\` to mark code-review done.
-4. Run \`node flow.js finish\` again — verify passes + review done → final commit → idle.
-**Loop: finish(verify) → review(code-review) → fix → finish again. Both gates must pass.**
+4. **AI 反思（进化引擎，可选）**: 询问用户："本轮工作流已完成，是否针对本项目进行反思迭代进化？（会消耗额外 token）" 用户同意后才执行。Sub-agent MUST:
+   - **MUST invoke /superpowers:brainstorming FIRST** — 反思对象是**工作流执行过程本身**（任务成功率、重试模式、并行效率、协议瓶颈），NOT 目标项目的代码或架构。
+   - Read \`.flowpilot/history/\` files to understand workflow stats
+   - Read \`.flowpilot/evolution/\` files to see past experiments
+   - Analyze: what went well, what could improve, config optimization opportunities
+   - Pipe structured findings into: \`echo '[CONFIG] 将 parallelLimit 提升至 4\\n[PROTOCOL] 子Agent应先验证环境再编码' | node flow.js evolve\`
+   - Tags: \`[CONFIG]\` for config changes, \`[PROTOCOL]\` for CLAUDE.md protocol changes
+5. Run \`node flow.js finish\` again — verify passes + review done → final commit → idle.
+**Loop: finish(verify) → review(code-review) → evolve(AI反思) → fix → finish again. All gates must pass.**
 
 <!-- flowpilot:end -->`;

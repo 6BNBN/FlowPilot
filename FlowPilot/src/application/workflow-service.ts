@@ -3,7 +3,7 @@
  * @description 工作流应用服务 - 11个用例
  */
 
-import type { ProgressData, TaskEntry } from '../domain/types';
+import type { ProgressData, TaskEntry, WorkflowStats } from '../domain/types';
 import type { WorkflowDefinition } from '../domain/workflow';
 import type { WorkflowRepository } from '../domain/repository';
 import { makeTaskId, cascadeSkip, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
@@ -164,8 +164,9 @@ export class WorkflowService {
 
       // 注入相关永久记忆
       const memories = await queryMemory(this.repo.projectRoot(), `${task.title} ${task.description}`);
-      if (memories.length) {
-        parts.push('## 相关记忆\n\n' + memories.map(m => `- ${m.content}`).join('\n'));
+      const useful = memories.filter(m => m.content.length > 20);
+      if (useful.length) {
+        parts.push('## 相关记忆\n\n' + useful.map(m => `- [${m.source}] ${m.content}`).join('\n'));
       }
 
       // 注入循环检测警告
@@ -178,6 +179,13 @@ export class WorkflowService {
       const hcWarnings = await this.healthCheck();
       if (hcWarnings.length) {
         parts.push('## 健康检查警告\n\n' + hcWarnings.map(w => `- ${w}`).join('\n'));
+      }
+
+      // 注入进化建议（config.hints）
+      const cfg = await this.repo.loadConfig();
+      const hints = (cfg as any).hints as string[] | undefined;
+      if (hints?.length) {
+        parts.push('## 进化建议\n\n' + hints.map(h => `- ${h}`).join('\n'));
       }
 
       return { task, context: parts.join('\n\n---\n\n') };
@@ -199,12 +207,17 @@ export class WorkflowService {
       }
 
       const cascaded = cascadeSkip(data.tasks);
-      const tasks = findParallelTasks(cascaded);
+      let tasks = findParallelTasks(cascaded);
       if (!tasks.length) {
         await this.repo.saveProgress({ ...data, tasks: cascaded });
         log.debug('nextBatch: 无可并行任务');
         return [];
       }
+
+      // 消费 config.parallelLimit
+      const config = await this.repo.loadConfig();
+      const limit = (config as any).parallelLimit;
+      if (limit && tasks.length > limit) tasks = tasks.slice(0, limit);
 
       log.debug(`nextBatch: 激活 ${tasks.map(t => t.id).join(',')}`);
       const activeIds = new Set(tasks.map(t => t.id));
@@ -228,12 +241,18 @@ export class WorkflowService {
         }
         // 注入相关永久记忆
         const memories = await queryMemory(this.repo.projectRoot(), `${task.title} ${task.description}`);
-        if (memories.length) {
-          parts.push('## 相关记忆\n\n' + memories.map(m => `- ${m.content}`).join('\n'));
+        const useful = memories.filter(m => m.content.length > 20);
+        if (useful.length) {
+          parts.push('## 相关记忆\n\n' + useful.map(m => `- [${m.source}] ${m.content}`).join('\n'));
         }
         // 注入循环检测警告
         if (loopWarning) {
           parts.push(`## 循环检测警告\n\n${loopWarning}`);
+        }
+        // 注入进化建议（config.hints）
+        const hints = (config as any).hints as string[] | undefined;
+        if (hints?.length) {
+          parts.push('## 进化建议\n\n' + hints.map(h => `- ${h}`).join('\n'));
         }
         results.push({ task, context: parts.join('\n\n---\n\n') });
       }
@@ -258,6 +277,9 @@ export class WorkflowService {
       const MIN_WORK_TIME = 30_000;
       const age = await this.getActivationAge(id);
 
+      // 预加载现有记忆，供 extractAll 去重
+      const existingMems = (await loadMemory(this.repo.projectRoot())).filter(m => !m.archived).map(m => m.content);
+
       const isFailed = detail.startsWith('FAILED')
         || (detail.length < 200 && /\b(fail|error|crash|timeout|rate.?limit)\b/i.test(detail))
         || (detail.length < 200 && /限流|崩溃|超时|失败|异常|中断|未完成|无法/.test(detail))
@@ -276,12 +298,22 @@ export class WorkflowService {
           await this.saveLoopWarning(`[LOOP WARNING - ${loopResult.strategy}] ${loopResult.message}`);
         }
 
-        const { result, data: newData } = failTask(data, id);
+        // 失败路径也写记忆（提取失败原因中的知识）
+        for (const entry of await extractAll(detail, `task-${id}-fail`, existingMems)) {
+          await appendMemory(this.repo.projectRoot(), {
+            content: entry.content, source: entry.source,
+            timestamp: new Date().toISOString(),
+          });
+        }
+
+        const config = await this.repo.loadConfig();
+        const maxRetries = (config as any).maxRetries ?? 3;
+        const { result, data: newData } = failTask(data, id, maxRetries);
         await this.repo.saveProgress(newData);
         log.debug(`checkpoint ${id}: failTask result=${result}, retries=${task.retries + 1}`);
         const msg = result === 'retry'
           ? `任务 ${id} 失败(第${task.retries + 1}次)，将重试`
-          : `任务 ${id} 连续失败3次，已跳过`;
+          : `任务 ${id} 连续失败${maxRetries}次，已跳过`;
         const warns = [patternWarn, loopResult ? `[LOOP] ${loopResult.message}` : null].filter(Boolean);
         return warns.length ? `${msg}\n${warns.join('\n')}` : msg;
       }
@@ -300,7 +332,7 @@ export class WorkflowService {
       await this.repo.saveTaskContext(id, `# task-${id}: ${task.title}\n\n${detail}\n`);
 
       // 智能提取知识写入永久记忆
-      for (const entry of await extractAll(detail, `task-${id}`)) {
+      for (const entry of await extractAll(detail, `task-${id}`, existingMems)) {
         await appendMemory(this.repo.projectRoot(), {
           content: entry.content,
           source: entry.source,
@@ -556,6 +588,48 @@ export class WorkflowService {
       configBefore, configAfter: target.configBefore, suggestions: ['手动回滚'],
     });
     return `已回滚到进化点 ${index}（${target.timestamp}）`;
+  }
+
+  /** recall: 查询相关记忆 */
+  async recall(query: string): Promise<string> {
+    const memories = await queryMemory(this.repo.projectRoot(), query);
+    if (!memories.length) return '无相关记忆';
+    return memories.map(m => `- [${m.source}] ${m.content}`).join('\n');
+  }
+
+  /** evolve: 接收CC子Agent的反思结果，执行进化实验 */
+  async evolve(reflectionText: string): Promise<string> {
+    // 尝试从当前进度获取真实 stats
+    let stats: WorkflowStats;
+    try {
+      const data = await this.repo.loadProgress();
+      if (!data) throw new Error('no progress');
+      stats = collectStats(data);
+    } catch {
+      stats = { name: '', totalTasks: 0, doneCount: 0, skipCount: 0, failCount: 0, retryTotal: 0, tasksByType: {}, failsByType: {}, taskResults: [], startTime: new Date().toISOString(), endTime: new Date().toISOString() };
+    }
+    const report = await reflect(stats, this.repo.projectRoot());
+    // 解析子Agent的结构化反思
+    const lines = reflectionText.split('\n').filter(l => l.trim());
+    const experiments: Array<{ trigger: string; observation: string; action: string; expected: string; target: 'config' | 'claude-md' }> = [];
+    for (const line of lines) {
+      const m = line.match(/^\[(.+?)\]\s*(.+)/);
+      if (m) {
+        const tag = m[1].toLowerCase();
+        const target = tag.includes('config') ? 'config' as const : 'claude-md' as const;
+        experiments.push({ trigger: 'cc-ai-reflect', observation: m[2], action: m[2], expected: '基于AI分析的改进', target });
+      }
+    }
+    if (!experiments.length && lines.length) {
+      // 无标签时全部作为 claude-md 实验
+      for (const line of lines.slice(0, 3)) {
+        experiments.push({ trigger: 'cc-ai-reflect', observation: line, action: line, expected: '基于AI分析的改进', target: 'claude-md' });
+      }
+    }
+    if (!experiments.length) return '无可执行的进化建议';
+    const merged = { ...report, experiments: [...report.experiments, ...experiments] };
+    await experiment(merged, this.repo.projectRoot());
+    return `已应用 ${experiments.length} 条进化建议`;
   }
 
   /** status: 全局进度 */

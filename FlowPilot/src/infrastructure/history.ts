@@ -154,11 +154,28 @@ function fourDimensionAnalysis(stats: WorkflowStats): { findings: string[]; expe
     }
   }
 
-  // delight: 一次通过、无重试的高效任务
+  // delight: 一次通过、无重试的高效任务 → 成功路径也产出实验
   const efficient = results.filter(r => r.status === 'done' && r.retries === 0);
   if (efficient.length > 0 && stats.totalTasks > 0) {
     const rate = ((efficient.length / stats.totalTasks) * 100).toFixed(0);
     findings.push(`[delight] ${efficient.length}/${stats.totalTasks} 任务一次通过 (${rate}%)`);
+    if (efficient.length === stats.totalTasks && stats.totalTasks >= 3) {
+      experiments.push({
+        trigger: '全部一次通过', observation: `${stats.totalTasks} 个任务零重试`,
+        action: '将 parallelLimit 提升至 ' + Math.min(stats.totalTasks, 5), expected: '提高并行度',
+        target: 'config',
+      });
+    }
+  }
+  // 成功但有重试的任务 → 建议加前置检查
+  const retriedButDone = results.filter(r => r.status === 'done' && r.retries > 0);
+  if (retriedButDone.length) {
+    findings.push(`[delight] ${retriedButDone.length} 个任务经重试后成功`);
+    experiments.push({
+      trigger: '重试后成功', observation: `${retriedButDone.map(r => r.id).join(',')} 需要重试`,
+      action: '在子Agent提示模板中强调先验证环境再动手编码', expected: '减少首次失败率',
+      target: 'claude-md',
+    });
   }
 
   // patterns: 任务类型分布 + summary 关键词
@@ -306,6 +323,17 @@ function parseConfigAction(action: string): { key: string; value: number } | nul
     const m = action.match(re);
     if (m) return { key: k, value: Number(m[1]) };
   }
+  // 中文关键词映射
+  const CN_MAP: Record<string, string> = {
+    '并行': 'parallelLimit', '重试': 'maxRetries', '超时': 'timeout', '验证超时': 'verifyTimeout',
+  };
+  const cnEntries = Object.entries(CN_MAP).sort((a, b) => b[0].length - a[0].length);
+  for (const [cn, key] of cnEntries) {
+    if (action.includes(cn)) {
+      const m = action.match(/(\d+)/);
+      if (m) return { key, value: Number(m[1]) };
+    }
+  }
   return null;
 }
 
@@ -358,20 +386,15 @@ export async function experiment(
   const log: ExperimentLog = { timestamp: new Date().toISOString(), experiments: [], status: 'completed' };
   if (!report.experiments.length) return log;
 
-  const configPath = join(basePath, '.flowpilot', 'config.json');
-  const claudeMdPath = join(basePath, 'CLAUDE.md');
+  const configPath = join(basePath, '.workflow', 'config.json');
 
-  // 预快照：实验前保存完整文件内容（参考 Memoh-v2 files_snapshot）
+  // 预快照：实验前保存完整文件内容
   const configSnapshot = await safeRead(configPath, '{}');
-  const claudeMdSnapshot = await safeRead(claudeMdPath, '');
-  const snapshotFile = await saveSnapshot(basePath, { 'config.json': configSnapshot, 'CLAUDE.md': claudeMdSnapshot });
+  const snapshotFile = await saveSnapshot(basePath, { 'config.json': configSnapshot });
   log.snapshotFile = snapshotFile;
 
   try {
     let configObj = JSON.parse(configSnapshot);
-    let claudeMdContent = claudeMdSnapshot;
-
-    let claudeMdExpCount = 0;
 
     for (const exp of report.experiments) {
       const applied: AppliedExperiment = { ...exp, applied: false, snapshotBefore: '' };
@@ -384,38 +407,21 @@ export async function experiment(
             applied.applied = true;
           }
         } else if (exp.target === 'claude-md') {
-          applied.snapshotBefore = claudeMdSnapshot;
-          if (claudeMdExpCount >= 3) { /* max 3 claude-md experiments per cycle */ }
-          else {
-            const stripComments = (s: string) => s.replace(/<!--/g, '').replace(/-->/g, '');
-            const safeTrigger = stripComments(exp.trigger);
-            const safeAction = stripComments(exp.action);
-            const endTag = '<!-- flowpilot:end -->';
-            const idx = claudeMdContent.indexOf(endTag);
-            if (idx >= 0) {
-              const insertion = `\n<!-- evolution: ${safeTrigger} -->\n> ${safeAction}\n`;
-              const startTag = '<!-- flowpilot:start -->';
-              const startIdx = claudeMdContent.indexOf(startTag);
-              const regionSize = (idx + endTag.length) - (startIdx >= 0 ? startIdx : 0) + insertion.length;
-              if (regionSize <= 10_240) {
-                claudeMdContent = claudeMdContent.slice(0, idx) + insertion + claudeMdContent.slice(idx);
-                applied.applied = true;
-                claudeMdExpCount++;
-              }
-            }
+          applied.snapshotBefore = configSnapshot;
+          const hints: string[] = configObj.hints ?? [];
+          if (hints.length < 10 && !hints.includes(exp.action)) {
+            configObj = { ...configObj, hints: [...hints, exp.action] };
+            applied.applied = true;
           }
         }
       } catch { /* 降级：applied 保持 false */ }
       log.experiments.push(applied);
     }
 
-    // 循环结束后一次性写入
-    if (log.experiments.some(e => e.applied && e.target === 'config')) {
+    // 循环结束后一次性写入 config（含 hints）
+    if (log.experiments.some(e => e.applied)) {
       await mkdir(dirname(configPath), { recursive: true });
       await writeFile(configPath, JSON.stringify(configObj, null, 2), 'utf-8');
-    }
-    if (log.experiments.some(e => e.applied && e.target === 'claude-md')) {
-      await writeFile(claudeMdPath, claudeMdContent, 'utf-8');
     }
   } catch {
     log.status = 'failed';
@@ -457,8 +463,7 @@ export async function review(basePath: string): Promise<ReviewResult> {
   let rollbackReason: string | undefined;
 
   const historyDir = join(basePath, '.flowpilot', 'history');
-  const configPath = join(basePath, '.flowpilot', 'config.json');
-  const claudeMdPath = join(basePath, 'CLAUDE.md');
+  const configPath = join(basePath, '.workflow', 'config.json');
   const expPath = join(basePath, '.flowpilot', 'evolution', 'experiments.json');
 
   // 1. 加载历史（最近两轮）
@@ -518,19 +523,6 @@ export async function review(basePath: string): Promise<ReviewResult> {
     checks.push({ name: 'experiments.json', passed: true, detail: '文件不存在，跳过' });
   }
 
-  // CLAUDE.md 完整性：协议标记必须成对存在
-  const claudeMdRaw = await safeRead(claudeMdPath, '');
-  if (claudeMdRaw) {
-    const hasStart = claudeMdRaw.includes('<!-- flowpilot:start -->');
-    const hasEnd = claudeMdRaw.includes('<!-- flowpilot:end -->');
-    const intact = hasStart && hasEnd;
-    checks.push({ name: 'CLAUDE.md', passed: intact, detail: intact ? '协议标记完整' : '协议标记缺失或损坏' });
-    if (!intact && !rolledBack) {
-      rolledBack = true;
-      rollbackReason = 'CLAUDE.md 协议标记损坏';
-    }
-  }
-
   // 4. 自动回滚：从实验日志中记录的快照精确恢复
   if (rolledBack) {
     try {
@@ -543,7 +535,6 @@ export async function review(basePath: string): Promise<ReviewResult> {
       if (!snapshot) snapshot = await loadLatestSnapshot(basePath);
       if (snapshot) {
         if (snapshot.files['config.json']) await writeFile(configPath, snapshot.files['config.json'], 'utf-8');
-        if (snapshot.files['CLAUDE.md']) await writeFile(claudeMdPath, snapshot.files['CLAUDE.md'], 'utf-8');
       }
       // 标记最近实验为 skipped
       if (logs.length) {

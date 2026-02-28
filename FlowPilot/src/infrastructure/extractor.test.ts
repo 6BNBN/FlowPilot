@@ -1,5 +1,20 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { extractTaggedKnowledge, extractDecisionPatterns, extractTechStack, extractAll } from './extractor';
+
+let savedApiKey: string | undefined;
+let savedAuthToken: string | undefined;
+
+beforeAll(() => {
+  savedApiKey = process.env.ANTHROPIC_API_KEY;
+  savedAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_AUTH_TOKEN;
+});
+
+afterAll(() => {
+  if (savedApiKey !== undefined) process.env.ANTHROPIC_API_KEY = savedApiKey;
+  if (savedAuthToken !== undefined) process.env.ANTHROPIC_AUTH_TOKEN = savedAuthToken;
+});
 
 describe('extractTaggedKnowledge', () => {
   it('extracts [REMEMBER] tagged lines', () => {

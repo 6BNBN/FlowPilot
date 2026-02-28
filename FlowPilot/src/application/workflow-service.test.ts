@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -7,6 +7,21 @@ import { FsWorkflowRepository } from '../infrastructure/fs-repository';
 import { parseTasksMarkdown } from '../infrastructure/markdown-parser';
 import { loadMemory } from '../infrastructure/memory';
 import { readFile } from 'fs/promises';
+
+let savedApiKey: string | undefined;
+let savedAuthToken: string | undefined;
+
+beforeAll(() => {
+  savedApiKey = process.env.ANTHROPIC_API_KEY;
+  savedAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_AUTH_TOKEN;
+});
+
+afterAll(() => {
+  if (savedApiKey !== undefined) process.env.ANTHROPIC_API_KEY = savedApiKey;
+  if (savedAuthToken !== undefined) process.env.ANTHROPIC_AUTH_TOKEN = savedAuthToken;
+});
 
 let dir: string;
 let svc: WorkflowService;
@@ -149,10 +164,10 @@ describe('WorkflowService 集成测试', () => {
     await svc.init(TASKS_MD);
     await svc.next();
     // 记忆内容包含"页面"关键词，与任务002"创建页面"匹配
-    await svc.checkpoint('001', '[REMEMBER] 创建页面时使用React组件模式');
+    await svc.checkpoint('001', '[REMEMBER] 创建页面时使用React组件化架构模式，支持动态路由和状态管理');
     const r = await svc.next();
     expect(r?.context).toContain('相关记忆');
-    expect(r?.context).toContain('React组件模式');
+    expect(r?.context).toContain('React组件化架构模式');
   });
 
   it('nextBatch注入相关永久记忆到context', async () => {
@@ -160,8 +175,8 @@ describe('WorkflowService 集成测试', () => {
     await svc.init(md);
     const batch1 = await svc.nextBatch();
     // 记忆内容包含"文档"关键词，与任务003匹配
-    await svc.checkpoint('001', '[REMEMBER] 编写文档时需要包含数据库说明');
-    await svc.checkpoint('002', '前端完成');
+    await svc.checkpoint('001', '[REMEMBER] 编写文档时需要包含数据库表结构说明和字段类型的详细描述');
+    await svc.checkpoint('002', '前端页面开发完成，实现了用户登录和注册功能，使用React组件化架构');
     const batch2 = await svc.nextBatch();
     expect(batch2[0]?.context).toContain('相关记忆');
   });

@@ -202,8 +202,112 @@ function detectCommands(cwd) {
   return [];
 }
 
+// src/infrastructure/protocol-template.ts
+var PROTOCOL_TEMPLATE = `<!-- flowpilot:start -->
+## FlowPilot Workflow Protocol (MANDATORY \u2014 any violation is a protocol failure)
+
+**You are the dispatcher. These rules have the HIGHEST priority and are ALWAYS active.**
+
+### On Session Start
+Run \`node flow.js resume\`:
+- If unfinished workflow \u2192 enter **Execution Loop** (unless user is asking an unrelated question \u2014 handle it first via **Ad-hoc Dispatch**, then remind user the workflow is paused)
+- If no workflow \u2192 **judge the request**: reply directly for pure chitchat, use **Ad-hoc Dispatch** for one-off tasks, or enter **Requirement Decomposition** for multi-step development work. When in doubt, prefer the heavier path.
+
+### Ad-hoc Dispatch (one-off tasks, no workflow init)
+Dispatch sub-agent(s) via Task tool. No init/checkpoint/finish needed. Iron Rule #4 does NOT apply (no task ID exists). Main agent MAY use Read/Glob/Grep directly for trivial lookups (e.g. reading a single file) \u2014 Iron Rule #2 is relaxed in Ad-hoc mode only.
+**\u8BB0\u5FC6\u67E5\u8BE2**: \u56DE\u7B54\u7528\u6237\u95EE\u9898\u524D\uFF0C\u5148\u8FD0\u884C \`node flow.js recall <\u5173\u952E\u8BCD>\` \u68C0\u7D22\u5386\u53F2\u8BB0\u5FC6\uFF0C\u5C06\u7ED3\u679C\u4F5C\u4E3A\u56DE\u7B54\u7684\u53C2\u8003\u4F9D\u636E\u3002
+
+### Iron Rules (violating ANY = protocol failure)
+1. **NEVER use TaskCreate / TaskUpdate / TaskList** \u2014 use ONLY \`node flow.js xxx\`.
+2. **Main agent can ONLY use Bash, Task, and Skill** \u2014 Edit, Write, Read, Glob, Grep, Explore are ALL FORBIDDEN. To read any file (including docs), dispatch a sub-agent.
+3. **ALWAYS dispatch via Task tool** \u2014 one Task call per task. N tasks = N Task calls **in a single message** for parallel execution.
+4. **Sub-agents MUST run checkpoint with --files before replying** \u2014 \`echo 'summary' | node flow.js checkpoint <id> --files file1 file2\` is the LAST command before reply. MUST list all created/modified files. Skipping = protocol failure.
+
+### Requirement Decomposition
+**Step 0 \u2014 Auto-detect (ALWAYS run first):**
+1. If user's message directly contains a task list (numbered items or checkbox items) \u2192 pipe it into \`node flow.js init\` directly, skip to **Execution Loop**.
+2. Search project root for \`tasks.md\` (run \`ls tasks.md 2>/dev/null\`). If found \u2192 ask user: "\u53D1\u73B0\u9879\u76EE\u4E2D\u6709 tasks.md\uFF0C\u662F\u5426\u4F5C\u4E3A\u672C\u6B21\u5DE5\u4F5C\u6D41\u7684\u4EFB\u52A1\u5217\u8868\uFF1F" If user confirms \u2192 \`cat tasks.md | node flow.js init\`, skip to **Execution Loop**. If user declines \u2192 continue to Path A/B.
+
+**Path A \u2014 Standard (default):**
+1. Dispatch a sub-agent to read requirement docs and return a summary.
+2. Use /superpowers:brainstorming to brainstorm and produce a task list.
+3. Pipe into init using this **exact format**:
+\`\`\`bash
+cat <<'EOF' | node flow.js init
+1. [backend] Task title
+   Description of what to do
+2. [frontend] Another task (deps: 1)
+   Description here
+3. [general] Third task (deps: 1, 2)
+EOF
+\`\`\`
+Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, indented lines = description.
+
+**Path B \u2014 OpenSpec (if \`openspec/\` directory exists AND \`openspec\` CLI is available):**
+1. Verify: run \`npx openspec --version\`. If command fails \u2192 fall back to **Path A**.
+2. Run \`/opsx:new <change-name>\` to create a change.
+3. Run \`/opsx:ff\` to fast-forward (generates proposal \u2192 specs \u2192 design \u2192 tasks).
+4. Pipe the generated tasks.md into init:
+\`\`\`bash
+cat openspec/changes/<change-name>/tasks.md | node flow.js init
+\`\`\`
+OpenSpec checkbox format (\`- [ ] 1.1 Task\`) is auto-detected. Group N tasks depend on group N-1.
+
+### Execution Loop
+1. Run \`node flow.js next --batch\`. **NOTE: this command will REFUSE to return tasks if any previous task is still \`active\`. You must checkpoint or resume first.**
+2. The output already contains checkpoint commands per task. For **EVERY** task in batch, dispatch a sub-agent via Task tool. **ALL Task calls in one message.** Copy the ENTIRE task block (including checkpoint commands) into each sub-agent prompt verbatim.
+3. **After ALL sub-agents return**: run \`node flow.js status\`.
+   - If any task is still \`active\` \u2192 sub-agent failed to checkpoint. Run fallback: \`echo 'summary from sub-agent output' | node flow.js checkpoint <id> --files file1 file2\`
+   - **Do NOT call \`node flow.js next\` until zero active tasks remain** (the command will error anyway).
+4. Loop back to step 1.
+5. When \`next\` returns "\u5168\u90E8\u5B8C\u6210", enter **Finalization**.
+
+### Mid-Workflow Commands
+- \`node flow.js skip <id>\` \u2014 skip a stuck/unnecessary task (avoid skipping active tasks with running sub-agents)
+- \`node flow.js add <\u63CF\u8FF0> [--type frontend|backend|general]\` \u2014 inject a new task mid-workflow
+
+### Sub-Agent Prompt Template
+Each sub-agent prompt MUST contain these sections in order:
+1. Task block from \`next\` output (title, type, description, checkpoint commands, context)
+2. **Pre-analysis (MANDATORY)**: Before writing ANY code, **MUST** invoke /superpowers:brainstorming to perform multi-dimensional analysis (requirements, edge cases, architecture, risks). Skipping = protocol failure.
+3. **Skill routing**: type=frontend \u2192 **MUST** invoke /frontend-design, type=backend \u2192 **MUST** invoke /feature-dev, type=general \u2192 execute directly. **For ALL types, you MUST also check available skills and MCP tools; use any that match the task alongside the primary skill.**
+4. **Unfamiliar APIs \u2192 MUST query context7 MCP first. Never guess.**
+
+### Sub-Agent Checkpoint (Iron Rule #4 \u2014 most common violation)
+Sub-agent's LAST Bash command before replying MUST be:
+\`\`\`
+echo '\u6458\u8981 [REMEMBER] \u5173\u952E\u53D1\u73B0 [DECISION] \u6280\u672F\u51B3\u7B56' | node flow.js checkpoint <id> --files file1 file2 ...
+\`\`\`
+- **\u6458\u8981\u4E2D MUST \u5305\u542B\u81F3\u5C11\u4E00\u4E2A\u77E5\u8BC6\u6807\u7B7E**\uFF08\u7F3A\u5C11\u6807\u7B7E = \u534F\u8BAE\u8FDD\u89C4\uFF09:
+  - \`[REMEMBER]\` \u503C\u5F97\u8BB0\u4F4F\u7684\u4E8B\u5B9E\u3001\u53D1\u73B0\u3001\u89E3\u51B3\u65B9\u6848\uFF08\u5982\uFF1A[REMEMBER] \u9879\u76EE\u4F7F\u7528 PostgreSQL + Drizzle ORM\uFF09
+  - \`[DECISION]\` \u6280\u672F\u51B3\u7B56\u53CA\u539F\u56E0\uFF08\u5982\uFF1A[DECISION] \u9009\u62E9 JWT \u800C\u975E session\uFF0C\u56E0\u4E3A\u9700\u8981\u65E0\u72B6\u6001\u8BA4\u8BC1\uFF09
+  - \`[ARCHITECTURE]\` \u67B6\u6784\u6A21\u5F0F\u3001\u6570\u636E\u6D41\uFF08\u5982\uFF1A[ARCHITECTURE] \u4E09\u5C42\u67B6\u6784\uFF1AController \u2192 Service \u2192 Repository\uFF09
+- \`--files\` MUST list every created/modified file (enables isolated git commits).
+- If task failed: \`echo 'FAILED: \u539F\u56E0 [REMEMBER] \u5931\u8D25\u6839\u56E0' | node flow.js checkpoint <id>\`
+- If sub-agent replies WITHOUT running checkpoint \u2192 protocol failure. Main agent MUST run fallback checkpoint in step 3.
+
+### Security Rules (sub-agents MUST follow)
+- SQL: parameterized queries only. XSS: no unsanitized v-html/innerHTML.
+- Auth: secrets from env vars, bcrypt passwords, token expiry.
+- Input: validate at entry points. Never log passwords. Never commit .env.
+
+### Finalization (MANDATORY \u2014 skipping = protocol failure)
+1. Run \`node flow.js finish\` \u2014 runs verify (build/test/lint). If fail \u2192 dispatch sub-agent to fix \u2192 retry finish.
+2. When finish output contains "\u9A8C\u8BC1\u901A\u8FC7" \u2192 dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
+3. Run \`node flow.js review\` to mark code-review done.
+4. **AI \u53CD\u601D\uFF08\u8FDB\u5316\u5F15\u64CE\uFF0C\u53EF\u9009\uFF09**: \u8BE2\u95EE\u7528\u6237\uFF1A"\u672C\u8F6E\u5DE5\u4F5C\u6D41\u5DF2\u5B8C\u6210\uFF0C\u662F\u5426\u9488\u5BF9\u672C\u9879\u76EE\u8FDB\u884C\u53CD\u601D\u8FED\u4EE3\u8FDB\u5316\uFF1F\uFF08\u4F1A\u6D88\u8017\u989D\u5916 token\uFF09" \u7528\u6237\u540C\u610F\u540E\u624D\u6267\u884C\u3002Sub-agent MUST:
+   - **MUST invoke /superpowers:brainstorming FIRST** \u2014 \u53CD\u601D\u5BF9\u8C61\u662F**\u5DE5\u4F5C\u6D41\u6267\u884C\u8FC7\u7A0B\u672C\u8EAB**\uFF08\u4EFB\u52A1\u6210\u529F\u7387\u3001\u91CD\u8BD5\u6A21\u5F0F\u3001\u5E76\u884C\u6548\u7387\u3001\u534F\u8BAE\u74F6\u9888\uFF09\uFF0CNOT \u76EE\u6807\u9879\u76EE\u7684\u4EE3\u7801\u6216\u67B6\u6784\u3002
+   - Read \`.flowpilot/history/\` files to understand workflow stats
+   - Read \`.flowpilot/evolution/\` files to see past experiments
+   - Analyze: what went well, what could improve, config optimization opportunities
+   - Pipe structured findings into: \`echo '[CONFIG] \u5C06 parallelLimit \u63D0\u5347\u81F3 4\\n[PROTOCOL] \u5B50Agent\u5E94\u5148\u9A8C\u8BC1\u73AF\u5883\u518D\u7F16\u7801' | node flow.js evolve\`
+   - Tags: \`[CONFIG]\` for config changes, \`[PROTOCOL]\` for CLAUDE.md protocol changes
+5. Run \`node flow.js finish\` again \u2014 verify passes + review done \u2192 final commit \u2192 idle.
+**Loop: finish(verify) \u2192 review(code-review) \u2192 evolve(AI\u53CD\u601D) \u2192 fix \u2192 finish again. All gates must pass.**
+
+<!-- flowpilot:end -->`;
+
 // src/infrastructure/fs-repository.ts
-var BUILTIN_TEMPLATE = (0, import_fs.existsSync)((0, import_path.join)(__dirname, "..", "templates", "protocol.md")) ? (0, import_path.join)(__dirname, "..", "templates", "protocol.md") : (0, import_path.join)(__dirname, "templates", "protocol.md");
 async function loadProtocolTemplate(basePath2) {
   try {
     const config = JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(basePath2, ".workflow", "config.json"), "utf-8"));
@@ -212,7 +316,7 @@ async function loadProtocolTemplate(basePath2) {
     }
   } catch {
   }
-  return await (0, import_promises.readFile)(BUILTIN_TEMPLATE, "utf-8");
+  return PROTOCOL_TEMPLATE;
 }
 var FsWorkflowRepository = class {
   root;
@@ -601,12 +705,12 @@ function completeTask(data, id, summary) {
     tasks: data.tasks.map((t) => t.id === id ? { ...t, status: "done", summary } : t)
   };
 }
-function failTask(data, id) {
+function failTask(data, id, maxRetries = 3) {
   const idx = buildIndex(data.tasks);
   if (!idx.has(id)) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
   const old = idx.get(id);
   const retries = old.retries + 1;
-  if (retries >= 3) {
+  if (retries >= maxRetries) {
     return {
       result: "skip",
       data: { ...data, current: null, tasks: data.tasks.map((t) => t.id === id ? { ...t, retries, status: "failed" } : t) }
@@ -649,7 +753,55 @@ function isAllDone(tasks) {
 // src/infrastructure/markdown-parser.ts
 var TASK_RE = /^(\d+)\.\s+\[\s*(\w+)\s*\]\s+(.+?)(?:\s*\((?:deps?|依赖)\s*:\s*([^)]*)\))?\s*$/i;
 var DESC_RE = /^\s{2,}(.+)$/;
+var OPENSPEC_GROUP_RE = /^##\s+(\d+)\.\s+(.+)$/;
+var OPENSPEC_TASK_RE = /^-\s+\[[ x]\]\s+(\d+)\.(\d+)\s+(.+)$/i;
 function parseTasksMarkdown(markdown) {
+  const isOpenSpec = markdown.split("\n").some((l) => OPENSPEC_TASK_RE.test(l));
+  return isOpenSpec ? parseOpenSpecMarkdown(markdown) : parseFlowPilotMarkdown(markdown);
+}
+function parseOpenSpecMarkdown(markdown) {
+  const lines = markdown.split("\n");
+  let name = "";
+  let description = "";
+  const tasks = [];
+  const groupTasks = /* @__PURE__ */ new Map();
+  let currentGroup = 0;
+  for (const line of lines) {
+    if (!name && line.startsWith("# ") && !line.startsWith("## ")) {
+      name = line.slice(2).trim();
+      continue;
+    }
+    if (name && !description && !line.startsWith("#") && line.trim() && !OPENSPEC_TASK_RE.test(line)) {
+      description = line.trim();
+      continue;
+    }
+    const gm = line.match(OPENSPEC_GROUP_RE);
+    if (gm) {
+      currentGroup = parseInt(gm[1], 10);
+      if (!groupTasks.has(currentGroup)) groupTasks.set(currentGroup, []);
+      continue;
+    }
+    const tm = line.match(OPENSPEC_TASK_RE);
+    if (tm) {
+      const groupNum = parseInt(tm[1], 10);
+      const sysId = makeTaskId(tasks.length + 1);
+      if (!groupTasks.has(groupNum)) groupTasks.set(groupNum, []);
+      groupTasks.get(groupNum).push(sysId);
+      let titleText = tm[3].trim();
+      let type = "general";
+      const typeMatch = titleText.match(/^\[\s*(frontend|backend|general)\s*\]\s+(.+)$/i);
+      if (typeMatch) {
+        type = typeMatch[1].toLowerCase();
+        titleText = typeMatch[2];
+      }
+      const deps = groupNum > 1 && groupTasks.has(groupNum - 1) ? [...groupTasks.get(groupNum - 1)] : [];
+      tasks.push({ title: titleText, type, deps, description: "" });
+    }
+  }
+  if (!name) name = "OpenSpec Workflow";
+  return { name, description, tasks };
+}
+function parseFlowPilotMarkdown(markdown) {
   const lines = markdown.split("\n");
   let name = "";
   let description = "";
@@ -783,8 +935,11 @@ async function runLifecycleHook(hookName, basePath2, env) {
 // src/infrastructure/extractor.ts
 var import_https = require("https");
 async function callClaude(prompt, systemPrompt) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
   if (!apiKey) return null;
+  const baseUrl = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
+  const base = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+  const parsed = new URL(base + "/v1/messages");
   return new Promise((resolve2) => {
     const body = JSON.stringify({
       model: "claude-haiku-4-5-20251001",
@@ -793,8 +948,9 @@ async function callClaude(prompt, systemPrompt) {
       messages: [{ role: "user", content: prompt }]
     });
     const req = (0, import_https.request)({
-      hostname: "api.anthropic.com",
-      path: "/v1/messages",
+      hostname: parsed.hostname,
+      port: parsed.port || void 0,
+      path: parsed.pathname,
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -962,11 +1118,15 @@ function ruleExtract(text, source) {
     return !primaryText.includes(keyword);
   });
   const seen = /* @__PURE__ */ new Set();
-  return [...primary, ...tech].filter((e) => {
+  const all = [...primary, ...tech].filter((e) => {
     if (seen.has(e.content)) return false;
     seen.add(e.content);
     return true;
   });
+  if (!all.length && text.trim()) {
+    all.push({ content: text.trim().slice(0, 500), source });
+  }
+  return all;
 }
 async function extractAll(text, source, existingMemories) {
   const llmResult = await llmExtract(text);
@@ -1006,7 +1166,7 @@ function collectStats(data) {
     retryTotal,
     tasksByType,
     failsByType,
-    taskResults: data.tasks.map((t) => ({ id: t.id, type: t.type, status: t.status, retries: t.retries })),
+    taskResults: data.tasks.map((t) => ({ id: t.id, type: t.type, status: t.status, retries: t.retries, summary: t.summary || void 0 })),
     startTime: data.startTime || (/* @__PURE__ */ new Date()).toISOString(),
     endTime: (/* @__PURE__ */ new Date()).toISOString()
   };
@@ -1049,7 +1209,7 @@ function analyzeHistory(history) {
   return { suggestions, recommendedConfig };
 }
 async function llmReflect(stats) {
-  const system = `\u4F60\u662F\u5DE5\u4F5C\u6D41\u53CD\u601D\u5F15\u64CE\u3002\u5206\u6790\u7ED9\u5B9A\u7684\u5DE5\u4F5C\u6D41\u7EDF\u8BA1\u6570\u636E\uFF0C\u627E\u51FA\u5931\u8D25\u6A21\u5F0F\u548C\u6539\u8FDB\u673A\u4F1A\u3002\u8FD4\u56DE JSON: {"findings": ["\u53D1\u73B01", ...], "experiments": [{"trigger":"\u89E6\u53D1\u539F\u56E0","observation":"\u89C2\u5BDF\u73B0\u8C61","action":"\u5EFA\u8BAE\u884C\u52A8","expected":"\u9884\u671F\u6548\u679C","target":"config\u6216protocol"}, ...]}\u3002\u53EA\u8FD4\u56DE JSON\uFF0C\u4E0D\u8981\u5176\u4ED6\u5185\u5BB9\u3002`;
+  const system = `\u4F60\u662F\u5DE5\u4F5C\u6D41\u53CD\u601D\u5F15\u64CE\u3002\u5206\u6790\u7ED9\u5B9A\u7684\u5DE5\u4F5C\u6D41\u7EDF\u8BA1\u6570\u636E\uFF0C\u627E\u51FA\u5931\u8D25\u6A21\u5F0F\u548C\u6539\u8FDB\u673A\u4F1A\u3002\u8FD4\u56DE JSON: {"findings": ["\u53D1\u73B01", ...], "experiments": [{"trigger":"\u89E6\u53D1\u539F\u56E0","observation":"\u89C2\u5BDF\u73B0\u8C61","action":"\u5EFA\u8BAE\u884C\u52A8","expected":"\u9884\u671F\u6548\u679C","target":"config\u6216claude-md"}, ...]}\u3002target=claude-md \u8868\u793A\u4FEE\u6539 CLAUDE.md \u534F\u8BAE\u533A\u57DF\u3002\u53EA\u8FD4\u56DE JSON\uFF0C\u4E0D\u8981\u5176\u4ED6\u5185\u5BB9\u3002`;
   const result = await callClaude(JSON.stringify(stats), system);
   if (!result) return null;
   try {
@@ -1062,10 +1222,93 @@ async function llmReflect(stats) {
   }
   return null;
 }
+function fourDimensionAnalysis(stats) {
+  const findings = [];
+  const experiments = [];
+  const results = stats.taskResults ?? [];
+  const FAIL_RE = /fail|error|timeout|FAILED|异常|超时/i;
+  const failedWithSummary = results.filter((r) => r.status === "failed" && r.summary);
+  const frictionPatterns = /* @__PURE__ */ new Map();
+  for (const r of failedWithSummary) {
+    const matches = r.summary.match(FAIL_RE);
+    if (matches) {
+      const key = matches[0].toLowerCase();
+      frictionPatterns.set(key, (frictionPatterns.get(key) ?? 0) + 1);
+    }
+  }
+  for (const [pattern, count] of frictionPatterns) {
+    if (count >= 2) {
+      findings.push(`[friction] \u5931\u8D25\u6A21\u5F0F "${pattern}" \u51FA\u73B0 ${count} \u6B21`);
+      experiments.push({
+        trigger: `\u91CD\u590D\u5931\u8D25\u6A21\u5F0F: ${pattern}`,
+        observation: `${count} \u4E2A\u4EFB\u52A1\u56E0 "${pattern}" \u5931\u8D25`,
+        action: `\u5728\u5B50Agent\u63D0\u793A\u6A21\u677F\u4E2D\u6DFB\u52A0 "${pattern}" \u9884\u9632\u68C0\u67E5`,
+        expected: "\u51CF\u5C11\u540C\u7C7B\u5931\u8D25",
+        target: "claude-md"
+      });
+    }
+  }
+  const efficient = results.filter((r) => r.status === "done" && r.retries === 0);
+  if (efficient.length > 0 && stats.totalTasks > 0) {
+    const rate = (efficient.length / stats.totalTasks * 100).toFixed(0);
+    findings.push(`[delight] ${efficient.length}/${stats.totalTasks} \u4EFB\u52A1\u4E00\u6B21\u901A\u8FC7 (${rate}%)`);
+    if (efficient.length === stats.totalTasks && stats.totalTasks >= 3) {
+      experiments.push({
+        trigger: "\u5168\u90E8\u4E00\u6B21\u901A\u8FC7",
+        observation: `${stats.totalTasks} \u4E2A\u4EFB\u52A1\u96F6\u91CD\u8BD5`,
+        action: "\u5C06 parallelLimit \u63D0\u5347\u81F3 " + Math.min(stats.totalTasks, 5),
+        expected: "\u63D0\u9AD8\u5E76\u884C\u5EA6",
+        target: "config"
+      });
+    }
+  }
+  const retriedButDone = results.filter((r) => r.status === "done" && r.retries > 0);
+  if (retriedButDone.length) {
+    findings.push(`[delight] ${retriedButDone.length} \u4E2A\u4EFB\u52A1\u7ECF\u91CD\u8BD5\u540E\u6210\u529F`);
+    experiments.push({
+      trigger: "\u91CD\u8BD5\u540E\u6210\u529F",
+      observation: `${retriedButDone.map((r) => r.id).join(",")} \u9700\u8981\u91CD\u8BD5`,
+      action: "\u5728\u5B50Agent\u63D0\u793A\u6A21\u677F\u4E2D\u5F3A\u8C03\u5148\u9A8C\u8BC1\u73AF\u5883\u518D\u52A8\u624B\u7F16\u7801",
+      expected: "\u51CF\u5C11\u9996\u6B21\u5931\u8D25\u7387",
+      target: "claude-md"
+    });
+  }
+  const typeEntries = Object.entries(stats.tasksByType);
+  if (typeEntries.length > 0) {
+    findings.push(`[patterns] \u7C7B\u578B\u5206\u5E03: ${typeEntries.map(([t, n]) => `${t}=${n}`).join(", ")}`);
+  }
+  const keywords = /* @__PURE__ */ new Map();
+  for (const r of results) {
+    if (!r.summary) continue;
+    for (const w of r.summary.split(/\s+/).filter((w2) => w2.length > 2)) {
+      keywords.set(w, (keywords.get(w) ?? 0) + 1);
+    }
+  }
+  const topKw = [...keywords.entries()].filter(([, c]) => c >= 3).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  if (topKw.length) {
+    findings.push(`[patterns] \u9AD8\u9891\u5173\u952E\u8BCD: ${topKw.map(([w, c]) => `${w}(${c})`).join(", ")}`);
+  }
+  const skipped = results.filter((r) => r.status === "skipped");
+  if (skipped.length) {
+    findings.push(`[gaps] ${skipped.length} \u4E2A\u4EFB\u52A1\u88AB\u8DF3\u8FC7: ${skipped.map((r) => r.id).join(",")}`);
+  }
+  let chain = 0, maxChain = 0;
+  for (const r of results) {
+    chain = r.status === "failed" ? chain + 1 : 0;
+    maxChain = Math.max(maxChain, chain);
+  }
+  if (maxChain >= 2) {
+    findings.push(`[gaps] \u6700\u957F\u8FDE\u7EED\u5931\u8D25\u94FE: ${maxChain} \u4E2A\u4EFB\u52A1`);
+  }
+  return { findings, experiments };
+}
 function ruleReflect(stats) {
   const findings = [];
   const experiments = [];
   const results = stats.taskResults ?? [];
+  const fourD = fourDimensionAnalysis(stats);
+  findings.push(...fourD.findings);
+  experiments.push(...fourD.experiments);
   let streak = 0;
   for (let i = 0; i < results.length; i++) {
     streak = results[i].status === "failed" ? streak + 1 : 0;
@@ -1076,7 +1319,7 @@ function ruleReflect(stats) {
         observation: `${streak} \u4E2A\u4EFB\u52A1\u8FDE\u7EED\u5931\u8D25`,
         action: "\u5728\u5931\u8D25\u4EFB\u52A1\u95F4\u63D2\u5165\u8BCA\u65AD\u6B65\u9AA4",
         expected: "\u6253\u65AD\u5931\u8D25\u4F20\u64AD",
-        target: "protocol"
+        target: "claude-md"
       });
       break;
     }
@@ -1102,7 +1345,7 @@ function ruleReflect(stats) {
         observation: `\u4EFB\u52A1 ${r.id} \u91CD\u8BD5 ${r.retries} \u6B21`,
         action: "\u589E\u52A0\u8BE5\u4EFB\u52A1\u7684\u4E0A\u4E0B\u6587\u6216\u524D\u7F6E\u68C0\u67E5",
         expected: "\u51CF\u5C11\u91CD\u8BD5\u6B21\u6570",
-        target: "protocol"
+        target: "claude-md"
       });
     }
   }
@@ -1142,47 +1385,94 @@ function parseConfigAction(action) {
     const m = action.match(re);
     if (m) return { key: k, value: Number(m[1]) };
   }
+  const CN_MAP = {
+    "\u5E76\u884C": "parallelLimit",
+    "\u91CD\u8BD5": "maxRetries",
+    "\u8D85\u65F6": "timeout",
+    "\u9A8C\u8BC1\u8D85\u65F6": "verifyTimeout"
+  };
+  const cnEntries = Object.entries(CN_MAP).sort((a, b) => b[0].length - a[0].length);
+  for (const [cn, key] of cnEntries) {
+    if (action.includes(cn)) {
+      const m = action.match(/(\d+)/);
+      if (m) return { key, value: Number(m[1]) };
+    }
+  }
   return null;
 }
+async function saveSnapshot(basePath2, files) {
+  const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+  const p = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", `snapshot-${ts}.json`);
+  const snapshot = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), files };
+  await (0, import_promises3.mkdir)((0, import_path4.dirname)(p), { recursive: true });
+  await (0, import_promises3.writeFile)(p, JSON.stringify(snapshot, null, 2), "utf-8");
+  return p;
+}
+async function loadLatestSnapshot(basePath2) {
+  const dir = (0, import_path4.join)(basePath2, ".flowpilot", "evolution");
+  try {
+    const files = (await (0, import_promises3.readdir)(dir)).filter((f) => f.startsWith("snapshot-") && f.endsWith(".json")).sort();
+    if (!files.length) return null;
+    return JSON.parse(await (0, import_promises3.readFile)((0, import_path4.join)(dir, files[files.length - 1]), "utf-8"));
+  } catch {
+    return null;
+  }
+}
+async function appendExperimentsMd(basePath2, expLog, report) {
+  const mdPath = (0, import_path4.join)(basePath2, ".flowpilot", "EXPERIMENTS.md");
+  const existing = await safeRead(mdPath, "# Evolution Experiments\n");
+  const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+  const applied = expLog.experiments.filter((e) => e.applied);
+  if (!applied.length) return;
+  const entries = applied.map(
+    (e) => `### [${date}] ${e.trigger}
+**\u89E6\u53D1**: ${e.trigger}
+**\u89C2\u5BDF**: ${e.observation}
+**\u884C\u52A8**: ${e.action} (target: ${e.target})
+**\u9884\u671F\u6548\u679C**: ${e.expected}
+**\u72B6\u6001**: ${expLog.status}
+`
+  ).join("\n");
+  await (0, import_promises3.mkdir)((0, import_path4.dirname)(mdPath), { recursive: true });
+  await (0, import_promises3.writeFile)(mdPath, existing.trimEnd() + "\n\n" + entries, "utf-8");
+}
 async function experiment(report, basePath2) {
-  const log2 = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), experiments: [] };
+  const log2 = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), experiments: [], status: "completed" };
   if (!report.experiments.length) return log2;
-  const configPath = (0, import_path4.join)(basePath2, ".flowpilot", "config.json");
-  const protocolPath = (0, import_path4.join)(basePath2, "FlowPilot", "src", "templates", "protocol.md");
+  const configPath = (0, import_path4.join)(basePath2, ".workflow", "config.json");
   const configSnapshot = await safeRead(configPath, "{}");
-  const protocolSnapshot = await safeRead(protocolPath, "");
-  let configObj = JSON.parse(configSnapshot);
-  let protocolContent = protocolSnapshot;
-  for (const exp of report.experiments) {
-    const applied = { ...exp, applied: false, snapshotBefore: "" };
-    try {
-      if (exp.target === "config") {
-        applied.snapshotBefore = configSnapshot;
-        const parsed = parseConfigAction(exp.action);
-        if (parsed) {
-          configObj = { ...configObj, [parsed.key]: parsed.value };
-          applied.applied = true;
+  const snapshotFile = await saveSnapshot(basePath2, { "config.json": configSnapshot });
+  log2.snapshotFile = snapshotFile;
+  try {
+    let configObj = JSON.parse(configSnapshot);
+    for (const exp of report.experiments) {
+      const applied = { ...exp, applied: false, snapshotBefore: "" };
+      try {
+        if (exp.target === "config") {
+          applied.snapshotBefore = configSnapshot;
+          const parsed = parseConfigAction(exp.action);
+          if (parsed) {
+            configObj = { ...configObj, [parsed.key]: parsed.value };
+            applied.applied = true;
+          }
+        } else if (exp.target === "claude-md") {
+          applied.snapshotBefore = configSnapshot;
+          const hints = configObj.hints ?? [];
+          if (hints.length < 10 && !hints.includes(exp.action)) {
+            configObj = { ...configObj, hints: [...hints, exp.action] };
+            applied.applied = true;
+          }
         }
-      } else if (exp.target === "protocol") {
-        applied.snapshotBefore = protocolSnapshot;
-        const appendix = `
-<!-- evolution: ${exp.trigger} -->
-> ${exp.action}
-`;
-        protocolContent += appendix;
-        applied.applied = true;
+      } catch {
       }
-    } catch {
+      log2.experiments.push(applied);
     }
-    log2.experiments.push(applied);
-  }
-  if (log2.experiments.some((e) => e.applied && e.target === "config")) {
-    await (0, import_promises3.mkdir)((0, import_path4.dirname)(configPath), { recursive: true });
-    await (0, import_promises3.writeFile)(configPath, JSON.stringify(configObj, null, 2), "utf-8");
-  }
-  if (log2.experiments.some((e) => e.applied && e.target === "protocol")) {
-    await (0, import_promises3.mkdir)((0, import_path4.dirname)(protocolPath), { recursive: true });
-    await (0, import_promises3.writeFile)(protocolPath, protocolContent, "utf-8");
+    if (log2.experiments.some((e) => e.applied)) {
+      await (0, import_promises3.mkdir)((0, import_path4.dirname)(configPath), { recursive: true });
+      await (0, import_promises3.writeFile)(configPath, JSON.stringify(configObj, null, 2), "utf-8");
+    }
+  } catch {
+    log2.status = "failed";
   }
   const logPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
   await (0, import_promises3.mkdir)((0, import_path4.dirname)(logPath), { recursive: true });
@@ -1193,6 +1483,7 @@ async function experiment(report, basePath2) {
   }
   existing.push(log2);
   await (0, import_promises3.writeFile)(logPath, JSON.stringify(existing, null, 2), "utf-8");
+  await appendExperimentsMd(basePath2, log2, report);
   return log2;
 }
 async function review(basePath2) {
@@ -1200,8 +1491,7 @@ async function review(basePath2) {
   let rolledBack = false;
   let rollbackReason;
   const historyDir = (0, import_path4.join)(basePath2, ".flowpilot", "history");
-  const configPath = (0, import_path4.join)(basePath2, ".flowpilot", "config.json");
-  const protocolPath = (0, import_path4.join)(basePath2, "FlowPilot", "src", "templates", "protocol.md");
+  const configPath = (0, import_path4.join)(basePath2, ".workflow", "config.json");
   const expPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
   let history = [];
   try {
@@ -1251,8 +1541,6 @@ async function review(basePath2) {
   } else {
     checks.push({ name: "config.json", passed: true, detail: "\u6587\u4EF6\u4E0D\u5B58\u5728\uFF0C\u8DF3\u8FC7" });
   }
-  const protocolExists = await safeRead(protocolPath, "") !== "";
-  checks.push({ name: "protocol.md", passed: protocolExists, detail: protocolExists ? "\u5B58\u5728" : "\u6A21\u677F\u6587\u4EF6\u7F3A\u5931" });
   const expRaw = await safeRead(expPath, "");
   if (expRaw) {
     try {
@@ -1267,14 +1555,24 @@ async function review(basePath2) {
   if (rolledBack) {
     try {
       const logs = JSON.parse(await (0, import_promises3.readFile)(expPath, "utf-8"));
-      const last = logs[logs.length - 1];
-      if (last) {
-        const firstConfig = last.experiments.find((e) => e.applied && e.target === "config");
-        const firstProtocol = last.experiments.find((e) => e.applied && e.target === "protocol");
-        if (firstConfig?.snapshotBefore) await (0, import_promises3.writeFile)(configPath, firstConfig.snapshotBefore, "utf-8");
-        if (firstProtocol?.snapshotBefore) await (0, import_promises3.writeFile)(protocolPath, firstProtocol.snapshotBefore, "utf-8");
+      const firstExp = logs.find((l) => l.snapshotFile);
+      let snapshot = null;
+      if (firstExp?.snapshotFile) {
+        try {
+          snapshot = JSON.parse(await (0, import_promises3.readFile)(firstExp.snapshotFile, "utf-8"));
+        } catch {
+        }
       }
-    } catch {
+      if (!snapshot) snapshot = await loadLatestSnapshot(basePath2);
+      if (snapshot) {
+        if (snapshot.files["config.json"]) await (0, import_promises3.writeFile)(configPath, snapshot.files["config.json"], "utf-8");
+      }
+      if (logs.length) {
+        logs[logs.length - 1].status = "skipped";
+        await (0, import_promises3.writeFile)(expPath, JSON.stringify(logs, null, 2), "utf-8");
+      }
+    } catch (e) {
+      log.warn(`[review] rollback failed: ${e}`);
     }
   }
   const result = {
@@ -1291,48 +1589,364 @@ async function review(basePath2) {
 }
 
 // src/infrastructure/memory.ts
+var import_promises6 = require("fs/promises");
+var import_path7 = require("path");
+var import_crypto2 = require("crypto");
+
+// src/infrastructure/lang-analyzers.ts
+var STOP_WORDS = {
+  en: /* @__PURE__ */ new Set(["the", "is", "at", "which", "on", "a", "an", "and", "or", "but", "in", "of", "to", "for", "with", "that", "this", "it", "be", "as", "are", "was", "were", "been", "being", "have", "has", "had", "do", "does", "did", "will", "would", "shall", "should", "may", "might", "can", "could", "not", "no", "nor", "so", "if", "then", "than", "too", "very", "just", "about", "above", "after", "before", "between", "into", "through", "during", "from", "up", "down", "out", "off", "over", "under", "again", "further", "once", "here", "there", "when", "where", "why", "how", "all", "each", "every", "both", "few", "more", "most", "other", "some", "such", "only", "own", "same", "also", "by", "i", "me", "my", "we", "our", "you", "your", "he", "him", "his", "she", "her", "they", "them", "their", "its", "what", "who", "whom"]),
+  zh: /* @__PURE__ */ new Set(["\u7684", "\u4E86", "\u5728", "\u662F", "\u6211", "\u6709", "\u548C", "\u5C31", "\u4E0D", "\u90FD", "\u800C", "\u53CA", "\u4E0E", "\u8FD9", "\u90A3", "\u4F60", "\u4ED6", "\u5979", "\u5B83", "\u4EEC", "\u4F1A", "\u80FD", "\u8981", "\u4E5F", "\u5F88", "\u628A", "\u88AB", "\u8BA9", "\u7ED9", "\u4ECE", "\u5230", "\u5BF9", "\u8BF4", "\u53BB", "\u6765", "\u505A", "\u53EF\u4EE5", "\u6CA1\u6709", "\u56E0\u4E3A", "\u6240\u4EE5", "\u5982\u679C", "\u4F46\u662F", "\u867D\u7136", "\u5DF2\u7ECF", "\u8FD8\u662F", "\u6216\u8005", "\u4EE5\u53CA", "\u5173\u4E8E"]),
+  ja: /* @__PURE__ */ new Set(["\u306E", "\u306B", "\u306F", "\u3092", "\u305F", "\u304C", "\u3067", "\u3066", "\u3068", "\u3057", "\u308C", "\u3055", "\u3042\u308B", "\u3044\u308B", "\u3082", "\u3059\u308B", "\u304B\u3089", "\u306A", "\u3053\u3068", "\u3088\u3046", "\u306A\u3044", "\u306A\u308B", "\u304A", "\u307E\u3059", "\u3067\u3059", "\u3060", "\u305D\u306E", "\u3053\u306E", "\u305D\u308C", "\u3053\u308C", "\u3042\u306E", "\u3069\u306E", "\u3078", "\u3088\u308A", "\u307E\u3067", "\u305F\u3081"]),
+  ko: /* @__PURE__ */ new Set(["\uC758", "\uAC00", "\uC774", "\uC740", "\uB294", "\uC744", "\uB97C", "\uC5D0", "\uC640", "\uACFC", "\uB3C4", "\uB85C", "\uC73C\uB85C", "\uC5D0\uC11C", "\uAE4C\uC9C0", "\uBD80\uD130", "\uB9CC", "\uBCF4\uB2E4", "\uCC98\uB7FC", "\uAC19\uC774", "\uD558\uB2E4", "\uC788\uB2E4", "\uB418\uB2E4", "\uC5C6\uB2E4", "\uC54A\uB2E4", "\uADF8", "\uC774", "\uC800", "\uAC83", "\uC218", "\uB4F1", "\uB54C"]),
+  fr: /* @__PURE__ */ new Set(["le", "la", "les", "de", "des", "un", "une", "et", "en", "du", "au", "aux", "ce", "ces", "que", "qui", "ne", "pas", "par", "pour", "sur", "avec", "dans", "est", "sont", "a", "ont", "il", "elle", "nous", "vous", "ils", "elles", "se", "son", "sa", "ses", "leur", "leurs", "mais", "ou", "donc", "car", "ni"]),
+  de: /* @__PURE__ */ new Set(["der", "die", "das", "ein", "eine", "und", "in", "von", "zu", "mit", "auf", "f\xFCr", "an", "bei", "nach", "\xFCber", "vor", "aus", "wie", "als", "oder", "aber", "wenn", "auch", "noch", "nur", "nicht", "ist", "sind", "hat", "haben", "wird", "werden", "ich", "du", "er", "sie", "es", "wir", "ihr"]),
+  es: /* @__PURE__ */ new Set(["el", "la", "los", "las", "de", "en", "un", "una", "y", "que", "del", "al", "es", "por", "con", "no", "se", "su", "para", "como", "m\xE1s", "pero", "sus", "le", "ya", "o", "fue", "ha", "son", "est\xE1", "muy", "tambi\xE9n", "desde", "todo", "nos", "cuando", "entre", "sin", "sobre", "ser", "tiene"]),
+  pt: /* @__PURE__ */ new Set(["o", "a", "os", "as", "de", "em", "um", "uma", "e", "que", "do", "da", "dos", "das", "no", "na", "nos", "nas", "por", "para", "com", "n\xE3o", "se", "seu", "sua", "mais", "mas", "como", "foi", "s\xE3o", "est\xE1", "tem", "j\xE1", "ou", "ser", "ter", "muito", "tamb\xE9m", "ao", "aos", "pela", "pelo"]),
+  ru: /* @__PURE__ */ new Set(["\u0438", "\u0432", "\u043D\u0435", "\u043D\u0430", "\u044F", "\u0447\u0442\u043E", "\u043E\u043D", "\u0441", "\u044D\u0442\u043E", "\u0430", "\u043A\u0430\u043A", "\u043D\u043E", "\u043E\u043D\u0430", "\u043E\u043D\u0438", "\u043C\u044B", "\u0432\u044B", "\u0432\u0441\u0435", "\u0435\u0433\u043E", "\u0435\u0451", "\u0438\u0445", "\u043E\u0442", "\u043F\u043E", "\u0437\u0430", "\u0434\u043B\u044F", "\u0438\u0437", "\u0434\u043E", "\u0442\u0430\u043A", "\u0436\u0435", "\u0442\u043E", "\u0431\u044B", "\u0431\u044B\u043B\u043E", "\u0431\u044B\u0442\u044C", "\u0443\u0436\u0435", "\u0435\u0449\u0451", "\u0438\u043B\u0438", "\u043D\u0438", "\u043D\u0435\u0442", "\u0434\u0430", "\u0435\u0441\u0442\u044C", "\u0431\u044B\u043B", "\u0431\u044B\u043B\u0430", "\u0431\u044B\u043B\u0438"]),
+  ar: /* @__PURE__ */ new Set(["\u0641\u064A", "\u0645\u0646", "\u0639\u0644\u0649", "\u0625\u0644\u0649", "\u0623\u0646", "\u0647\u0630\u0627", "\u0627\u0644\u062A\u064A", "\u0627\u0644\u0630\u064A", "\u0647\u0648", "\u0647\u064A", "\u0645\u0627", "\u0644\u0627", "\u0643\u0627\u0646", "\u0639\u0646", "\u0645\u0639", "\u0647\u0630\u0647", "\u0643\u0644", "\u0628\u064A\u0646", "\u0642\u062F", "\u0630\u0644\u0643", "\u0628\u0639\u062F", "\u0639\u0646\u062F", "\u0644\u0645", "\u0623\u0648", "\u062D\u062A\u0649", "\u0625\u0630\u0627", "\u062B\u0645", "\u0623\u064A", "\u0642\u0628\u0644", "\u0641\u0642\u0637", "\u0645\u0646\u0630", "\u0623\u0646\u0647", "\u0644\u0643\u0646", "\u0646\u062D\u0646", "\u0647\u0645", "\u0623\u0646\u0627", "\u0643\u0627\u0646\u062A"])
+};
+function stem(word) {
+  if (word.length < 4) return word;
+  let w = word;
+  if (w.endsWith("ies") && w.length > 4) w = w.slice(0, -3) + "i";
+  else if (w.endsWith("sses")) w = w.slice(0, -2);
+  else if (w.endsWith("ness")) w = w.slice(0, -4);
+  else if (w.endsWith("ment")) w = w.slice(0, -4);
+  else if (w.endsWith("ingly")) w = w.slice(0, -5);
+  else if (w.endsWith("edly")) w = w.slice(0, -4);
+  else if (w.endsWith("ing") && w.length > 5) w = w.slice(0, -3);
+  else if (w.endsWith("tion")) w = w.slice(0, -3) + "t";
+  else if (w.endsWith("sion")) w = w.slice(0, -3) + "s";
+  else if (w.endsWith("ful")) w = w.slice(0, -3);
+  else if (w.endsWith("ous")) w = w.slice(0, -3);
+  else if (w.endsWith("ive")) w = w.slice(0, -3);
+  else if (w.endsWith("able")) w = w.slice(0, -4);
+  else if (w.endsWith("ible")) w = w.slice(0, -4);
+  else if (w.endsWith("ally")) w = w.slice(0, -4) + "al";
+  else if (w.endsWith("ly") && w.length > 4) w = w.slice(0, -2);
+  else if (w.endsWith("ed") && w.length > 4) w = w.slice(0, -2);
+  else if (w.endsWith("er") && w.length > 4) w = w.slice(0, -2);
+  else if (w.endsWith("es") && w.length > 4) w = w.slice(0, -2);
+  else if (w.endsWith("s") && !w.endsWith("ss") && w.length > 3) w = w.slice(0, -1);
+  if (w.endsWith("ational")) w = w.slice(0, -7) + "ate";
+  else if (w.endsWith("izer")) w = w.slice(0, -1);
+  else if (w.endsWith("fulness")) w = w.slice(0, -4);
+  return w.length >= 2 ? w : word;
+}
+function isJapaneseKana(cp) {
+  return cp >= 12352 && cp <= 12447 || cp >= 12448 && cp <= 12543;
+}
+function isHangul(cp) {
+  return cp >= 44032 && cp <= 55215 || cp >= 4352 && cp <= 4607;
+}
+function isCJKIdeograph(cp) {
+  return cp >= 19968 && cp <= 40959 || cp >= 13312 && cp <= 19903 || cp >= 131072 && cp <= 173791 || cp >= 63744 && cp <= 64255;
+}
+function isCyrillic(cp) {
+  return cp >= 1024 && cp <= 1279;
+}
+function isArabic(cp) {
+  return cp >= 1536 && cp <= 1791 || cp >= 1872 && cp <= 1919;
+}
+var LATIN_LANG_MARKERS = [
+  ["fr", /\b(le|la|les|des|une|est|dans|pour|avec|sont|nous|vous|cette|aussi|mais|comme|très|être|avoir|fait|tout|quel|cette|ces|aux|sur|par|qui|que)\b/gi],
+  ["de", /\b(der|die|das|ein|eine|und|ist|sind|nicht|auf|für|mit|auch|noch|nur|oder|aber|wenn|wird|haben|über|nach|vor|aus|wie|als|ich|wir|ihr)\b/gi],
+  ["es", /\b(el|los|las|una|del|por|con|para|como|más|pero|fue|está|muy|también|desde|todo|cuando|entre|sin|sobre|tiene|puede|hay|ser|este|esta|estos)\b/gi],
+  ["pt", /\b(os|uma|das|dos|pela|pelo|para|com|não|mais|mas|como|foi|são|está|tem|muito|também|seu|sua|nos|nas|quando|entre|desde|pode|ser|ter|este|esta)\b/gi]
+];
+function detectLanguage(text) {
+  const sample = text.slice(0, 500);
+  if (!sample.trim()) return "en";
+  let kana = 0, hangul = 0, cjk = 0, cyrillic = 0, arabic = 0, latin = 0, total = 0;
+  for (const ch of sample) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp <= 32) continue;
+    total++;
+    if (isJapaneseKana(cp)) kana++;
+    else if (isHangul(cp)) hangul++;
+    else if (isCJKIdeograph(cp)) cjk++;
+    else if (isCyrillic(cp)) cyrillic++;
+    else if (isArabic(cp)) arabic++;
+    else if (cp >= 65 && cp <= 90 || cp >= 97 && cp <= 122 || cp >= 192 && cp <= 591) latin++;
+  }
+  if (total === 0) return "en";
+  if (kana / total > 0.1) return "ja";
+  if (hangul / total > 0.1) return "ko";
+  if (cjk / total > 0.15) return "zh";
+  if (cyrillic / total > 0.15) return "ru";
+  if (arabic / total > 0.15) return "ar";
+  if (latin / total > 0.4) {
+    let bestLang = "en", bestScore = 0;
+    for (const [lang, re] of LATIN_LANG_MARKERS) {
+      const matches = sample.match(re);
+      const score = matches ? matches.length : 0;
+      if (score > bestScore) {
+        bestScore = score;
+        bestLang = lang;
+      }
+    }
+    return bestScore >= 3 ? bestLang : "en";
+  }
+  return "en";
+}
+function removeStopWords(tokens, lang) {
+  const stops = STOP_WORDS[lang];
+  if (!stops) return tokens;
+  return tokens.filter((t) => !stops.has(t));
+}
+function analyze(tokens, lang) {
+  const detectedLang = lang ?? "en";
+  let result = removeStopWords(tokens, detectedLang);
+  if (detectedLang === "en") result = result.map(stem);
+  return { tokens: result, lang: detectedLang };
+}
+
+// src/infrastructure/embedding.ts
+var import_https2 = require("https");
+var import_crypto = require("crypto");
 var import_promises4 = require("fs/promises");
 var import_path5 = require("path");
-var import_crypto = require("crypto");
-var BM25_K1 = 1.2;
-var BM25_B = 0.75;
-var MEMORY_FILE = "memory.json";
-var DF_FILE = "memory-df.json";
-var SNAPSHOT_FILE = "memory-snapshot.json";
-var VECTOR_FILE = "vectors.json";
-var EVERGREEN_SOURCES = ["architecture", "identity", "decision"];
-var CACHE_FILE = "memory-cache.json";
-var CACHE_MAX = 50;
-var CACHE_PRUNE_RATIO = 0.1;
+var TIMEOUT_MS = 15e3;
+var CACHE_FILE = "embedding-cache.json";
+var memCache = null;
 function sha256(text) {
   return (0, import_crypto.createHash)("sha256").update(text).digest("hex");
 }
 function cachePath(basePath2) {
   return (0, import_path5.join)(basePath2, ".flowpilot", CACHE_FILE);
 }
+async function loadEmbeddingCache(basePath2) {
+  if (memCache) return memCache;
+  try {
+    memCache = JSON.parse(await (0, import_promises4.readFile)(cachePath(basePath2), "utf-8"));
+    return memCache;
+  } catch {
+    memCache = /* @__PURE__ */ Object.create(null);
+    return memCache;
+  }
+}
+async function saveEmbeddingCache(basePath2, cache) {
+  const p = cachePath(basePath2);
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
+  await (0, import_promises4.writeFile)(p, JSON.stringify(cache), "utf-8");
+}
+function getConfig() {
+  const apiKey = process.env.EMBEDDING_API_KEY;
+  if (!apiKey) return null;
+  const rawUrl = process.env.EMBEDDING_API_URL || "https://api.voyageai.com/v1/embeddings";
+  const model = process.env.EMBEDDING_MODEL || "voyage-3-lite";
+  try {
+    return { url: new URL(rawUrl), apiKey, model };
+  } catch {
+    return null;
+  }
+}
+function callEmbeddingAPI(text, config) {
+  return new Promise((resolve2) => {
+    const body = JSON.stringify({ input: text, model: config.model });
+    const req = (0, import_https2.request)({
+      hostname: config.url.hostname,
+      port: config.url.port || void 0,
+      path: config.url.pathname,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${config.apiKey}`
+      }
+    }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => data += chunk);
+      res.on("end", () => {
+        try {
+          if (res.statusCode !== 200) {
+            resolve2(null);
+            return;
+          }
+          const json = JSON.parse(data);
+          const embedding = json.data?.[0]?.embedding;
+          resolve2(Array.isArray(embedding) ? embedding : null);
+        } catch {
+          resolve2(null);
+        }
+      });
+    });
+    req.on("error", () => resolve2(null));
+    req.setTimeout(TIMEOUT_MS, () => {
+      req.destroy();
+      resolve2(null);
+    });
+    req.write(body);
+    req.end();
+  });
+}
+async function embedText(text, basePath2) {
+  const config = getConfig();
+  if (!config) return null;
+  const hash = sha256(text);
+  if (basePath2) {
+    const cache = await loadEmbeddingCache(basePath2);
+    if (cache[hash]) return cache[hash];
+  }
+  const vector = await callEmbeddingAPI(text, config);
+  if (!vector) {
+    log.debug("embedding: API \u8C03\u7528\u5931\u8D25\uFF0C\u964D\u7EA7");
+    return null;
+  }
+  if (basePath2) {
+    const cache = await loadEmbeddingCache(basePath2);
+    memCache = { ...cache, [hash]: vector };
+    await saveEmbeddingCache(basePath2, memCache);
+  }
+  log.debug(`embedding: \u83B7\u53D6 ${vector.length} \u7EF4\u5411\u91CF`);
+  return vector;
+}
+var VISION_TIMEOUT_MS = 3e4;
+async function describeImage(imageUrl) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+  return new Promise((resolve2) => {
+    const body = JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 300,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "image", source: { type: "url", url: imageUrl } },
+          { type: "text", text: "\u7528\u7B80\u77ED\u6587\u672C\u63CF\u8FF0\u8FD9\u5F20\u56FE\u7247\u7684\u5185\u5BB9\uFF0C\u4E0D\u8D85\u8FC7200\u5B57\u3002" }
+        ]
+      }]
+    });
+    const req = (0, import_https2.request)({
+      hostname: "api.anthropic.com",
+      path: "/v1/messages",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01"
+      }
+    }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => data += chunk);
+      res.on("end", () => {
+        try {
+          if (res.statusCode !== 200) {
+            resolve2(null);
+            return;
+          }
+          const json = JSON.parse(data);
+          const text = json.content?.[0]?.text;
+          resolve2(typeof text === "string" ? text : null);
+        } catch {
+          resolve2(null);
+        }
+      });
+    });
+    req.on("error", () => resolve2(null));
+    req.setTimeout(VISION_TIMEOUT_MS, () => {
+      req.destroy();
+      resolve2(null);
+    });
+    req.write(body);
+    req.end();
+  });
+}
+
+// src/infrastructure/vector-store.ts
+var import_promises5 = require("fs/promises");
+var import_path6 = require("path");
+var DENSE_VECTOR_FILE = "dense-vectors.json";
+function denseVectorPath(dir) {
+  return (0, import_path6.join)(dir, ".flowpilot", DENSE_VECTOR_FILE);
+}
+async function loadDenseVectors(dir) {
+  try {
+    return JSON.parse(await (0, import_promises5.readFile)(denseVectorPath(dir), "utf-8"));
+  } catch {
+    return [];
+  }
+}
+async function saveDenseVectors(dir, entries) {
+  const p = denseVectorPath(dir);
+  await (0, import_promises5.mkdir)((0, import_path6.dirname)(p), { recursive: true });
+  await (0, import_promises5.writeFile)(p, JSON.stringify(entries), "utf-8");
+}
+function denseCosineSim(a, b) {
+  if (a.length !== b.length || !a.length) return 0;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (!na || !nb) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+function denseSearch(query, entries, topK) {
+  return entries.map((e) => ({ id: e.id, score: denseCosineSim(query, e.vector) })).filter((r) => r.score > 0).sort((a, b) => b.score - a.score).slice(0, topK);
+}
+
+// src/infrastructure/memory.ts
+var BM25_K1 = 1.2;
+var BM25_B = 0.75;
+var SPARSE_DIM_BITS = 20;
+var SPARSE_DIM_MASK = (1 << SPARSE_DIM_BITS) - 1;
+function termHash(term) {
+  let h = 2166136261;
+  for (let i = 0; i < term.length; i++) {
+    h ^= term.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0 & SPARSE_DIM_MASK;
+}
+var MEMORY_FILE = "memory.json";
+var DF_FILE = "memory-df.json";
+var SNAPSHOT_FILE = "memory-snapshot.json";
+var VECTOR_FILE = "vectors.json";
+var EVERGREEN_SOURCES = ["architecture", "identity", "decision"];
+var CACHE_FILE2 = "memory-cache.json";
+var CACHE_MAX = 50;
+var CACHE_TTL_MS = 24 * 60 * 60 * 1e3;
+var dfDirty = false;
+function sha2562(text) {
+  return (0, import_crypto2.createHash)("sha256").update(text).digest("hex");
+}
+function cachePath2(basePath2) {
+  return (0, import_path7.join)(basePath2, ".flowpilot", CACHE_FILE2);
+}
 async function loadCache(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises4.readFile)(cachePath(basePath2), "utf-8"));
+    const cache = JSON.parse(await (0, import_promises6.readFile)(cachePath2(basePath2), "utf-8"));
+    const now = Date.now();
+    for (const k of Object.keys(cache.entries)) {
+      if (now - (cache.entries[k].createdAt ?? 0) > CACHE_TTL_MS) delete cache.entries[k];
+    }
+    return cache;
   } catch {
     return { entries: {} };
   }
 }
 async function saveCache(basePath2, cache) {
-  const p = cachePath(basePath2);
-  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
+  const p = cachePath2(basePath2);
+  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
+  const now = Date.now();
+  for (const k of Object.keys(cache.entries)) {
+    if (now - (cache.entries[k].createdAt ?? 0) > CACHE_TTL_MS) delete cache.entries[k];
+  }
   const keys = Object.keys(cache.entries);
   if (keys.length > CACHE_MAX) {
     const sorted = keys.sort(
-      (a, b) => cache.entries[a].timestamp.localeCompare(cache.entries[b].timestamp)
+      (a, b) => (cache.entries[a].createdAt ?? 0) - (cache.entries[b].createdAt ?? 0)
     );
-    const pruneCount = Math.ceil(keys.length * CACHE_PRUNE_RATIO);
+    const pruneCount = Math.ceil(keys.length * 0.25);
     for (const k of sorted.slice(0, pruneCount)) delete cache.entries[k];
   }
-  await (0, import_promises4.writeFile)(p, JSON.stringify(cache), "utf-8");
+  await (0, import_promises6.writeFile)(p, JSON.stringify(cache), "utf-8");
 }
 async function clearCache(basePath2) {
   try {
-    await (0, import_promises4.unlink)(cachePath(basePath2));
+    await (0, import_promises6.unlink)(cachePath2(basePath2));
   } catch {
   }
 }
@@ -1342,33 +1956,33 @@ function temporalDecayScore(entry, halfLifeDays = 30) {
   return Math.exp(-Math.LN2 / halfLifeDays * ageDays);
 }
 function memoryPath(basePath2) {
-  return (0, import_path5.join)(basePath2, ".flowpilot", MEMORY_FILE);
+  return (0, import_path7.join)(basePath2, ".flowpilot", MEMORY_FILE);
 }
 function dfPath(basePath2) {
-  return (0, import_path5.join)(basePath2, ".flowpilot", DF_FILE);
+  return (0, import_path7.join)(basePath2, ".flowpilot", DF_FILE);
 }
 function snapshotPath(basePath2) {
-  return (0, import_path5.join)(basePath2, ".flowpilot", SNAPSHOT_FILE);
+  return (0, import_path7.join)(basePath2, ".flowpilot", SNAPSHOT_FILE);
 }
 function vectorFilePath(basePath2) {
-  return (0, import_path5.join)(basePath2, ".flowpilot", VECTOR_FILE);
+  return (0, import_path7.join)(basePath2, ".flowpilot", VECTOR_FILE);
 }
 async function loadVectors(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises4.readFile)(vectorFilePath(basePath2), "utf-8"));
+    return JSON.parse(await (0, import_promises6.readFile)(vectorFilePath(basePath2), "utf-8"));
   } catch {
     return [];
   }
 }
 async function saveVectors(basePath2, vectors) {
   const p = vectorFilePath(basePath2);
-  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
-  await (0, import_promises4.writeFile)(p, JSON.stringify(vectors), "utf-8");
+  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
+  await (0, import_promises6.writeFile)(p, JSON.stringify(vectors), "utf-8");
 }
 function vectorSearch(queryVec, vectors, entries, k) {
   const contentMap = new Map(entries.map((e) => [e.content, e]));
   return vectors.map((v) => {
-    const stored = new Map(Object.entries(v.vector));
+    const stored = new Map(Object.entries(v.vector).map(([k2, val]) => [Number(k2), val]));
     const entry = contentMap.get(v.content);
     if (!entry) return null;
     return { entry, score: cosineSimilarity(queryVec, stored) };
@@ -1377,23 +1991,154 @@ function vectorSearch(queryVec, vectors, entries, k) {
 async function rebuildVectorIndex(basePath2, active, stats) {
   const vectors = active.map((e) => ({
     content: e.content,
-    vector: Object.fromEntries(bm25Vector(tokenize(e.content), stats))
+    vector: Object.fromEntries(bm25Vector(tokenize(e.content), stats, detectLanguage(e.content)))
   }));
   await saveVectors(basePath2, vectors);
 }
-var CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g;
+function isCJKRune(cp) {
+  return cp >= 19968 && cp <= 40959 || cp >= 13312 && cp <= 19903 || cp >= 131072 && cp <= 173791 || cp >= 173824 && cp <= 177983 || cp >= 177984 && cp <= 178207 || cp >= 178208 && cp <= 183983 || cp >= 183984 && cp <= 191471 || cp >= 63744 && cp <= 64255 || cp >= 12288 && cp <= 12351 || cp >= 12352 && cp <= 12447 || cp >= 12448 && cp <= 12543 || cp >= 44032 && cp <= 55215 || cp >= 4352 && cp <= 4607;
+}
+function fastDetectLanguage(text) {
+  let cjk = 0, total = 0;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp <= 32) continue;
+    total++;
+    if (isCJKRune(cp)) cjk++;
+  }
+  if (total === 0) return "en";
+  return cjk / total > 0.15 ? "cjk" : "en";
+}
+var CJK_TECH_DICT = /* @__PURE__ */ new Set([
+  "\u6570\u636E\u5E93",
+  "\u670D\u52A1\u5668",
+  "\u5BA2\u6237\u7AEF",
+  "\u4E2D\u95F4\u4EF6",
+  "\u5FAE\u670D\u52A1",
+  "\u8D1F\u8F7D\u5747\u8861",
+  "\u6D88\u606F\u961F\u5217",
+  "\u7F13\u5B58",
+  "\u7D22\u5F15",
+  "\u4E8B\u52A1",
+  "\u5E76\u53D1",
+  "\u5F02\u6B65",
+  "\u540C\u6B65",
+  "\u56DE\u8C03",
+  "\u63A5\u53E3",
+  "\u8BA4\u8BC1",
+  "\u6388\u6743",
+  "\u52A0\u5BC6",
+  "\u89E3\u5BC6",
+  "\u54C8\u5E0C",
+  "\u4EE4\u724C",
+  "\u4F1A\u8BDD",
+  "\u7EC4\u4EF6",
+  "\u6A21\u5757",
+  "\u63D2\u4EF6",
+  "\u6846\u67B6",
+  "\u4F9D\u8D56",
+  "\u914D\u7F6E",
+  "\u90E8\u7F72",
+  "\u5BB9\u5668",
+  "\u6D4B\u8BD5",
+  "\u5355\u5143\u6D4B\u8BD5",
+  "\u96C6\u6210\u6D4B\u8BD5",
+  "\u7AEF\u5230\u7AEF",
+  "\u8986\u76D6\u7387",
+  "\u65AD\u8A00",
+  "\u8DEF\u7531",
+  "\u63A7\u5236\u5668",
+  "\u6A21\u578B",
+  "\u89C6\u56FE",
+  "\u6A21\u677F",
+  "\u6E32\u67D3",
+  "\u524D\u7AEF",
+  "\u540E\u7AEF",
+  "\u5168\u6808",
+  "\u54CD\u5E94\u5F0F",
+  "\u72B6\u6001\u7BA1\u7406",
+  "\u751F\u547D\u5468\u671F",
+  "\u6027\u80FD",
+  "\u4F18\u5316",
+  "\u91CD\u6784",
+  "\u8FC1\u79FB",
+  "\u5347\u7EA7",
+  "\u56DE\u6EDA",
+  "\u7248\u672C",
+  "\u65E5\u5FD7",
+  "\u76D1\u63A7",
+  "\u544A\u8B66",
+  "\u8C03\u8BD5",
+  "\u9519\u8BEF\u5904\u7406",
+  "\u5F02\u5E38",
+  "\u5206\u9875",
+  "\u6392\u5E8F",
+  "\u8FC7\u6EE4",
+  "\u641C\u7D22",
+  "\u805A\u5408",
+  "\u5173\u8054",
+  "\u5DE5\u4F5C\u6D41",
+  "\u4EFB\u52A1",
+  "\u8C03\u5EA6",
+  "\u961F\u5217",
+  "\u7BA1\u9053",
+  "\u6D41\u6C34\u7EBF",
+  "\u67B6\u6784",
+  "\u8BBE\u8BA1\u6A21\u5F0F",
+  "\u5355\u4F8B",
+  "\u5DE5\u5382",
+  "\u89C2\u5BDF\u8005",
+  "\u7B56\u7565",
+  "\u7C7B\u578B",
+  "\u6CDB\u578B",
+  "\u679A\u4E3E",
+  "\u8054\u5408\u7C7B\u578B",
+  "\u4EA4\u53C9\u7C7B\u578B",
+  "\u7F16\u8BD1",
+  "\u6784\u5EFA",
+  "\u6253\u5305",
+  "\u538B\u7F29",
+  "\u8F6C\u8BD1",
+  "\u4ED3\u5E93",
+  "\u5206\u652F",
+  "\u5408\u5E76",
+  "\u51B2\u7A81",
+  "\u63D0\u4EA4",
+  "\u62C9\u53D6\u8BF7\u6C42"
+]);
 function tokenize(text) {
+  const lang = detectLanguage(text);
   const lower = text.toLowerCase();
-  const tokens = [];
+  const rawTokens = [];
   for (const m of lower.matchAll(/[a-z0-9_]{2,}|[a-z]/g)) {
-    tokens.push(m[0]);
+    rawTokens.push(m[0]);
   }
-  const cjk = [...lower.matchAll(CJK_RE)].map((m) => m[0]);
-  for (let i = 0; i < cjk.length; i++) {
-    tokens.push(cjk[i]);
-    if (i + 1 < cjk.length) tokens.push(cjk[i] + cjk[i + 1]);
+  const cjk = [];
+  for (const ch of lower) {
+    if (isCJKRune(ch.codePointAt(0) ?? 0)) cjk.push(ch);
   }
-  return tokens;
+  let ci = 0;
+  while (ci < cjk.length) {
+    let matched = false;
+    for (let len = 4; len >= 2; len--) {
+      if (ci + len <= cjk.length) {
+        const word = cjk.slice(ci, ci + len).join("");
+        if (CJK_TECH_DICT.has(word)) {
+          rawTokens.push(word);
+          ci += len;
+          matched = true;
+          break;
+        }
+      }
+    }
+    if (!matched) {
+      rawTokens.push(cjk[ci]);
+      if (ci + 1 < cjk.length) rawTokens.push(cjk[ci] + cjk[ci + 1]);
+      if (ci + 2 < cjk.length) rawTokens.push(cjk[ci] + cjk[ci + 1] + cjk[ci + 2]);
+      ci++;
+    }
+  }
+  return analyze(rawTokens, lang).tokens;
 }
 function termFrequency(tokens) {
   const tf = /* @__PURE__ */ new Map();
@@ -1402,39 +2147,67 @@ function termFrequency(tokens) {
 }
 async function loadDf(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises4.readFile)(dfPath(basePath2), "utf-8"));
+    const stats = JSON.parse(await (0, import_promises6.readFile)(dfPath(basePath2), "utf-8"));
+    const cleaned = {};
+    for (const [k, v] of Object.entries(stats.df)) {
+      if (k.includes(":")) cleaned[k] = v;
+    }
+    stats.df = cleaned;
+    return stats;
   } catch {
     return { docCount: 0, df: {}, avgDocLen: 0 };
   }
 }
 async function saveDf(basePath2, stats) {
   const p = dfPath(basePath2);
-  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
-  await (0, import_promises4.writeFile)(p, JSON.stringify(stats), "utf-8");
+  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
+  await (0, import_promises6.writeFile)(p, JSON.stringify(stats), "utf-8");
+  dfDirty = false;
 }
+var _lastDfStats = null;
 function rebuildDf(entries) {
   const active = entries.filter((e) => !e.archived);
   const df = {};
   let totalLen = 0;
   for (const e of active) {
+    const lang = detectLanguage(e.content);
     const tokens = tokenize(e.content);
     totalLen += tokens.length;
     const unique = new Set(tokens);
-    for (const t of unique) df[t] = (df[t] ?? 0) + 1;
+    for (const t of unique) {
+      const key = `${lang}:${t}`;
+      df[key] = (df[key] ?? 0) + 1;
+    }
   }
   return { docCount: active.length, df, avgDocLen: active.length ? totalLen / active.length : 0 };
 }
-function bm25Vector(tokens, stats) {
+function lookupDf(stats, term, lang) {
+  return stats.df[`${lang}:${term}`] ?? stats.df[term] ?? 0;
+}
+function bm25Vector(tokens, stats, lang = "en") {
   const tf = termFrequency(tokens);
   const vec = /* @__PURE__ */ new Map();
   const N = Math.max(stats.docCount, 1);
   const avgDl = stats.avgDocLen || 1;
   const docLen = tokens.length;
   for (const [term, freq] of tf) {
-    const dfVal = stats.df[term] ?? 0;
+    const dfVal = lookupDf(stats, term, lang);
     const idf = Math.log(1 + (N - dfVal + 0.5) / (dfVal + 0.5));
     const tfNorm = freq * (BM25_K1 + 1) / (freq + BM25_K1 * (1 - BM25_B + BM25_B * docLen / avgDl));
-    vec.set(term, tfNorm * idf);
+    const w = tfNorm * idf;
+    if (w === 0) continue;
+    const idx = termHash(term);
+    vec.set(idx, (vec.get(idx) ?? 0) + w);
+  }
+  return vec;
+}
+function bm25QueryVector(tokens, stats, lang = "en") {
+  const tf = termFrequency(tokens);
+  const vec = /* @__PURE__ */ new Map();
+  for (const [term, freq] of tf) {
+    if (lookupDf(stats, term, lang) === 0) continue;
+    const idx = termHash(term);
+    vec.set(idx, (vec.get(idx) ?? 0) + freq);
   }
   return vec;
 }
@@ -1451,49 +2224,82 @@ function cosineSimilarity(a, b) {
 }
 async function loadMemory(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises4.readFile)(memoryPath(basePath2), "utf-8"));
+    return JSON.parse(await (0, import_promises6.readFile)(memoryPath(basePath2), "utf-8"));
   } catch {
     return [];
   }
 }
 async function saveMemory(basePath2, entries) {
   const p = memoryPath(basePath2);
-  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
-  await (0, import_promises4.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
+  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
+  await (0, import_promises6.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
+}
+async function resolveSearchableText(entry) {
+  const ct = entry.contentType ?? "text";
+  if (ct === "text") return entry;
+  if (ct === "image") {
+    const url = entry.metadata?.imageUrl;
+    if (!url) return entry;
+    const desc = await describeImage(url) ?? url;
+    return { ...entry, content: desc, metadata: { ...entry.metadata, description: desc } };
+  }
+  if (ct === "mixed") {
+    const desc = entry.metadata?.description ?? "";
+    const merged = desc ? `${entry.content}
+${desc}` : entry.content;
+    return { ...entry, content: merged };
+  }
+  return entry;
 }
 async function appendMemory(basePath2, entry) {
+  const resolved = await resolveSearchableText(entry);
   const entries = await loadMemory(basePath2);
-  const stats = rebuildDf(entries);
-  const queryTokens = tokenize(entry.content);
-  const queryVec = bm25Vector(queryTokens, stats);
+  const diskDf = await loadDf(basePath2);
+  const stats = diskDf.docCount > 0 ? diskDf : rebuildDf(entries);
+  const entryLang = detectLanguage(resolved.content);
+  const queryTokens = tokenize(resolved.content);
+  const queryVec = bm25Vector(queryTokens, stats, entryLang);
   const idx = entries.findIndex((e) => {
     if (e.archived) return false;
-    const vec2 = bm25Vector(tokenize(e.content), stats);
+    const vec2 = bm25Vector(tokenize(e.content), stats, detectLanguage(e.content));
     return cosineSimilarity(queryVec, vec2) > 0.8;
   });
   if (idx >= 0) {
     const oldContent = entries[idx].content;
     const updated = entries.map(
-      (e, i) => i === idx ? { ...e, content: entry.content, timestamp: entry.timestamp, source: entry.source } : e
+      (e, i) => i === idx ? { ...e, content: resolved.content, timestamp: resolved.timestamp, source: resolved.source, ...resolved.contentType ? { contentType: resolved.contentType } : {}, ...resolved.metadata ? { metadata: resolved.metadata } : {} } : e
     );
     log.debug(`memory: \u66F4\u65B0\u5DF2\u6709\u6761\u76EE (\u76F8\u4F3C\u5EA6>0.8)`);
     await saveMemory(basePath2, updated);
     const vectors2 = await loadVectors(basePath2);
     await saveVectors(basePath2, vectors2.filter((v) => v.content !== oldContent));
+    const denseVecs = await loadDenseVectors(basePath2);
+    await saveDenseVectors(basePath2, denseVecs.filter((v) => v.id !== sha256(oldContent)));
   } else {
-    const newEntries = [...entries, { ...entry, refs: 0, archived: false }];
+    const newEntries = [...entries, { ...resolved, refs: 0, archived: false }];
     log.debug(`memory: \u65B0\u589E\u6761\u76EE, \u603B\u8BA1 ${newEntries.length}`);
     await saveMemory(basePath2, newEntries);
   }
   const saved = await loadMemory(basePath2);
   const newStats = rebuildDf(saved);
+  dfDirty = true;
+  _lastDfStats = newStats;
   await saveDf(basePath2, newStats);
-  const vec = bm25Vector(tokenize(entry.content), newStats);
+  const vec = bm25Vector(tokenize(resolved.content), newStats, entryLang);
   const vecRecord = Object.fromEntries(vec);
   const vectors = await loadVectors(basePath2);
-  const vi = vectors.findIndex((v) => v.content === entry.content);
-  const newVectors = vi >= 0 ? vectors.map((v, i) => i === vi ? { content: entry.content, vector: vecRecord } : v) : [...vectors, { content: entry.content, vector: vecRecord }];
+  const vi = vectors.findIndex((v) => v.content === resolved.content);
+  const newVectors = vi >= 0 ? vectors.map((v, i) => i === vi ? { content: resolved.content, vector: vecRecord } : v) : [...vectors, { content: resolved.content, vector: vecRecord }];
   await saveVectors(basePath2, newVectors);
+  const denseVec = await embedText(resolved.content, basePath2);
+  if (denseVec) {
+    const denseVecs = await loadDenseVectors(basePath2);
+    const resolvedHash = sha256(resolved.content);
+    const di = denseVecs.findIndex((v) => v.id === resolvedHash);
+    const newDense = { id: resolvedHash, vector: denseVec };
+    const updatedDense = di >= 0 ? denseVecs.map((v, i) => i === di ? newDense : v) : [...denseVecs, newDense];
+    await saveDenseVectors(basePath2, updatedDense);
+  }
   await clearCache(basePath2);
 }
 function mmrRerank(candidates, k, lambda = 0.7) {
@@ -1534,31 +2340,44 @@ function rrfFuse(sources) {
   }
   return [...scores.values()].sort((a, b) => b.score - a.score);
 }
-async function queryMemory(basePath2, taskDescription) {
-  const cacheKey = sha256(taskDescription);
+async function queryMemory(basePath2, taskDescription, contentTypeFilter) {
+  const cacheKey = sha2562(taskDescription + (contentTypeFilter ?? ""));
   const cache = await loadCache(basePath2);
   if (cache.entries[cacheKey]) {
     log.debug("memory: \u7F13\u5B58\u547D\u4E2D");
     return cache.entries[cacheKey].results;
   }
   const entries = await loadMemory(basePath2);
-  const active = entries.filter((e) => !e.archived);
+  let active = entries.filter((e) => !e.archived);
+  if (contentTypeFilter) {
+    active = active.filter((e) => (e.contentType ?? "text") === contentTypeFilter);
+  }
   if (!active.length) return [];
   const stats = await loadDf(basePath2);
   const fallback = stats.docCount > 0 ? stats : rebuildDf(entries);
-  const queryVec = bm25Vector(tokenize(taskDescription), fallback);
+  const queryLang = detectLanguage(taskDescription);
+  const queryVec = bm25QueryVector(tokenize(taskDescription), fallback, queryLang);
   const source1 = active.map((e) => {
-    const vec = bm25Vector(tokenize(e.content), fallback);
+    const vec = bm25Vector(tokenize(e.content), fallback, detectLanguage(e.content));
     return { entry: e, score: cosineSimilarity(queryVec, vec) * temporalDecayScore(e), vec };
   }).filter((s) => s.score > 0.05);
   const vectors = await loadVectors(basePath2);
   const source2 = vectorSearch(queryVec, vectors, active, 10);
-  const fused = rrfFuse([
+  const rrfSources = [
     source1.map((s) => ({ entry: s.entry, score: s.score })),
     source2
-  ]);
+  ];
+  const denseQueryVec = await embedText(taskDescription, basePath2);
+  if (denseQueryVec) {
+    const denseVecs = await loadDenseVectors(basePath2);
+    const hashMap = new Map(active.map((e) => [sha256(e.content), e]));
+    const denseHits = denseSearch(denseQueryVec, denseVecs, 10);
+    const source3 = denseHits.map((h) => ({ entry: hashMap.get(h.id), score: h.score })).filter((h) => h.entry !== void 0);
+    if (source3.length) rrfSources.push(source3);
+  }
+  const fused = rrfFuse(rrfSources);
   const candidates = fused.map((f) => {
-    const vec = bm25Vector(tokenize(f.entry.content), fallback);
+    const vec = bm25Vector(tokenize(f.entry.content), fallback, detectLanguage(f.entry.content));
     return { entry: f.entry, score: f.score, vec };
   });
   const reranked = mmrRerank(candidates, 5);
@@ -1569,7 +2388,7 @@ async function queryMemory(basePath2, taskDescription) {
     log.debug(`memory: \u67E5\u8BE2\u547D\u4E2D ${reranked.length} \u6761`);
   }
   const results = reranked.map((s) => ({ ...s.entry, refs: s.entry.refs + 1 }));
-  cache.entries[cacheKey] = { results, timestamp: (/* @__PURE__ */ new Date()).toISOString() };
+  cache.entries[cacheKey] = { results, timestamp: (/* @__PURE__ */ new Date()).toISOString(), createdAt: Date.now() };
   await saveCache(basePath2, cache);
   return results;
 }
@@ -1589,18 +2408,18 @@ async function decayMemory(basePath2) {
   }
   return count;
 }
-async function saveSnapshot(basePath2, entries) {
+async function saveSnapshot2(basePath2, entries) {
   const p = snapshotPath(basePath2);
-  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
-  await (0, import_promises4.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
+  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
+  await (0, import_promises6.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
 }
 async function compactMemory(basePath2, targetCount) {
   const entries = await loadMemory(basePath2);
   const active = entries.filter((e) => !e.archived);
   if (active.length <= 1) return 0;
-  await saveSnapshot(basePath2, entries);
+  await saveSnapshot2(basePath2, entries);
   const stats = rebuildDf(entries);
-  const vecs = active.map((e) => bm25Vector(tokenize(e.content), stats));
+  const vecs = active.map((e) => bm25Vector(tokenize(e.content), stats, detectLanguage(e.content)));
   const merged = /* @__PURE__ */ new Set();
   const result = [...entries.filter((e) => e.archived)];
   for (let i = 0; i < active.length; i++) {
@@ -1625,6 +2444,8 @@ async function compactMemory(basePath2, targetCount) {
     const final = result.filter((e) => !toRemove.has(e));
     await saveMemory(basePath2, final);
     const finalStats = rebuildDf(final);
+    dfDirty = true;
+    _lastDfStats = finalStats;
     await saveDf(basePath2, finalStats);
     await rebuildVectorIndex(basePath2, final.filter((e) => !e.archived), finalStats);
     await clearCache(basePath2);
@@ -1633,6 +2454,8 @@ async function compactMemory(basePath2, targetCount) {
   }
   await saveMemory(basePath2, result);
   const resultStats = rebuildDf(result);
+  dfDirty = true;
+  _lastDfStats = resultStats;
   await saveDf(basePath2, resultStats);
   await rebuildVectorIndex(basePath2, result.filter((e) => !e.archived), resultStats);
   await clearCache(basePath2);
@@ -1642,6 +2465,9 @@ async function compactMemory(basePath2, targetCount) {
 }
 
 // src/infrastructure/truncation.ts
+function estimateCharsPerToken(text) {
+  return fastDetectLanguage(text) === "cjk" ? 1.5 : 3.5;
+}
 function truncateHeadTail(text, maxChars) {
   if (text.length <= maxChars) return text;
   const head = Math.floor(maxChars * 0.7);
@@ -1652,10 +2478,91 @@ function truncateHeadTail(text, maxChars) {
 
 ${text.slice(-tail)}`;
 }
+function computeMaxChars(contextWindow = 128e3, sample) {
+  const cpt = sample ? estimateCharsPerToken(sample) : 3.5;
+  return Math.floor(contextWindow * 0.3 * cpt);
+}
 
 // src/infrastructure/loop-detector.ts
-var import_promises5 = require("fs/promises");
-var import_path6 = require("path");
+var import_promises8 = require("fs/promises");
+var import_path9 = require("path");
+
+// src/infrastructure/heartbeat.ts
+var import_promises7 = require("fs/promises");
+var import_path8 = require("path");
+var TASK_TIMEOUT_MS = 30 * 60 * 1e3;
+var MEMORY_COMPACT_THRESHOLD = 100;
+var DEFAULT_INTERVAL_MS = 5 * 60 * 1e3;
+function isWithinActiveHours(cfg) {
+  if (!cfg?.activeHoursStart && cfg?.activeHoursStart !== 0) return true;
+  const now = cfg.timezone ? new Date((/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: cfg.timezone })) : /* @__PURE__ */ new Date();
+  const hour = now.getHours();
+  const day = now.getDay();
+  if (cfg.activeDays?.length && !cfg.activeDays.includes(day)) return false;
+  const start = cfg.activeHoursStart;
+  const end = cfg.activeHoursEnd ?? 23;
+  return start <= end ? hour >= start && hour <= end : hour >= start || hour <= end;
+}
+async function runHeartbeat(basePath2, config) {
+  if (!isWithinActiveHours(config)) return { warnings: [], actions: [] };
+  const warnings = [];
+  const actions = [];
+  try {
+    const raw = await (0, import_promises7.readFile)((0, import_path8.join)(basePath2, ".workflow", "progress.json"), "utf-8");
+    const data = JSON.parse(raw);
+    if (data.status === "running") {
+      const active = data.tasks.filter((t) => t.status === "active");
+      if (active.length) {
+        const window = await loadWindow(basePath2);
+        const lastTs = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
+        if (lastTs && Date.now() - lastTs > TASK_TIMEOUT_MS) {
+          warnings.push(`[TIMEOUT] \u4EFB\u52A1 ${active.map((t) => t.id).join(",")} \u8D85\u8FC730\u5206\u949F\u65E0checkpoint`);
+        }
+      }
+    }
+  } catch {
+  }
+  try {
+    const memories = await loadMemory(basePath2);
+    const activeCount = memories.filter((e) => !e.archived).length;
+    if (activeCount > MEMORY_COMPACT_THRESHOLD) {
+      await compactMemory(basePath2);
+      actions.push(`compacted memory from ${activeCount} entries`);
+      warnings.push(`[MEMORY] \u6D3B\u8DC3\u8BB0\u5FC6 ${activeCount} \u6761\uFF0C\u5DF2\u81EA\u52A8\u538B\u7F29`);
+    }
+  } catch {
+  }
+  try {
+    const dfStats = await loadDf(basePath2);
+    if (dfStats.docCount > 0) {
+      const memories = await loadMemory(basePath2);
+      const rebuilt = rebuildDf(memories);
+      const diff = Math.abs(dfStats.docCount - rebuilt.docCount) / Math.max(dfStats.docCount, 1);
+      if (diff > 0.1) {
+        await saveDf(basePath2, rebuilt);
+        actions.push("rebuilt DF stats");
+        warnings.push(`[DF] docCount \u504F\u5DEE ${(diff * 100).toFixed(0)}%\uFF0C\u5DF2\u91CD\u5EFA`);
+      }
+    }
+  } catch {
+  }
+  if (warnings.length) log.info(`[heartbeat] ${warnings.join("; ")}`);
+  return { warnings, actions };
+}
+function startHeartbeat(basePath2, intervalMs = DEFAULT_INTERVAL_MS, config) {
+  const timer = setInterval(() => {
+    runHeartbeat(basePath2, config).catch(() => {
+    });
+  }, intervalMs);
+  timer.unref();
+  log.debug(`[heartbeat] started (interval=${intervalMs}ms)`);
+  return () => {
+    clearInterval(timer);
+    log.debug("[heartbeat] stopped");
+  };
+}
+
+// src/infrastructure/loop-detector.ts
 var WINDOW_SIZE = 20;
 var STATE_FILE = "loop-state.json";
 function fnv1a(str) {
@@ -1681,19 +2588,19 @@ function similarity(a, b) {
   return inter / (sa.size + sb.size - inter);
 }
 function statePath(basePath2) {
-  return (0, import_path6.join)(basePath2, ".workflow", STATE_FILE);
+  return (0, import_path9.join)(basePath2, ".workflow", STATE_FILE);
 }
 async function loadWindow(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises5.readFile)(statePath(basePath2), "utf-8"));
+    return JSON.parse(await (0, import_promises8.readFile)(statePath(basePath2), "utf-8"));
   } catch {
     return [];
   }
 }
 async function saveWindow(basePath2, window) {
   const p = statePath(basePath2);
-  await (0, import_promises5.mkdir)((0, import_path6.dirname)(p), { recursive: true });
-  await (0, import_promises5.writeFile)(p, JSON.stringify(window), "utf-8");
+  await (0, import_promises8.mkdir)((0, import_path9.dirname)(p), { recursive: true });
+  await (0, import_promises8.writeFile)(p, JSON.stringify(window), "utf-8");
 }
 function repeatedNoProgress(window) {
   if (window.length < 3) return null;
@@ -1736,7 +2643,8 @@ function globalCircuitBreaker(window) {
   }
   return null;
 }
-async function detect(basePath2, taskId, summary, failed) {
+async function detect(basePath2, taskId, summary, failed, activeHours) {
+  if (!isWithinActiveHours(activeHours)) return null;
   const window = await loadWindow(basePath2);
   const record = {
     taskId,
@@ -1751,28 +2659,53 @@ async function detect(basePath2, taskId, summary, failed) {
 }
 
 // src/application/workflow-service.ts
-var import_promises6 = require("fs/promises");
-var import_path7 = require("path");
+var import_promises9 = require("fs/promises");
+var import_path10 = require("path");
 var WorkflowService = class {
   constructor(repo2, parse) {
     this.repo = repo2;
     this.parse = parse;
   }
+  stopHeartbeat = null;
   loopWarningPath() {
-    return (0, import_path7.join)(this.repo.projectRoot(), ".workflow", "loop-warning.txt");
+    return (0, import_path10.join)(this.repo.projectRoot(), ".workflow", "loop-warning.txt");
   }
   async saveLoopWarning(msg) {
     const p = this.loopWarningPath();
-    await (0, import_promises6.mkdir)((0, import_path7.join)(this.repo.projectRoot(), ".workflow"), { recursive: true });
-    await (0, import_promises6.writeFile)(p, msg, "utf-8");
+    await (0, import_promises9.mkdir)((0, import_path10.join)(this.repo.projectRoot(), ".workflow"), { recursive: true });
+    await (0, import_promises9.writeFile)(p, msg, "utf-8");
   }
   async loadAndClearLoopWarning() {
     try {
-      const msg = await (0, import_promises6.readFile)(this.loopWarningPath(), "utf-8");
-      await (0, import_promises6.unlink)(this.loopWarningPath());
+      const msg = await (0, import_promises9.readFile)(this.loopWarningPath(), "utf-8");
+      await (0, import_promises9.unlink)(this.loopWarningPath());
       return msg || null;
     } catch {
       return null;
+    }
+  }
+  activatedPath() {
+    return (0, import_path10.join)(this.repo.projectRoot(), ".workflow", "activated.json");
+  }
+  async recordActivation(ids) {
+    let map = {};
+    try {
+      map = JSON.parse(await (0, import_promises9.readFile)(this.activatedPath(), "utf-8"));
+    } catch {
+    }
+    const now = Date.now();
+    for (const id of ids) map[id] = { time: now, pid: process.pid };
+    await (0, import_promises9.writeFile)(this.activatedPath(), JSON.stringify(map), "utf-8");
+  }
+  /** 跨进程激活时长(ms)，同进程返回 Infinity（跳过检查） */
+  async getActivationAge(id) {
+    try {
+      const map = JSON.parse(await (0, import_promises9.readFile)(this.activatedPath(), "utf-8"));
+      const entry = map[id];
+      if (!entry || entry.pid === process.pid) return Infinity;
+      return Date.now() - entry.time;
+    } catch {
+      return Infinity;
     }
   }
   /** init: 解析任务markdown → 生成progress/tasks */
@@ -1821,6 +2754,8 @@ ${def.description}
     if (memories.filter((e) => !e.archived).length > 50) {
       await compactMemory(this.repo.projectRoot());
     }
+    this.stopHeartbeat?.();
+    this.stopHeartbeat = startHeartbeat(this.repo.projectRoot());
     return data;
   }
   /** next: 获取下一个可执行任务（含依赖上下文） */
@@ -1845,6 +2780,7 @@ ${def.description}
       log.debug(`next: \u6FC0\u6D3B\u4EFB\u52A1 ${task.id} (deps: ${task.deps.join(",") || "\u65E0"})`);
       const activated = cascaded.map((t) => t.id === task.id ? { ...t, status: "active" } : t);
       await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
+      await this.recordActivation([task.id]);
       await runLifecycleHook("onTaskStart", this.repo.projectRoot(), { TASK_ID: task.id, TASK_TITLE: task.title });
       const parts = [];
       const summary = await this.repo.loadSummary();
@@ -1854,8 +2790,9 @@ ${def.description}
         if (ctx) parts.push(ctx);
       }
       const memories = await queryMemory(this.repo.projectRoot(), `${task.title} ${task.description}`);
-      if (memories.length) {
-        parts.push("## \u76F8\u5173\u8BB0\u5FC6\n\n" + memories.map((m) => `- ${m.content}`).join("\n"));
+      const useful = memories.filter((m) => m.content.length > 20);
+      if (useful.length) {
+        parts.push("## \u76F8\u5173\u8BB0\u5FC6\n\n" + useful.map((m) => `- [${m.source}] ${m.content}`).join("\n"));
       }
       const loopWarning = await this.loadAndClearLoopWarning();
       if (loopWarning) {
@@ -1866,6 +2803,11 @@ ${loopWarning}`);
       const hcWarnings = await this.healthCheck();
       if (hcWarnings.length) {
         parts.push("## \u5065\u5EB7\u68C0\u67E5\u8B66\u544A\n\n" + hcWarnings.map((w) => `- ${w}`).join("\n"));
+      }
+      const cfg = await this.repo.loadConfig();
+      const hints = cfg.hints;
+      if (hints?.length) {
+        parts.push("## \u8FDB\u5316\u5EFA\u8BAE\n\n" + hints.map((h) => `- ${h}`).join("\n"));
       }
       return { task, context: parts.join("\n\n---\n\n") };
     } finally {
@@ -1883,16 +2825,20 @@ ${loopWarning}`);
         throw new Error(`\u6709 ${active.length} \u4E2A\u4EFB\u52A1\u4ECD\u4E3A active \u72B6\u6001\uFF08${active.map((t) => t.id).join(",")}\uFF09\uFF0C\u8BF7\u5148\u6267\u884C node flow.js status \u68C0\u67E5\u5E76\u8865 checkpoint\uFF0C\u6216 node flow.js resume \u91CD\u7F6E`);
       }
       const cascaded = cascadeSkip(data.tasks);
-      const tasks = findParallelTasks(cascaded);
+      let tasks = findParallelTasks(cascaded);
       if (!tasks.length) {
         await this.repo.saveProgress({ ...data, tasks: cascaded });
         log.debug("nextBatch: \u65E0\u53EF\u5E76\u884C\u4EFB\u52A1");
         return [];
       }
+      const config = await this.repo.loadConfig();
+      const limit = config.parallelLimit;
+      if (limit && tasks.length > limit) tasks = tasks.slice(0, limit);
       log.debug(`nextBatch: \u6FC0\u6D3B ${tasks.map((t) => t.id).join(",")}`);
       const activeIds = new Set(tasks.map((t) => t.id));
       const activated = cascaded.map((t) => activeIds.has(t.id) ? { ...t, status: "active" } : t);
       await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
+      await this.recordActivation(tasks.map((t) => t.id));
       for (const t of tasks) {
         await runLifecycleHook("onTaskStart", this.repo.projectRoot(), { TASK_ID: t.id, TASK_TITLE: t.title });
       }
@@ -1907,13 +2853,18 @@ ${loopWarning}`);
           if (ctx) parts.push(ctx);
         }
         const memories = await queryMemory(this.repo.projectRoot(), `${task.title} ${task.description}`);
-        if (memories.length) {
-          parts.push("## \u76F8\u5173\u8BB0\u5FC6\n\n" + memories.map((m) => `- ${m.content}`).join("\n"));
+        const useful = memories.filter((m) => m.content.length > 20);
+        if (useful.length) {
+          parts.push("## \u76F8\u5173\u8BB0\u5FC6\n\n" + useful.map((m) => `- [${m.source}] ${m.content}`).join("\n"));
         }
         if (loopWarning) {
           parts.push(`## \u5FAA\u73AF\u68C0\u6D4B\u8B66\u544A
 
 ${loopWarning}`);
+        }
+        const hints = config.hints;
+        if (hints?.length) {
+          parts.push("## \u8FDB\u5316\u5EFA\u8BAE\n\n" + hints.map((h) => `- ${h}`).join("\n"));
         }
         results.push({ task, context: parts.join("\n\n---\n\n") });
       }
@@ -1933,7 +2884,11 @@ ${loopWarning}`);
       if (task.status !== "active") {
         throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u53EA\u6709 active \u72B6\u6001\u53EF\u4EE5 checkpoint`);
       }
-      if (detail === "FAILED") {
+      const MIN_WORK_TIME = 3e4;
+      const age = await this.getActivationAge(id);
+      const existingMems = (await loadMemory(this.repo.projectRoot())).filter((m) => !m.archived).map((m) => m.content);
+      const isFailed = detail.startsWith("FAILED") || detail.length < 200 && /\b(fail|error|crash|timeout|rate.?limit)\b/i.test(detail) || detail.length < 200 && /限流|崩溃|超时|失败|异常|中断|未完成|无法/.test(detail) || age < MIN_WORK_TIME;
+      if (isFailed) {
         await this.appendFailureContext(id, task, detail);
         const patternWarn = await this.detectFailurePattern(id, task);
         const loopResult2 = await detect(this.repo.projectRoot(), id, detail, true);
@@ -1941,16 +2896,27 @@ ${loopWarning}`);
           log.step("loop_detected", loopResult2.message, { taskId: id, data: { strategy: loopResult2.strategy } });
           await this.saveLoopWarning(`[LOOP WARNING - ${loopResult2.strategy}] ${loopResult2.message}`);
         }
-        const { result, data: newData2 } = failTask(data, id);
+        for (const entry of await extractAll(detail, `task-${id}-fail`, existingMems)) {
+          await appendMemory(this.repo.projectRoot(), {
+            content: entry.content,
+            source: entry.source,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString()
+          });
+        }
+        const config = await this.repo.loadConfig();
+        const maxRetries = config.maxRetries ?? 3;
+        const { result, data: newData2 } = failTask(data, id, maxRetries);
         await this.repo.saveProgress(newData2);
         log.debug(`checkpoint ${id}: failTask result=${result}, retries=${task.retries + 1}`);
-        const msg2 = result === "retry" ? `\u4EFB\u52A1 ${id} \u5931\u8D25(\u7B2C${task.retries + 1}\u6B21)\uFF0C\u5C06\u91CD\u8BD5` : `\u4EFB\u52A1 ${id} \u8FDE\u7EED\u5931\u8D253\u6B21\uFF0C\u5DF2\u8DF3\u8FC7`;
+        const msg2 = result === "retry" ? `\u4EFB\u52A1 ${id} \u5931\u8D25(\u7B2C${task.retries + 1}\u6B21)\uFF0C\u5C06\u91CD\u8BD5` : `\u4EFB\u52A1 ${id} \u8FDE\u7EED\u5931\u8D25${maxRetries}\u6B21\uFF0C\u5DF2\u8DF3\u8FC7`;
         const warns = [patternWarn, loopResult2 ? `[LOOP] ${loopResult2.message}` : null].filter(Boolean);
         return warns.length ? `${msg2}
 ${warns.join("\n")}` : msg2;
       }
       if (!detail.trim()) throw new Error(`\u4EFB\u52A1 ${id} checkpoint\u5185\u5BB9\u4E0D\u80FD\u4E3A\u7A7A`);
-      const summaryLine = detail.split("\n")[0].slice(0, 80);
+      const maxChars = computeMaxChars(128e3, detail);
+      const truncated = detail.length > maxChars ? truncateHeadTail(detail, maxChars) : detail;
+      const summaryLine = truncated.split("\n")[0].slice(0, 80);
       const newData = completeTask(data, id, summaryLine);
       log.debug(`checkpoint ${id}: \u5B8C\u6210, summary="${summaryLine}"`);
       await this.repo.saveProgress(newData);
@@ -1958,7 +2924,7 @@ ${warns.join("\n")}` : msg2;
 
 ${detail}
 `);
-      for (const entry of await extractAll(detail, `task-${id}`)) {
+      for (const entry of await extractAll(detail, `task-${id}`, existingMems)) {
         await appendMemory(this.repo.projectRoot(), {
           content: entry.content,
           source: entry.source,
@@ -2005,6 +2971,8 @@ ${detail}
     }
     const doneCount = newData.tasks.filter((t) => t.status === "done").length;
     const total = newData.tasks.length;
+    this.stopHeartbeat?.();
+    this.stopHeartbeat = startHeartbeat(this.repo.projectRoot());
     if (resetId) {
       return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${newData.name}
 \u8FDB\u5EA6: ${doneCount}/${total}
@@ -2094,6 +3062,8 @@ ${detail}
     log.debug(`finish: status=${data.status}`);
     if (data.status === "idle" || data.status === "completed") return "\u5DE5\u4F5C\u6D41\u5DF2\u5B8C\u6210\uFF0C\u65E0\u9700\u91CD\u590Dfinish";
     if (!isAllDone(data.tasks)) throw new Error("\u8FD8\u6709\u672A\u5B8C\u6210\u7684\u4EFB\u52A1\uFF0C\u8BF7\u5148\u5B8C\u6210\u6240\u6709\u4EFB\u52A1");
+    this.stopHeartbeat?.();
+    this.stopHeartbeat = null;
     const result = this.repo.verify();
     log.debug(`finish: verify passed=${result.passed}`);
     if (!result.passed) {
@@ -2194,6 +3164,43 @@ ${stats}
       suggestions: ["\u624B\u52A8\u56DE\u6EDA"]
     });
     return `\u5DF2\u56DE\u6EDA\u5230\u8FDB\u5316\u70B9 ${index}\uFF08${target.timestamp}\uFF09`;
+  }
+  /** recall: 查询相关记忆 */
+  async recall(query) {
+    const memories = await queryMemory(this.repo.projectRoot(), query);
+    if (!memories.length) return "\u65E0\u76F8\u5173\u8BB0\u5FC6";
+    return memories.map((m) => `- [${m.source}] ${m.content}`).join("\n");
+  }
+  /** evolve: 接收CC子Agent的反思结果，执行进化实验 */
+  async evolve(reflectionText) {
+    let stats;
+    try {
+      const data = await this.repo.loadProgress();
+      if (!data) throw new Error("no progress");
+      stats = collectStats(data);
+    } catch {
+      stats = { name: "", totalTasks: 0, doneCount: 0, skipCount: 0, failCount: 0, retryTotal: 0, tasksByType: {}, failsByType: {}, taskResults: [], startTime: (/* @__PURE__ */ new Date()).toISOString(), endTime: (/* @__PURE__ */ new Date()).toISOString() };
+    }
+    const report = await reflect(stats, this.repo.projectRoot());
+    const lines = reflectionText.split("\n").filter((l) => l.trim());
+    const experiments = [];
+    for (const line of lines) {
+      const m = line.match(/^\[(.+?)\]\s*(.+)/);
+      if (m) {
+        const tag = m[1].toLowerCase();
+        const target = tag.includes("config") ? "config" : "claude-md";
+        experiments.push({ trigger: "cc-ai-reflect", observation: m[2], action: m[2], expected: "\u57FA\u4E8EAI\u5206\u6790\u7684\u6539\u8FDB", target });
+      }
+    }
+    if (!experiments.length && lines.length) {
+      for (const line of lines.slice(0, 3)) {
+        experiments.push({ trigger: "cc-ai-reflect", observation: line, action: line, expected: "\u57FA\u4E8EAI\u5206\u6790\u7684\u6539\u8FDB", target: "claude-md" });
+      }
+    }
+    if (!experiments.length) return "\u65E0\u53EF\u6267\u884C\u7684\u8FDB\u5316\u5EFA\u8BAE";
+    const merged = { ...report, experiments: [...report.experiments, ...experiments] };
+    await experiment(merged, this.repo.projectRoot());
+    return `\u5DF2\u5E94\u7528 ${experiments.length} \u6761\u8FDB\u5316\u5EFA\u8BAE`;
   }
   /** status: 全局进度 */
   async status() {
@@ -2336,35 +3343,10 @@ ${entry}`;
     }
     return null;
   }
-  /** 心跳自检：任务超时 + 记忆膨胀 + DF一致性 */
+  /** 心跳自检：委托给 heartbeat 模块 */
   async healthCheck() {
-    const warnings = [];
-    const data = await this.repo.loadProgress();
-    if (!data || data.status !== "running") return warnings;
-    const active = data.tasks.filter((t) => t.status === "active");
-    if (active.length) {
-      const window = await loadWindow(this.repo.projectRoot());
-      const lastCp = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
-      if (lastCp && Date.now() - lastCp > 30 * 60 * 1e3) {
-        warnings.push(`[TIMEOUT] \u6D3B\u8DC3\u4EFB\u52A1 ${active.map((t) => t.id).join(",")} \u8D85\u8FC730\u5206\u949F\u65E0checkpoint`);
-      }
-    }
-    const memories = await loadMemory(this.repo.projectRoot());
-    const activeCount = memories.filter((e) => !e.archived).length;
-    if (activeCount > 100) {
-      await compactMemory(this.repo.projectRoot());
-      warnings.push(`[MEMORY] \u6D3B\u8DC3\u8BB0\u5FC6 ${activeCount} \u6761\uFF0C\u5DF2\u81EA\u52A8\u538B\u7F29`);
-    }
-    const dfStats = await loadDf(this.repo.projectRoot());
-    if (dfStats.docCount > 0) {
-      const rebuilt = rebuildDf(memories);
-      const diff = Math.abs(dfStats.docCount - rebuilt.docCount) / Math.max(dfStats.docCount, 1);
-      if (diff > 0.1) {
-        await saveDf(this.repo.projectRoot(), rebuilt);
-        warnings.push(`[DF] docCount \u504F\u5DEE ${(diff * 100).toFixed(0)}%\uFF0C\u5DF2\u91CD\u5EFA`);
-      }
-    }
-    return warnings;
+    const result = await runHeartbeat(this.repo.projectRoot());
+    return result.warnings;
   }
   async requireProgress() {
     const data = await this.repo.loadProgress();
@@ -2376,7 +3358,7 @@ ${entry}`;
 
 // src/interfaces/cli.ts
 var import_fs3 = require("fs");
-var import_path8 = require("path");
+var import_path11 = require("path");
 
 // src/interfaces/formatter.ts
 var ICON = {
@@ -2509,8 +3491,8 @@ var CLI = class {
           }
         }
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
-          const filePath = (0, import_path8.resolve)(rest[fileIdx + 1]);
-          if ((0, import_path8.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
+          const filePath = (0, import_path11.resolve)(rest[fileIdx + 1]);
+          if ((0, import_path11.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
           detail = (0, import_fs3.readFileSync)(filePath, "utf-8");
         } else if (rest.length > 1 && fileIdx < 0 && filesIdx < 0) {
           detail = rest.slice(1).join(" ");
@@ -2542,6 +3524,16 @@ var CLI = class {
         if (!id) throw new Error("\u9700\u8981\u4EFB\u52A1ID");
         return await s.rollback(id);
       }
+      case "evolve": {
+        const text = await readStdinIfPiped();
+        if (!text.trim()) throw new Error("\u9700\u8981\u901A\u8FC7 stdin \u4F20\u5165\u53CD\u601D\u7ED3\u679C");
+        return await s.evolve(text.trim());
+      }
+      case "recall": {
+        const query = rest.join(" ");
+        if (!query) throw new Error("\u9700\u8981\u67E5\u8BE2\u5173\u952E\u8BCD");
+        return await s.recall(query);
+      }
       case "add": {
         const typeIdx = rest.indexOf("--type");
         const rawType = typeIdx >= 0 && rest[typeIdx + 1] || "general";
@@ -2567,6 +3559,8 @@ var USAGE = `\u7528\u6CD5: node flow.js [--verbose] <command>
   resume               \u4E2D\u65AD\u6062\u590D
   abort                \u4E2D\u6B62\u5DE5\u4F5C\u6D41\u5E76\u6E05\u7406 .workflow/ \u76EE\u5F55
   rollback <id>        \u56DE\u6EDA\u5230\u6307\u5B9A\u4EFB\u52A1\u7684\u5FEB\u7167 (git revert + \u91CD\u7F6E\u540E\u7EED\u4EFB\u52A1)
+  evolve               \u63A5\u6536AI\u53CD\u601D\u7ED3\u679C\u5E76\u6267\u884C\u8FDB\u5316 (stdin\u4F20\u5165)
+  recall <\u5173\u952E\u8BCD>       \u67E5\u8BE2\u76F8\u5173\u8BB0\u5FC6
   add <\u63CF\u8FF0>           \u8FFD\u52A0\u4EFB\u52A1 [--type frontend|backend|general]
 
 \u5168\u5C40\u9009\u9879:

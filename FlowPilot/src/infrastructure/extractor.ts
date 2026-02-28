@@ -14,8 +14,12 @@ export interface ExtractedEntry {
 
 /** 调用 Claude API（零外部依赖，使用内置 https） */
 export async function callClaude(prompt: string, systemPrompt: string): Promise<string | null> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
   if (!apiKey) return null;
+
+  const baseUrl = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+  const base = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+  const parsed = new URL(base + '/v1/messages');
 
   return new Promise((resolve) => {
     const body = JSON.stringify({
@@ -26,8 +30,9 @@ export async function callClaude(prompt: string, systemPrompt: string): Promise<
     });
 
     const req = request({
-      hostname: 'api.anthropic.com',
-      path: '/v1/messages',
+      hostname: parsed.hostname,
+      port: parsed.port || undefined,
+      path: parsed.pathname,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -182,11 +187,18 @@ function ruleExtract(text: string, source: string): ExtractedEntry[] {
   });
 
   const seen = new Set<string>();
-  return [...primary, ...tech].filter(e => {
+  const all = [...primary, ...tech].filter(e => {
     if (seen.has(e.content)) return false;
     seen.add(e.content);
     return true;
   });
+
+  // fallback：无提取结果时，保存原始摘要作为基线记忆
+  if (!all.length && text.trim()) {
+    all.push({ content: text.trim().slice(0, 500), source });
+  }
+
+  return all;
 }
 
 /** 统一提取入口：有 LLM 用 LLM，否则降级到规则引擎 */

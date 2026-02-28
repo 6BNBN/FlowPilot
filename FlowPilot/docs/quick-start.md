@@ -9,7 +9,14 @@
 1. 确保电脑装了 Node.js（版本 20 以上）
 2. 开启 Agent Teams：在 `~/.claude/settings.json` 中添加 `"env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }`
 3. 安装插件：在 CC 中执行 `/plugin`，选择安装 `superpowers`、`frontend-design`、`feature-dev`、`code-review`、`context7`
-4. 构建工具：
+4. （可选）配置环境变量，启用 LLM 智能提取和深度分析：
+   ```bash
+   # 在 ~/.claude/settings.json 的 env 中添加：
+   export ANTHROPIC_API_KEY="sk-ant-..."       # 或 ANTHROPIC_AUTH_TOKEN
+   export ANTHROPIC_BASE_URL="https://api.anthropic.com"  # 可选，自定义 API 地址
+   ```
+   > 不配置也能正常使用，记忆提取会降级为规则引擎模式。
+5. 构建工具：
    ```bash
    cd FlowPilot目录
    npm install && npm run build
@@ -38,6 +45,11 @@ claude --dangerously-skip-permissions
 ```
 
 CC 会自动拆解任务、写代码、提交 git，直到全部完成。你只需要等着看结果。
+
+> 小技巧：子Agent在 checkpoint 时可以用知识标签记录关键信息，这些信息会被永久保存，跨工作流可检索：
+> - `[REMEMBER]` 值得记住的事实（如：`[REMEMBER] 项目使用 PostgreSQL + Drizzle ORM`）
+> - `[DECISION]` 技术决策（如：`[DECISION] 选择 JWT 而非 session，因为需要无状态认证`）
+> - `[ARCHITECTURE]` 架构模式（如：`[ARCHITECTURE] 三层架构：Controller → Service → Repository`）
 
 ## 给已有项目加功能
 

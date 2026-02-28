@@ -109,12 +109,12 @@ export function completeTask(
 }
 
 /** 标记任务失败（返回新 ProgressData + 结果，不修改原对象） */
-export function failTask(data: ProgressData, id: string): { result: 'retry' | 'skip'; data: ProgressData } {
+export function failTask(data: ProgressData, id: string, maxRetries = 3): { result: 'retry' | 'skip'; data: ProgressData } {
   const idx = buildIndex(data.tasks);
   if (!idx.has(id)) throw new Error(`任务 ${id} 不存在`);
   const old = idx.get(id)!;
   const retries = old.retries + 1;
-  if (retries >= 3) {
+  if (retries >= maxRetries) {
     return {
       result: 'skip',
       data: { ...data, current: null, tasks: data.tasks.map(t => t.id === id ? { ...t, retries, status: 'failed' as const } : t) },

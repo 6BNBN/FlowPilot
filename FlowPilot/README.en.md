@@ -7,6 +7,21 @@
 Drop `flow.js` into any project, open Claude Code, describe what you want, then go grab a coffee.
 When you come back, the code is written, tests have passed, and git commits are done.
 
+## Recent Updates
+
+**OpenSpec Integration** — Task parser supports OpenSpec checkbox format, dual-path protocol auto-selects standard/OpenSpec planning flow, supports `tasks.md` auto-discovery with user confirmation
+
+**Long-term Memory System** — Checkpoint auto-extracts knowledge into `.flowpilot/memory.json`, BM25 + Dense dual-path retrieval, MMR re-ranking + time decay, `next` auto-injects relevant memories into sub-agent context
+
+**Self-Evolution Engine (Full Loop)** — Reflect → Experiment → Review three-phase cycle, both success and failure trigger evolution, parameters written to config are consumed by the workflow, degradation auto-rollback
+
+| Module | Score | Key Features |
+|--------|-------|-------------|
+| Memory System | 100% | BM25 sparse vectors (FNV-1a 20-bit), Dense Vector retrieval, RRF tri-source fusion, Multimodal embedding, 10-language tokenization, TTL+LRU cache |
+| Loop Detection | 100% | Repeated failure/ping-pong/global circuit breaker + FNV-1a hash + warning injection (original) |
+| History Evolution | 100% | Three-phase cycle (Reflect→Experiment→Review), heartbeat self-check, pre-snapshot rollback, protocol self-modification, active time window |
+| Knowledge Extraction | 95% | LLM + rule engine dual-path, tag extraction, decision pattern matching, 30+ tech stack detection |
+
 ---
 
 ## Why FlowPilot
@@ -19,9 +34,10 @@ FlowPilot: you're the client — just say what you want, everything else is auto
 | Manually break down tasks, tell CC one by one | One requirement, auto-decompose into 10+ tasks |
 | Context full? Start over | New window, one sentence, resume from breakpoint, zero loss |
 | Can only do one thing at a time | Multiple sub-agents develop in parallel, double the speed |
-| Forget previous decisions halfway through | Three-layer memory auto-records, 100 tasks without getting lost |
+| Forget previous decisions halfway through | Four-layer memory + cross-workflow long-term memory, 100 tasks without getting lost |
 | Manual git commit every time | Auto-commit per task, auto-run tests at finalization |
 | Reconfigure for each project | 99KB single file, copy and use — Node/Rust/Go/Python/Java/C++/Makefile all supported |
+| Make the same mistakes every time | Self-evolution engine, auto-reflects and optimizes each round, gets smarter over time |
 
 ### How It Compares
 
@@ -38,9 +54,11 @@ CC's built-in Task tool can dispatch sub-agents, but it's **stateless** — cont
 | State persistence | In conversation, lost on compact | Disk files, never lost |
 | Interruption recovery | Depends on conversation history, state easily lost after compact | Disk recovery, `resume` to continue |
 | Parallel scheduling | Manual | Auto dependency analysis, batch dispatch |
-| Context bloat | Main agent gets slower over time | Three-layer memory, main agent < 100 lines |
+| Context bloat | Main agent gets slower over time | Four-layer memory, main agent < 100 lines |
 | Git commits | Manual | Auto-commit per task |
 | Final verification | None | Auto build/test/lint |
+| Cross-session memory | None, starts from zero each time | Long-term memory store, auto-retrieval and injection |
+| Self-optimization | None | Three-phase evolution, gets smarter over time |
 
 **vs OpenSpec (Spec-Driven Framework)**
 
@@ -53,7 +71,16 @@ CC's built-in Task tool can dispatch sub-agents, but it's **stateless** — cont
 | Execution | Documents done, still need manual/AI implementation one by one | Fully automated dispatch, parallel execution, auto-commit |
 | Scope | Tool-agnostic, 20+ AI assistants | Claude Code exclusive, deep integration |
 
-FlowPilot's core advantage is **end-to-end automation** — from requirements to code to commits to verification, no human needed in between. OpenSpec is stronger at the planning stage; the two are complementary: use OpenSpec for requirement planning, then FlowPilot for execution.
+FlowPilot's core advantage is **end-to-end automation** — from requirements to code to commits to verification, no human needed in between. OpenSpec is stronger at the planning stage; the two have been integrated:
+
+**OpenSpec + FlowPilot Integration**: FlowPilot's task parser automatically supports OpenSpec's checkbox format (`- [ ] 1.1 Task`), no format conversion needed. The workflow protocol has built-in dual paths:
+
+| Path | Trigger | Flow |
+|------|---------|------|
+| Path A (Standard) | Default | brainstorming → generate tasks → `flow.js init` |
+| Path B (OpenSpec) | Project has `openspec/` + CLI available | `/opsx:new` → `/opsx:ff` → `cat tasks.md \| flow.js init` |
+
+Additionally, the protocol auto-detects `tasks.md` in the project root and prompts the user for confirmation. Users can also provide task lists directly in their messages.
 
 ## 30-Second Demo
 
@@ -77,15 +104,16 @@ CC will automatically: decompose tasks → identify dependencies → dispatch su
 
 ### Unlimited Context — 100 Tasks Without Compact Loss
 
-Three-layer memory architecture, main agent context always < 100 lines:
+Four-layer memory architecture, main agent context always < 100 lines:
 
 | Layer | Reader | Content |
 |-------|--------|---------|
 | progress.md | Main agent | Minimal status table (one line per task) |
 | task-xxx.md | Sub-agent | Detailed output and decisions per task |
 | summary.md | Sub-agent | Rolling summary (auto-compressed after 10 tasks) |
+| memory.json | Sub-agent | Cross-workflow long-term memory (auto-retrieval and injection) |
 
-Sub-agents record their own output, main agent doesn't bloat. Even after compact, files remain — resume and continue.
+Sub-agents record their own output, main agent doesn't bloat. Even after compact, files remain — resume and continue. Long-term memory persists across workflows; experience learned in one round is auto-injected into the next.
 
 ### Parallel Development — Not One by One, All at Once
 
@@ -118,24 +146,37 @@ Round 3: Polish → Code quality improvement → Final verification
 
 ### Self-Evolution — Each Round Makes the Next Smarter
 
-Inspired by [Memoh-v2](https://github.com/Kxiandaoyan/Memoh-v2)'s three-phase organic evolution cycle, FlowPilot automatically reflects and optimizes after each workflow round:
+FlowPilot has a built-in three-phase organic evolution cycle. Both success and failure trigger evolution, with results written to `.workflow/config.json` and consumed by the workflow:
 
 ```
 finish() triggers:
   Reflect → Analyze success/failure patterns (failure chains, retry hotspots, type concentration)
   Experiment → Auto-adjust config params and protocol templates, save full snapshots
 
-init() triggers:
-  Review → Compare metrics before/after experiments, auto-rollback if degraded
+review() triggers:
+  Review (self-healing) → Compare metrics before/after evolution, auto-rollback if degraded
+
+Finalization phase (optional):
+  CC sub-agent + brainstorming skill deep reflection → node flow.js evolve to apply results
 ```
 
 | Phase | Trigger | What It Does |
 |-------|---------|-------------|
 | Reflect | End of finish | LLM or rule-based analysis of workflow stats → findings + experiments |
-| Experiment | End of finish | Auto-adjust maxRetries/timeout, append experience rules to protocol |
-| Review | Start of init | Compare metrics, auto-rollback if degraded, check config integrity |
+| Experiment | End of finish | Auto-adjust config params and protocol templates, save full snapshots |
+| Review | During review | Compare metrics before/after evolution, auto-rollback if degraded, check config integrity |
 
-With `ANTHROPIC_API_KEY`: deep LLM analysis. Without: rule engine fallback — graceful degradation under zero-dependency constraints.
+Evolution results directly affect workflow behavior:
+
+| Parameter | Effect |
+|-----------|--------|
+| `maxRetries` | Determines retry count on checkpoint failure |
+| `parallelLimit` | Limits parallel task count in `nextBatch` |
+| `hints` | Injected into sub-agent context as "evolution suggestions" |
+
+- On success: increase parallelism, optimize parameters
+- On failure: add pre-check suggestions, reduce parallelism
+- With `ANTHROPIC_API_KEY`: deep LLM analysis. Without: rule engine fallback — graceful degradation under zero-dependency constraints
 
 ### 99KB Does It All — Zero Dependencies, Copy and Use
 
@@ -198,33 +239,83 @@ claude --dangerously-skip-permissions --resume     # Pick from conversation hist
 ```
 Main Agent (dispatcher, < 100 lines context)
   │
-  ├─ node flow.js next ──→ Returns tasks + dependency context
+  ├─ node flow.js next ──→ Returns tasks + dependency context + relevant memories
   │
   ├─ Sub-Agents (dispatched via Task tool)
   │   ├─ frontend → /frontend-design plugin + other matching Skills/MCP
   │   ├─ backend  → /feature-dev plugin + other matching Skills/MCP
   │   └─ general  → Direct execution + other matching Skills/MCP
   │
-  ├─ node flow.js checkpoint ──→ Record output + git commit
+  ├─ node flow.js checkpoint ──→ Record output + knowledge extraction + git commit
   │
-  └─ .workflow/ (persistence layer)
-      ├─ progress.md        # Task status table (main agent reads)
-      ├─ tasks.md           # Complete task definitions
-      └─ context/
-          ├─ summary.md     # Rolling summary
-          └─ task-xxx.md    # Detailed output per task
+  ├─ .workflow/ (workflow persistence layer)
+  │   ├─ progress.md        # Task status table (main agent reads)
+  │   ├─ tasks.md           # Complete task definitions
+  │   ├─ config.json        # Evolution parameters (maxRetries/parallelLimit/hints)
+  │   └─ context/
+  │       ├─ summary.md     # Rolling summary
+  │       └─ task-xxx.md    # Detailed output per task
+  │
+  └─ .flowpilot/ (cross-workflow persistence layer)
+      ├─ memory.json        # Long-term memory store (knowledge entries + tags + timestamps)
+      └─ evolution/         # Evolution history (reflect/experiment/review records)
 ```
 
-## Three-Layer Memory
+## Four-Layer Memory
 
 | Layer | File | Reader | Content |
 |-------|------|--------|---------|
 | Layer 1 | progress.md | Main agent | Minimal status table (ID/title/status/summary) |
 | Layer 2 | context/task-xxx.md | Sub-agent | Detailed output and decision records per task |
 | Layer 3 | context/summary.md | Sub-agent | Rolling summary (tech stack/architecture decisions/completed modules) |
+| Layer 4 | .flowpilot/memory.json | Sub-agent | Cross-workflow long-term memory (tagged knowledge entries) |
 
-`flow next` auto-assembles: summary + dependency task contexts → injected into sub-agent prompt.
+`flow next` auto-assembles: summary + dependency task contexts + relevant memories → injected into sub-agent prompt.
 Main agent only ever reads progress.md, minimal context footprint.
+
+## Long-term Memory System
+
+Cross-workflow persistent knowledge store, saved in `.flowpilot/memory.json`.
+
+### Write → Store → Retrieve → Inject
+
+```
+checkpoint (success/failure)
+    ↓
+Knowledge extraction (LLM smart extraction or rule engine fallback)
+    ↓
+Store to .flowpilot/memory.json (with tags, timestamps, source)
+    ↓
+Semantic retrieval of relevant memories during next/nextBatch
+    ↓
+Inject into sub-agent context with [source] tags
+```
+
+### Knowledge Extraction
+
+Sub-agents mark key knowledge in checkpoint summaries using tags:
+
+| Tag | Purpose | Example |
+|-----|---------|---------|
+| `[REMEMBER]` | General experience | `[REMEMBER] Vite requires resolve.alias config for @ paths` |
+| `[DECISION]` | Architecture/tech decisions | `[DECISION] Chose Zustand over Redux due to small project scope` |
+| `[ARCHITECTURE]` | System architecture | `[ARCHITECTURE] Using monorepo + turborepo structure` |
+
+Extraction paths:
+- With `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` → LLM smart extraction + deduplication (Claude Haiku)
+- Without API key → Rule engine tag matching (zero-dependency fallback)
+
+### Retrieval Engine
+
+- BM25 sparse vectors + forward maximum matching Chinese tokenization + technical vocabulary
+- With `EMBEDDING_API_KEY`: additional Dense embedding dual-path fusion
+- MMR re-ranking for redundancy removal + time decay (half-life 30 days)
+- Architecture and decision memories do not decay, permanently retained
+
+### Usage
+
+- Auto-injection: `next`/`next --batch` auto-retrieves and injects relevant memories
+- Manual query: `node flow.js recall <keywords>`
 
 ## Command Reference
 
@@ -233,11 +324,13 @@ node flow.js init [--force]       # Initialize/take over project
 node flow.js next [--batch]       # Get next/all parallelizable tasks
 node flow.js checkpoint <id>      # Record task completion (stdin/--file/inline) [--files f1 f2 ...]
 node flow.js skip <id>            # Manually skip a task
-node flow.js review               # Mark code-review as done (required before finish)
+node flow.js review               # Mark code-review as done + evolution self-healing check
 node flow.js finish               # Smart finalization (verify+summarize+commit, requires review first)
 node flow.js status               # View global progress
 node flow.js resume               # Interruption recovery
 node flow.js add <desc> [--type]  # Add task (frontend/backend/general)
+node flow.js recall <keywords>    # Retrieve historical memories (BM25 + Dense dual-path)
+node flow.js evolve               # Accept CC sub-agent reflection results and apply evolution
 ```
 
 ## Execution Flow (Fully Automated)
@@ -249,21 +342,21 @@ node flow.js init
        ↓
   User describes requirements / provides dev docs
        ↓                          ← Everything below is fully automated, no human intervention
-  ┌─→ flow next (--batch) ──→ Get tasks + context
+  ┌─→ flow next (--batch) ──→ Get tasks + context + relevant memories
   │        ↓
   │   Sub-agent executes (auto-selects plugins)
   │        ↓
-  │   flow checkpoint ──→ Record output + git commit
+  │   flow checkpoint ──→ Knowledge extraction → Record output + git commit
   │        ↓
   └── More tasks? ──→ Yes → Loop
                    No ↓
-              flow finish ──→ build/test/lint
+              flow finish ──→ build/test/lint + Reflect + Experiment
                    ↓
-              code-review ──→ flow review
+              code-review ──→ flow review (evolution self-healing check)
                    ↓
-              flow finish ──→ Reflect + Experiment (auto-evolution)
+              flow evolve (optional, CC deep reflection)
                    ↓
-              Final commit → Clean .workflow/ → idle
+              flow finish ──→ Verification passed → Final commit → idle
 ```
 
 ## Error Handling
@@ -274,7 +367,22 @@ node flow.js init
 - **Verification failure** — `flow finish` reports error, dispatch sub-agent to fix, retry finish
 - **Loop detection** — Three-strategy defense (repeated failures/ping-pong/global circuit breaker), auto-injects warnings into next task
 - **Health check** — Active task timeout (>30min) alerts, memory bloat (>100 entries) auto-compaction
-- **Evolution rollback** — If experiments degrade metrics, next init auto-rolls back to pre-experiment snapshot
+- **Evolution rollback** — If experiments degrade metrics, `review` auto-rolls back to pre-experiment snapshot
+
+## Environment Variables
+
+All environment variables are optional. FlowPilot runs fully without any API keys.
+
+| Variable | Purpose | Description |
+|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | LLM smart extraction + evolution reflection | Enables Claude Haiku for knowledge extraction and deduplication |
+| `ANTHROPIC_AUTH_TOKEN` | Same as above (either one) | Equivalent to `ANTHROPIC_API_KEY`, takes priority |
+| `ANTHROPIC_BASE_URL` | API proxy address | Custom API endpoint for proxy/mirror scenarios |
+| `EMBEDDING_API_KEY` | Dense embedding dual-path fusion | Enables vector embedding, fused with BM25 for improved retrieval precision |
+
+Fallback strategy:
+- Without `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` → Knowledge extraction falls back to rule engine tag matching
+- Without `EMBEDDING_API_KEY` → Retrieval uses BM25 sparse vectors only (still effective)
 
 ## Development
 
@@ -300,7 +408,7 @@ src/
 │   └── workflow-service.ts          # Core use cases (16)
 ├── infrastructure/
 │   ├── fs-repository.ts             # File system + protocol embedding + Hooks injection
-│   ├── markdown-parser.ts           # Task Markdown parser
+│   ├── markdown-parser.ts           # Task Markdown parser (compatible with FlowPilot/OpenSpec dual formats)
 │   ├── memory.ts                    # Smart memory engine (BM25 + vector index + RRF + MMR + LRU cache)
 │   ├── extractor.ts                 # Knowledge extraction (LLM + rule engine fallback)
 │   ├── truncation.ts                # CJK-aware smart truncation
@@ -309,6 +417,7 @@ src/
 │   ├── git.ts                       # Auto git commits (submodule-aware)
 │   ├── verify.ts                    # Multi-language project verification (8 types)
 │   ├── hooks.ts                     # Lifecycle hooks
+│   ├── protocol-template.ts         # Workflow protocol template (dual-path: standard/OpenSpec)
 │   └── logger.ts                    # Structured logging (JSONL)
 └── interfaces/
     ├── cli.ts                       # Command routing
@@ -322,4 +431,10 @@ src/
 interfaces → application → domain ← infrastructure
 ```
 
-Zero runtime external dependencies, only Node.js built-in modules (fs, path, child_process, crypto, https). LLM smart extraction and self-evolution reflection are optional features, auto-enabled when ANTHROPIC_API_KEY is detected.
+Zero runtime external dependencies, only Node.js built-in modules (fs, path, child_process, crypto, https). LLM smart extraction, long-term memory dual-path retrieval, and self-evolution reflection are all optional enhancements, enabled on demand via environment variables (`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`/`EMBEDDING_API_KEY`). Without API keys, the system auto-degrades to the rule engine.
+
+## License
+
+This project is open-sourced under the [MIT License](LICENSE).
+
+Copyright (c) 2025-2026 FlowPilot Contributors

@@ -1,6 +1,7 @@
 {
   "name": "flowpilot",
   "version": "0.1.0",
+  "license": "MIT",
   "bin": {
     "flow": "./dist/flow.js"
   },

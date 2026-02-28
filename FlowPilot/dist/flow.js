@@ -215,6 +215,7 @@ Run \`node flow.js resume\`:
 
 ### Ad-hoc Dispatch (one-off tasks, no workflow init)
 Dispatch sub-agent(s) via Task tool. No init/checkpoint/finish needed. Iron Rule #4 does NOT apply (no task ID exists). Main agent MAY use Read/Glob/Grep directly for trivial lookups (e.g. reading a single file) \u2014 Iron Rule #2 is relaxed in Ad-hoc mode only.
+**\u8BB0\u5FC6\u67E5\u8BE2**: \u56DE\u7B54\u7528\u6237\u95EE\u9898\u524D\uFF0C\u5148\u8FD0\u884C \`node flow.js recall <\u5173\u952E\u8BCD>\` \u68C0\u7D22\u5386\u53F2\u8BB0\u5FC6\uFF0C\u5C06\u7ED3\u679C\u4F5C\u4E3A\u56DE\u7B54\u7684\u53C2\u8003\u4F9D\u636E\u3002
 
 ### Iron Rules (violating ANY = protocol failure)
 1. **NEVER use TaskCreate / TaskUpdate / TaskList** \u2014 use ONLY \`node flow.js xxx\`.
@@ -223,6 +224,11 @@ Dispatch sub-agent(s) via Task tool. No init/checkpoint/finish needed. Iron Rule
 4. **Sub-agents MUST run checkpoint with --files before replying** \u2014 \`echo 'summary' | node flow.js checkpoint <id> --files file1 file2\` is the LAST command before reply. MUST list all created/modified files. Skipping = protocol failure.
 
 ### Requirement Decomposition
+**Step 0 \u2014 Auto-detect (ALWAYS run first):**
+1. If user's message directly contains a task list (numbered items or checkbox items) \u2192 pipe it into \`node flow.js init\` directly, skip to **Execution Loop**.
+2. Search project root for \`tasks.md\` (run \`ls tasks.md 2>/dev/null\`). If found \u2192 ask user: "\u53D1\u73B0\u9879\u76EE\u4E2D\u6709 tasks.md\uFF0C\u662F\u5426\u4F5C\u4E3A\u672C\u6B21\u5DE5\u4F5C\u6D41\u7684\u4EFB\u52A1\u5217\u8868\uFF1F" If user confirms \u2192 \`cat tasks.md | node flow.js init\`, skip to **Execution Loop**. If user declines \u2192 continue to Path A/B.
+
+**Path A \u2014 Standard (default):**
 1. Dispatch a sub-agent to read requirement docs and return a summary.
 2. Use /superpowers:brainstorming to brainstorm and produce a task list.
 3. Pipe into init using this **exact format**:
@@ -236,6 +242,16 @@ cat <<'EOF' | node flow.js init
 EOF
 \`\`\`
 Format: \`[type]\` = frontend/backend/general, \`(deps: N)\` = dependency IDs, indented lines = description.
+
+**Path B \u2014 OpenSpec (if \`openspec/\` directory exists AND \`openspec\` CLI is available):**
+1. Verify: run \`npx openspec --version\`. If command fails \u2192 fall back to **Path A**.
+2. Run \`/opsx:new <change-name>\` to create a change.
+3. Run \`/opsx:ff\` to fast-forward (generates proposal \u2192 specs \u2192 design \u2192 tasks).
+4. Pipe the generated tasks.md into init:
+\`\`\`bash
+cat openspec/changes/<change-name>/tasks.md | node flow.js init
+\`\`\`
+OpenSpec checkbox format (\`- [ ] 1.1 Task\`) is auto-detected. Group N tasks depend on group N-1.
 
 ### Execution Loop
 1. Run \`node flow.js next --batch\`. **NOTE: this command will REFUSE to return tasks if any previous task is still \`active\`. You must checkpoint or resume first.**
@@ -260,10 +276,14 @@ Each sub-agent prompt MUST contain these sections in order:
 ### Sub-Agent Checkpoint (Iron Rule #4 \u2014 most common violation)
 Sub-agent's LAST Bash command before replying MUST be:
 \`\`\`
-echo '\u4E00\u53E5\u8BDD\u6458\u8981' | node flow.js checkpoint <id> --files file1 file2 ...
+echo '\u6458\u8981 [REMEMBER] \u5173\u952E\u53D1\u73B0 [DECISION] \u6280\u672F\u51B3\u7B56' | node flow.js checkpoint <id> --files file1 file2 ...
 \`\`\`
+- **\u6458\u8981\u4E2D MUST \u5305\u542B\u81F3\u5C11\u4E00\u4E2A\u77E5\u8BC6\u6807\u7B7E**\uFF08\u7F3A\u5C11\u6807\u7B7E = \u534F\u8BAE\u8FDD\u89C4\uFF09:
+  - \`[REMEMBER]\` \u503C\u5F97\u8BB0\u4F4F\u7684\u4E8B\u5B9E\u3001\u53D1\u73B0\u3001\u89E3\u51B3\u65B9\u6848\uFF08\u5982\uFF1A[REMEMBER] \u9879\u76EE\u4F7F\u7528 PostgreSQL + Drizzle ORM\uFF09
+  - \`[DECISION]\` \u6280\u672F\u51B3\u7B56\u53CA\u539F\u56E0\uFF08\u5982\uFF1A[DECISION] \u9009\u62E9 JWT \u800C\u975E session\uFF0C\u56E0\u4E3A\u9700\u8981\u65E0\u72B6\u6001\u8BA4\u8BC1\uFF09
+  - \`[ARCHITECTURE]\` \u67B6\u6784\u6A21\u5F0F\u3001\u6570\u636E\u6D41\uFF08\u5982\uFF1A[ARCHITECTURE] \u4E09\u5C42\u67B6\u6784\uFF1AController \u2192 Service \u2192 Repository\uFF09
 - \`--files\` MUST list every created/modified file (enables isolated git commits).
-- If task failed: \`echo 'FAILED' | node flow.js checkpoint <id>\`
+- If task failed: \`echo 'FAILED: \u539F\u56E0 [REMEMBER] \u5931\u8D25\u6839\u56E0' | node flow.js checkpoint <id>\`
 - If sub-agent replies WITHOUT running checkpoint \u2192 protocol failure. Main agent MUST run fallback checkpoint in step 3.
 
 ### Security Rules (sub-agents MUST follow)
@@ -273,10 +293,17 @@ echo '\u4E00\u53E5\u8BDD\u6458\u8981' | node flow.js checkpoint <id> --files fil
 
 ### Finalization (MANDATORY \u2014 skipping = protocol failure)
 1. Run \`node flow.js finish\` \u2014 runs verify (build/test/lint). If fail \u2192 dispatch sub-agent to fix \u2192 retry finish.
-2. When finish returns "\u9A8C\u8BC1\u901A\u8FC7\uFF0C\u8BF7\u6D3E\u5B50Agent\u6267\u884C code-review" \u2192 dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
+2. When finish output contains "\u9A8C\u8BC1\u901A\u8FC7" \u2192 dispatch a sub-agent to run /code-review:code-review. Fix issues if any.
 3. Run \`node flow.js review\` to mark code-review done.
-4. Run \`node flow.js finish\` again \u2014 verify passes + review done \u2192 final commit \u2192 idle.
-**Loop: finish(verify) \u2192 review(code-review) \u2192 fix \u2192 finish again. Both gates must pass.**
+4. **AI \u53CD\u601D\uFF08\u8FDB\u5316\u5F15\u64CE\uFF0C\u53EF\u9009\uFF09**: \u8BE2\u95EE\u7528\u6237\uFF1A"\u672C\u8F6E\u5DE5\u4F5C\u6D41\u5DF2\u5B8C\u6210\uFF0C\u662F\u5426\u9488\u5BF9\u672C\u9879\u76EE\u8FDB\u884C\u53CD\u601D\u8FED\u4EE3\u8FDB\u5316\uFF1F\uFF08\u4F1A\u6D88\u8017\u989D\u5916 token\uFF09" \u7528\u6237\u540C\u610F\u540E\u624D\u6267\u884C\u3002Sub-agent MUST:
+   - **MUST invoke /superpowers:brainstorming FIRST** \u2014 \u53CD\u601D\u5BF9\u8C61\u662F**\u5DE5\u4F5C\u6D41\u6267\u884C\u8FC7\u7A0B\u672C\u8EAB**\uFF08\u4EFB\u52A1\u6210\u529F\u7387\u3001\u91CD\u8BD5\u6A21\u5F0F\u3001\u5E76\u884C\u6548\u7387\u3001\u534F\u8BAE\u74F6\u9888\uFF09\uFF0CNOT \u76EE\u6807\u9879\u76EE\u7684\u4EE3\u7801\u6216\u67B6\u6784\u3002
+   - Read \`.flowpilot/history/\` files to understand workflow stats
+   - Read \`.flowpilot/evolution/\` files to see past experiments
+   - Analyze: what went well, what could improve, config optimization opportunities
+   - Pipe structured findings into: \`echo '[CONFIG] \u5C06 parallelLimit \u63D0\u5347\u81F3 4\\n[PROTOCOL] \u5B50Agent\u5E94\u5148\u9A8C\u8BC1\u73AF\u5883\u518D\u7F16\u7801' | node flow.js evolve\`
+   - Tags: \`[CONFIG]\` for config changes, \`[PROTOCOL]\` for CLAUDE.md protocol changes
+5. Run \`node flow.js finish\` again \u2014 verify passes + review done \u2192 final commit \u2192 idle.
+**Loop: finish(verify) \u2192 review(code-review) \u2192 evolve(AI\u53CD\u601D) \u2192 fix \u2192 finish again. All gates must pass.**
 
 <!-- flowpilot:end -->`;
 
@@ -678,12 +705,12 @@ function completeTask(data, id, summary) {
     tasks: data.tasks.map((t) => t.id === id ? { ...t, status: "done", summary } : t)
   };
 }
-function failTask(data, id) {
+function failTask(data, id, maxRetries = 3) {
   const idx = buildIndex(data.tasks);
   if (!idx.has(id)) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
   const old = idx.get(id);
   const retries = old.retries + 1;
-  if (retries >= 3) {
+  if (retries >= maxRetries) {
     return {
       result: "skip",
       data: { ...data, current: null, tasks: data.tasks.map((t) => t.id === id ? { ...t, retries, status: "failed" } : t) }
@@ -726,7 +753,55 @@ function isAllDone(tasks) {
 // src/infrastructure/markdown-parser.ts
 var TASK_RE = /^(\d+)\.\s+\[\s*(\w+)\s*\]\s+(.+?)(?:\s*\((?:deps?|依赖)\s*:\s*([^)]*)\))?\s*$/i;
 var DESC_RE = /^\s{2,}(.+)$/;
+var OPENSPEC_GROUP_RE = /^##\s+(\d+)\.\s+(.+)$/;
+var OPENSPEC_TASK_RE = /^-\s+\[[ x]\]\s+(\d+)\.(\d+)\s+(.+)$/i;
 function parseTasksMarkdown(markdown) {
+  const isOpenSpec = markdown.split("\n").some((l) => OPENSPEC_TASK_RE.test(l));
+  return isOpenSpec ? parseOpenSpecMarkdown(markdown) : parseFlowPilotMarkdown(markdown);
+}
+function parseOpenSpecMarkdown(markdown) {
+  const lines = markdown.split("\n");
+  let name = "";
+  let description = "";
+  const tasks = [];
+  const groupTasks = /* @__PURE__ */ new Map();
+  let currentGroup = 0;
+  for (const line of lines) {
+    if (!name && line.startsWith("# ") && !line.startsWith("## ")) {
+      name = line.slice(2).trim();
+      continue;
+    }
+    if (name && !description && !line.startsWith("#") && line.trim() && !OPENSPEC_TASK_RE.test(line)) {
+      description = line.trim();
+      continue;
+    }
+    const gm = line.match(OPENSPEC_GROUP_RE);
+    if (gm) {
+      currentGroup = parseInt(gm[1], 10);
+      if (!groupTasks.has(currentGroup)) groupTasks.set(currentGroup, []);
+      continue;
+    }
+    const tm = line.match(OPENSPEC_TASK_RE);
+    if (tm) {
+      const groupNum = parseInt(tm[1], 10);
+      const sysId = makeTaskId(tasks.length + 1);
+      if (!groupTasks.has(groupNum)) groupTasks.set(groupNum, []);
+      groupTasks.get(groupNum).push(sysId);
+      let titleText = tm[3].trim();
+      let type = "general";
+      const typeMatch = titleText.match(/^\[\s*(frontend|backend|general)\s*\]\s+(.+)$/i);
+      if (typeMatch) {
+        type = typeMatch[1].toLowerCase();
+        titleText = typeMatch[2];
+      }
+      const deps = groupNum > 1 && groupTasks.has(groupNum - 1) ? [...groupTasks.get(groupNum - 1)] : [];
+      tasks.push({ title: titleText, type, deps, description: "" });
+    }
+  }
+  if (!name) name = "OpenSpec Workflow";
+  return { name, description, tasks };
+}
+function parseFlowPilotMarkdown(markdown) {
   const lines = markdown.split("\n");
   let name = "";
   let description = "";
@@ -860,8 +935,11 @@ async function runLifecycleHook(hookName, basePath2, env) {
 // src/infrastructure/extractor.ts
 var import_https = require("https");
 async function callClaude(prompt, systemPrompt) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
   if (!apiKey) return null;
+  const baseUrl = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
+  const base = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+  const parsed = new URL(base + "/v1/messages");
   return new Promise((resolve2) => {
     const body = JSON.stringify({
       model: "claude-haiku-4-5-20251001",
@@ -870,8 +948,9 @@ async function callClaude(prompt, systemPrompt) {
       messages: [{ role: "user", content: prompt }]
     });
     const req = (0, import_https.request)({
-      hostname: "api.anthropic.com",
-      path: "/v1/messages",
+      hostname: parsed.hostname,
+      port: parsed.port || void 0,
+      path: parsed.pathname,
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1039,11 +1118,15 @@ function ruleExtract(text, source) {
     return !primaryText.includes(keyword);
   });
   const seen = /* @__PURE__ */ new Set();
-  return [...primary, ...tech].filter((e) => {
+  const all = [...primary, ...tech].filter((e) => {
     if (seen.has(e.content)) return false;
     seen.add(e.content);
     return true;
   });
+  if (!all.length && text.trim()) {
+    all.push({ content: text.trim().slice(0, 500), source });
+  }
+  return all;
 }
 async function extractAll(text, source, existingMemories) {
   const llmResult = await llmExtract(text);
@@ -1169,6 +1252,26 @@ function fourDimensionAnalysis(stats) {
   if (efficient.length > 0 && stats.totalTasks > 0) {
     const rate = (efficient.length / stats.totalTasks * 100).toFixed(0);
     findings.push(`[delight] ${efficient.length}/${stats.totalTasks} \u4EFB\u52A1\u4E00\u6B21\u901A\u8FC7 (${rate}%)`);
+    if (efficient.length === stats.totalTasks && stats.totalTasks >= 3) {
+      experiments.push({
+        trigger: "\u5168\u90E8\u4E00\u6B21\u901A\u8FC7",
+        observation: `${stats.totalTasks} \u4E2A\u4EFB\u52A1\u96F6\u91CD\u8BD5`,
+        action: "\u5C06 parallelLimit \u63D0\u5347\u81F3 " + Math.min(stats.totalTasks, 5),
+        expected: "\u63D0\u9AD8\u5E76\u884C\u5EA6",
+        target: "config"
+      });
+    }
+  }
+  const retriedButDone = results.filter((r) => r.status === "done" && r.retries > 0);
+  if (retriedButDone.length) {
+    findings.push(`[delight] ${retriedButDone.length} \u4E2A\u4EFB\u52A1\u7ECF\u91CD\u8BD5\u540E\u6210\u529F`);
+    experiments.push({
+      trigger: "\u91CD\u8BD5\u540E\u6210\u529F",
+      observation: `${retriedButDone.map((r) => r.id).join(",")} \u9700\u8981\u91CD\u8BD5`,
+      action: "\u5728\u5B50Agent\u63D0\u793A\u6A21\u677F\u4E2D\u5F3A\u8C03\u5148\u9A8C\u8BC1\u73AF\u5883\u518D\u52A8\u624B\u7F16\u7801",
+      expected: "\u51CF\u5C11\u9996\u6B21\u5931\u8D25\u7387",
+      target: "claude-md"
+    });
   }
   const typeEntries = Object.entries(stats.tasksByType);
   if (typeEntries.length > 0) {
@@ -1282,6 +1385,19 @@ function parseConfigAction(action) {
     const m = action.match(re);
     if (m) return { key: k, value: Number(m[1]) };
   }
+  const CN_MAP = {
+    "\u5E76\u884C": "parallelLimit",
+    "\u91CD\u8BD5": "maxRetries",
+    "\u8D85\u65F6": "timeout",
+    "\u9A8C\u8BC1\u8D85\u65F6": "verifyTimeout"
+  };
+  const cnEntries = Object.entries(CN_MAP).sort((a, b) => b[0].length - a[0].length);
+  for (const [cn, key] of cnEntries) {
+    if (action.includes(cn)) {
+      const m = action.match(/(\d+)/);
+      if (m) return { key, value: Number(m[1]) };
+    }
+  }
   return null;
 }
 async function saveSnapshot(basePath2, files) {
@@ -1323,16 +1439,12 @@ async function appendExperimentsMd(basePath2, expLog, report) {
 async function experiment(report, basePath2) {
   const log2 = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), experiments: [], status: "completed" };
   if (!report.experiments.length) return log2;
-  const configPath = (0, import_path4.join)(basePath2, ".flowpilot", "config.json");
-  const claudeMdPath = (0, import_path4.join)(basePath2, "CLAUDE.md");
+  const configPath = (0, import_path4.join)(basePath2, ".workflow", "config.json");
   const configSnapshot = await safeRead(configPath, "{}");
-  const claudeMdSnapshot = await safeRead(claudeMdPath, "");
-  const snapshotFile = await saveSnapshot(basePath2, { "config.json": configSnapshot, "CLAUDE.md": claudeMdSnapshot });
+  const snapshotFile = await saveSnapshot(basePath2, { "config.json": configSnapshot });
   log2.snapshotFile = snapshotFile;
   try {
     let configObj = JSON.parse(configSnapshot);
-    let claudeMdContent = claudeMdSnapshot;
-    let claudeMdExpCount = 0;
     for (const exp of report.experiments) {
       const applied = { ...exp, applied: false, snapshotBefore: "" };
       try {
@@ -1344,40 +1456,20 @@ async function experiment(report, basePath2) {
             applied.applied = true;
           }
         } else if (exp.target === "claude-md") {
-          applied.snapshotBefore = claudeMdSnapshot;
-          if (claudeMdExpCount >= 3) {
-          } else {
-            const stripComments = (s) => s.replace(/<!--/g, "").replace(/-->/g, "");
-            const safeTrigger = stripComments(exp.trigger);
-            const safeAction = stripComments(exp.action);
-            const endTag = "<!-- flowpilot:end -->";
-            const idx = claudeMdContent.indexOf(endTag);
-            if (idx >= 0) {
-              const insertion = `
-<!-- evolution: ${safeTrigger} -->
-> ${safeAction}
-`;
-              const startTag = "<!-- flowpilot:start -->";
-              const startIdx = claudeMdContent.indexOf(startTag);
-              const regionSize = idx + endTag.length - (startIdx >= 0 ? startIdx : 0) + insertion.length;
-              if (regionSize <= 10240) {
-                claudeMdContent = claudeMdContent.slice(0, idx) + insertion + claudeMdContent.slice(idx);
-                applied.applied = true;
-                claudeMdExpCount++;
-              }
-            }
+          applied.snapshotBefore = configSnapshot;
+          const hints = configObj.hints ?? [];
+          if (hints.length < 10 && !hints.includes(exp.action)) {
+            configObj = { ...configObj, hints: [...hints, exp.action] };
+            applied.applied = true;
           }
         }
       } catch {
       }
       log2.experiments.push(applied);
     }
-    if (log2.experiments.some((e) => e.applied && e.target === "config")) {
+    if (log2.experiments.some((e) => e.applied)) {
       await (0, import_promises3.mkdir)((0, import_path4.dirname)(configPath), { recursive: true });
       await (0, import_promises3.writeFile)(configPath, JSON.stringify(configObj, null, 2), "utf-8");
-    }
-    if (log2.experiments.some((e) => e.applied && e.target === "claude-md")) {
-      await (0, import_promises3.writeFile)(claudeMdPath, claudeMdContent, "utf-8");
     }
   } catch {
     log2.status = "failed";
@@ -1399,8 +1491,7 @@ async function review(basePath2) {
   let rolledBack = false;
   let rollbackReason;
   const historyDir = (0, import_path4.join)(basePath2, ".flowpilot", "history");
-  const configPath = (0, import_path4.join)(basePath2, ".flowpilot", "config.json");
-  const claudeMdPath = (0, import_path4.join)(basePath2, "CLAUDE.md");
+  const configPath = (0, import_path4.join)(basePath2, ".workflow", "config.json");
   const expPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
   let history = [];
   try {
@@ -1461,17 +1552,6 @@ async function review(basePath2) {
   } else {
     checks.push({ name: "experiments.json", passed: true, detail: "\u6587\u4EF6\u4E0D\u5B58\u5728\uFF0C\u8DF3\u8FC7" });
   }
-  const claudeMdRaw = await safeRead(claudeMdPath, "");
-  if (claudeMdRaw) {
-    const hasStart = claudeMdRaw.includes("<!-- flowpilot:start -->");
-    const hasEnd = claudeMdRaw.includes("<!-- flowpilot:end -->");
-    const intact = hasStart && hasEnd;
-    checks.push({ name: "CLAUDE.md", passed: intact, detail: intact ? "\u534F\u8BAE\u6807\u8BB0\u5B8C\u6574" : "\u534F\u8BAE\u6807\u8BB0\u7F3A\u5931\u6216\u635F\u574F" });
-    if (!intact && !rolledBack) {
-      rolledBack = true;
-      rollbackReason = "CLAUDE.md \u534F\u8BAE\u6807\u8BB0\u635F\u574F";
-    }
-  }
   if (rolledBack) {
     try {
       const logs = JSON.parse(await (0, import_promises3.readFile)(expPath, "utf-8"));
@@ -1486,7 +1566,6 @@ async function review(basePath2) {
       if (!snapshot) snapshot = await loadLatestSnapshot(basePath2);
       if (snapshot) {
         if (snapshot.files["config.json"]) await (0, import_promises3.writeFile)(configPath, snapshot.files["config.json"], "utf-8");
-        if (snapshot.files["CLAUDE.md"]) await (0, import_promises3.writeFile)(claudeMdPath, snapshot.files["CLAUDE.md"], "utf-8");
       }
       if (logs.length) {
         logs[logs.length - 1].status = "skipped";
@@ -1930,6 +2009,103 @@ function fastDetectLanguage(text) {
   if (total === 0) return "en";
   return cjk / total > 0.15 ? "cjk" : "en";
 }
+var CJK_TECH_DICT = /* @__PURE__ */ new Set([
+  "\u6570\u636E\u5E93",
+  "\u670D\u52A1\u5668",
+  "\u5BA2\u6237\u7AEF",
+  "\u4E2D\u95F4\u4EF6",
+  "\u5FAE\u670D\u52A1",
+  "\u8D1F\u8F7D\u5747\u8861",
+  "\u6D88\u606F\u961F\u5217",
+  "\u7F13\u5B58",
+  "\u7D22\u5F15",
+  "\u4E8B\u52A1",
+  "\u5E76\u53D1",
+  "\u5F02\u6B65",
+  "\u540C\u6B65",
+  "\u56DE\u8C03",
+  "\u63A5\u53E3",
+  "\u8BA4\u8BC1",
+  "\u6388\u6743",
+  "\u52A0\u5BC6",
+  "\u89E3\u5BC6",
+  "\u54C8\u5E0C",
+  "\u4EE4\u724C",
+  "\u4F1A\u8BDD",
+  "\u7EC4\u4EF6",
+  "\u6A21\u5757",
+  "\u63D2\u4EF6",
+  "\u6846\u67B6",
+  "\u4F9D\u8D56",
+  "\u914D\u7F6E",
+  "\u90E8\u7F72",
+  "\u5BB9\u5668",
+  "\u6D4B\u8BD5",
+  "\u5355\u5143\u6D4B\u8BD5",
+  "\u96C6\u6210\u6D4B\u8BD5",
+  "\u7AEF\u5230\u7AEF",
+  "\u8986\u76D6\u7387",
+  "\u65AD\u8A00",
+  "\u8DEF\u7531",
+  "\u63A7\u5236\u5668",
+  "\u6A21\u578B",
+  "\u89C6\u56FE",
+  "\u6A21\u677F",
+  "\u6E32\u67D3",
+  "\u524D\u7AEF",
+  "\u540E\u7AEF",
+  "\u5168\u6808",
+  "\u54CD\u5E94\u5F0F",
+  "\u72B6\u6001\u7BA1\u7406",
+  "\u751F\u547D\u5468\u671F",
+  "\u6027\u80FD",
+  "\u4F18\u5316",
+  "\u91CD\u6784",
+  "\u8FC1\u79FB",
+  "\u5347\u7EA7",
+  "\u56DE\u6EDA",
+  "\u7248\u672C",
+  "\u65E5\u5FD7",
+  "\u76D1\u63A7",
+  "\u544A\u8B66",
+  "\u8C03\u8BD5",
+  "\u9519\u8BEF\u5904\u7406",
+  "\u5F02\u5E38",
+  "\u5206\u9875",
+  "\u6392\u5E8F",
+  "\u8FC7\u6EE4",
+  "\u641C\u7D22",
+  "\u805A\u5408",
+  "\u5173\u8054",
+  "\u5DE5\u4F5C\u6D41",
+  "\u4EFB\u52A1",
+  "\u8C03\u5EA6",
+  "\u961F\u5217",
+  "\u7BA1\u9053",
+  "\u6D41\u6C34\u7EBF",
+  "\u67B6\u6784",
+  "\u8BBE\u8BA1\u6A21\u5F0F",
+  "\u5355\u4F8B",
+  "\u5DE5\u5382",
+  "\u89C2\u5BDF\u8005",
+  "\u7B56\u7565",
+  "\u7C7B\u578B",
+  "\u6CDB\u578B",
+  "\u679A\u4E3E",
+  "\u8054\u5408\u7C7B\u578B",
+  "\u4EA4\u53C9\u7C7B\u578B",
+  "\u7F16\u8BD1",
+  "\u6784\u5EFA",
+  "\u6253\u5305",
+  "\u538B\u7F29",
+  "\u8F6C\u8BD1",
+  "\u4ED3\u5E93",
+  "\u5206\u652F",
+  "\u5408\u5E76",
+  "\u51B2\u7A81",
+  "\u63D0\u4EA4",
+  "\u62C9\u53D6\u8BF7\u6C42"
+]);
 function tokenize(text) {
   const lang = detectLanguage(text);
   const lower = text.toLowerCase();
@@ -1941,9 +2117,26 @@ function tokenize(text) {
   for (const ch of lower) {
     if (isCJKRune(ch.codePointAt(0) ?? 0)) cjk.push(ch);
   }
-  for (let i = 0; i < cjk.length; i++) {
-    rawTokens.push(cjk[i]);
-    if (i + 1 < cjk.length) rawTokens.push(cjk[i] + cjk[i + 1]);
+  let ci = 0;
+  while (ci < cjk.length) {
+    let matched = false;
+    for (let len = 4; len >= 2; len--) {
+      if (ci + len <= cjk.length) {
+        const word = cjk.slice(ci, ci + len).join("");
+        if (CJK_TECH_DICT.has(word)) {
+          rawTokens.push(word);
+          ci += len;
+          matched = true;
+          break;
+        }
+      }
+    }
+    if (!matched) {
+      rawTokens.push(cjk[ci]);
+      if (ci + 1 < cjk.length) rawTokens.push(cjk[ci] + cjk[ci + 1]);
+      if (ci + 2 < cjk.length) rawTokens.push(cjk[ci] + cjk[ci + 1] + cjk[ci + 2]);
+      ci++;
+    }
   }
   return analyze(rawTokens, lang).tokens;
 }
@@ -2061,7 +2254,8 @@ ${desc}` : entry.content;
 async function appendMemory(basePath2, entry) {
   const resolved = await resolveSearchableText(entry);
   const entries = await loadMemory(basePath2);
-  const stats = rebuildDf(entries);
+  const diskDf = await loadDf(basePath2);
+  const stats = diskDf.docCount > 0 ? diskDf : rebuildDf(entries);
   const entryLang = detectLanguage(resolved.content);
   const queryTokens = tokenize(resolved.content);
   const queryVec = bm25Vector(queryTokens, stats, entryLang);
@@ -2596,8 +2790,9 @@ ${def.description}
         if (ctx) parts.push(ctx);
       }
       const memories = await queryMemory(this.repo.projectRoot(), `${task.title} ${task.description}`);
-      if (memories.length) {
-        parts.push("## \u76F8\u5173\u8BB0\u5FC6\n\n" + memories.map((m) => `- ${m.content}`).join("\n"));
+      const useful = memories.filter((m) => m.content.length > 20);
+      if (useful.length) {
+        parts.push("## \u76F8\u5173\u8BB0\u5FC6\n\n" + useful.map((m) => `- [${m.source}] ${m.content}`).join("\n"));
       }
       const loopWarning = await this.loadAndClearLoopWarning();
       if (loopWarning) {
@@ -2608,6 +2803,11 @@ ${loopWarning}`);
       const hcWarnings = await this.healthCheck();
       if (hcWarnings.length) {
         parts.push("## \u5065\u5EB7\u68C0\u67E5\u8B66\u544A\n\n" + hcWarnings.map((w) => `- ${w}`).join("\n"));
+      }
+      const cfg = await this.repo.loadConfig();
+      const hints = cfg.hints;
+      if (hints?.length) {
+        parts.push("## \u8FDB\u5316\u5EFA\u8BAE\n\n" + hints.map((h) => `- ${h}`).join("\n"));
       }
       return { task, context: parts.join("\n\n---\n\n") };
     } finally {
@@ -2625,12 +2825,15 @@ ${loopWarning}`);
         throw new Error(`\u6709 ${active.length} \u4E2A\u4EFB\u52A1\u4ECD\u4E3A active \u72B6\u6001\uFF08${active.map((t) => t.id).join(",")}\uFF09\uFF0C\u8BF7\u5148\u6267\u884C node flow.js status \u68C0\u67E5\u5E76\u8865 checkpoint\uFF0C\u6216 node flow.js resume \u91CD\u7F6E`);
       }
       const cascaded = cascadeSkip(data.tasks);
-      const tasks = findParallelTasks(cascaded);
+      let tasks = findParallelTasks(cascaded);
       if (!tasks.length) {
         await this.repo.saveProgress({ ...data, tasks: cascaded });
         log.debug("nextBatch: \u65E0\u53EF\u5E76\u884C\u4EFB\u52A1");
         return [];
       }
+      const config = await this.repo.loadConfig();
+      const limit = config.parallelLimit;
+      if (limit && tasks.length > limit) tasks = tasks.slice(0, limit);
       log.debug(`nextBatch: \u6FC0\u6D3B ${tasks.map((t) => t.id).join(",")}`);
       const activeIds = new Set(tasks.map((t) => t.id));
       const activated = cascaded.map((t) => activeIds.has(t.id) ? { ...t, status: "active" } : t);
@@ -2650,13 +2853,18 @@ ${loopWarning}`);
           if (ctx) parts.push(ctx);
         }
         const memories = await queryMemory(this.repo.projectRoot(), `${task.title} ${task.description}`);
-        if (memories.length) {
-          parts.push("## \u76F8\u5173\u8BB0\u5FC6\n\n" + memories.map((m) => `- ${m.content}`).join("\n"));
+        const useful = memories.filter((m) => m.content.length > 20);
+        if (useful.length) {
+          parts.push("## \u76F8\u5173\u8BB0\u5FC6\n\n" + useful.map((m) => `- [${m.source}] ${m.content}`).join("\n"));
         }
         if (loopWarning) {
           parts.push(`## \u5FAA\u73AF\u68C0\u6D4B\u8B66\u544A
 
 ${loopWarning}`);
+        }
+        const hints = config.hints;
+        if (hints?.length) {
+          parts.push("## \u8FDB\u5316\u5EFA\u8BAE\n\n" + hints.map((h) => `- ${h}`).join("\n"));
         }
         results.push({ task, context: parts.join("\n\n---\n\n") });
       }
@@ -2678,6 +2886,7 @@ ${loopWarning}`);
       }
       const MIN_WORK_TIME = 3e4;
       const age = await this.getActivationAge(id);
+      const existingMems = (await loadMemory(this.repo.projectRoot())).filter((m) => !m.archived).map((m) => m.content);
       const isFailed = detail.startsWith("FAILED") || detail.length < 200 && /\b(fail|error|crash|timeout|rate.?limit)\b/i.test(detail) || detail.length < 200 && /限流|崩溃|超时|失败|异常|中断|未完成|无法/.test(detail) || age < MIN_WORK_TIME;
       if (isFailed) {
         await this.appendFailureContext(id, task, detail);
@@ -2687,10 +2896,19 @@ ${loopWarning}`);
           log.step("loop_detected", loopResult2.message, { taskId: id, data: { strategy: loopResult2.strategy } });
           await this.saveLoopWarning(`[LOOP WARNING - ${loopResult2.strategy}] ${loopResult2.message}`);
         }
-        const { result, data: newData2 } = failTask(data, id);
+        for (const entry of await extractAll(detail, `task-${id}-fail`, existingMems)) {
+          await appendMemory(this.repo.projectRoot(), {
+            content: entry.content,
+            source: entry.source,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString()
+          });
+        }
+        const config = await this.repo.loadConfig();
+        const maxRetries = config.maxRetries ?? 3;
+        const { result, data: newData2 } = failTask(data, id, maxRetries);
         await this.repo.saveProgress(newData2);
         log.debug(`checkpoint ${id}: failTask result=${result}, retries=${task.retries + 1}`);
-        const msg2 = result === "retry" ? `\u4EFB\u52A1 ${id} \u5931\u8D25(\u7B2C${task.retries + 1}\u6B21)\uFF0C\u5C06\u91CD\u8BD5` : `\u4EFB\u52A1 ${id} \u8FDE\u7EED\u5931\u8D253\u6B21\uFF0C\u5DF2\u8DF3\u8FC7`;
+        const msg2 = result === "retry" ? `\u4EFB\u52A1 ${id} \u5931\u8D25(\u7B2C${task.retries + 1}\u6B21)\uFF0C\u5C06\u91CD\u8BD5` : `\u4EFB\u52A1 ${id} \u8FDE\u7EED\u5931\u8D25${maxRetries}\u6B21\uFF0C\u5DF2\u8DF3\u8FC7`;
         const warns = [patternWarn, loopResult2 ? `[LOOP] ${loopResult2.message}` : null].filter(Boolean);
         return warns.length ? `${msg2}
 ${warns.join("\n")}` : msg2;
@@ -2706,7 +2924,7 @@ ${warns.join("\n")}` : msg2;
 
 ${detail}
 `);
-      for (const entry of await extractAll(detail, `task-${id}`)) {
+      for (const entry of await extractAll(detail, `task-${id}`, existingMems)) {
         await appendMemory(this.repo.projectRoot(), {
           content: entry.content,
           source: entry.source,
@@ -2946,6 +3164,43 @@ ${stats}
       suggestions: ["\u624B\u52A8\u56DE\u6EDA"]
     });
     return `\u5DF2\u56DE\u6EDA\u5230\u8FDB\u5316\u70B9 ${index}\uFF08${target.timestamp}\uFF09`;
+  }
+  /** recall: 查询相关记忆 */
+  async recall(query) {
+    const memories = await queryMemory(this.repo.projectRoot(), query);
+    if (!memories.length) return "\u65E0\u76F8\u5173\u8BB0\u5FC6";
+    return memories.map((m) => `- [${m.source}] ${m.content}`).join("\n");
+  }
+  /** evolve: 接收CC子Agent的反思结果，执行进化实验 */
+  async evolve(reflectionText) {
+    let stats;
+    try {
+      const data = await this.repo.loadProgress();
+      if (!data) throw new Error("no progress");
+      stats = collectStats(data);
+    } catch {
+      stats = { name: "", totalTasks: 0, doneCount: 0, skipCount: 0, failCount: 0, retryTotal: 0, tasksByType: {}, failsByType: {}, taskResults: [], startTime: (/* @__PURE__ */ new Date()).toISOString(), endTime: (/* @__PURE__ */ new Date()).toISOString() };
+    }
+    const report = await reflect(stats, this.repo.projectRoot());
+    const lines = reflectionText.split("\n").filter((l) => l.trim());
+    const experiments = [];
+    for (const line of lines) {
+      const m = line.match(/^\[(.+?)\]\s*(.+)/);
+      if (m) {
+        const tag = m[1].toLowerCase();
+        const target = tag.includes("config") ? "config" : "claude-md";
+        experiments.push({ trigger: "cc-ai-reflect", observation: m[2], action: m[2], expected: "\u57FA\u4E8EAI\u5206\u6790\u7684\u6539\u8FDB", target });
+      }
+    }
+    if (!experiments.length && lines.length) {
+      for (const line of lines.slice(0, 3)) {
+        experiments.push({ trigger: "cc-ai-reflect", observation: line, action: line, expected: "\u57FA\u4E8EAI\u5206\u6790\u7684\u6539\u8FDB", target: "claude-md" });
+      }
+    }
+    if (!experiments.length) return "\u65E0\u53EF\u6267\u884C\u7684\u8FDB\u5316\u5EFA\u8BAE";
+    const merged = { ...report, experiments: [...report.experiments, ...experiments] };
+    await experiment(merged, this.repo.projectRoot());
+    return `\u5DF2\u5E94\u7528 ${experiments.length} \u6761\u8FDB\u5316\u5EFA\u8BAE`;
   }
   /** status: 全局进度 */
   async status() {
@@ -3269,6 +3524,16 @@ var CLI = class {
         if (!id) throw new Error("\u9700\u8981\u4EFB\u52A1ID");
         return await s.rollback(id);
       }
+      case "evolve": {
+        const text = await readStdinIfPiped();
+        if (!text.trim()) throw new Error("\u9700\u8981\u901A\u8FC7 stdin \u4F20\u5165\u53CD\u601D\u7ED3\u679C");
+        return await s.evolve(text.trim());
+      }
+      case "recall": {
+        const query = rest.join(" ");
+        if (!query) throw new Error("\u9700\u8981\u67E5\u8BE2\u5173\u952E\u8BCD");
+        return await s.recall(query);
+      }
       case "add": {
         const typeIdx = rest.indexOf("--type");
         const rawType = typeIdx >= 0 && rest[typeIdx + 1] || "general";
@@ -3294,6 +3559,8 @@ var USAGE = `\u7528\u6CD5: node flow.js [--verbose] <command>
   resume               \u4E2D\u65AD\u6062\u590D
   abort                \u4E2D\u6B62\u5DE5\u4F5C\u6D41\u5E76\u6E05\u7406 .workflow/ \u76EE\u5F55
   rollback <id>        \u56DE\u6EDA\u5230\u6307\u5B9A\u4EFB\u52A1\u7684\u5FEB\u7167 (git revert + \u91CD\u7F6E\u540E\u7EED\u4EFB\u52A1)
+  evolve               \u63A5\u6536AI\u53CD\u601D\u7ED3\u679C\u5E76\u6267\u884C\u8FDB\u5316 (stdin\u4F20\u5165)
+  recall <\u5173\u952E\u8BCD>       \u67E5\u8BE2\u76F8\u5173\u8BB0\u5FC6
   add <\u63CF\u8FF0>           \u8FFD\u52A0\u4EFB\u52A1 [--type frontend|backend|general]
 
 \u5168\u5C40\u9009\u9879:
