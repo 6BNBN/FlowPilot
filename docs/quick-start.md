@@ -10,11 +10,16 @@
 2. 开启 Agent Teams：在 `~/.claude/settings.json` 中添加 `"env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }`
 3. 安装插件：在 CC 中执行 `/plugin`，选择安装 `superpowers`、`frontend-design`、`feature-dev`、`code-review`、`context7`
 4. （可选）配置环境变量，启用 LLM 智能提取和深度分析：
-   ```bash
-   # 在 ~/.claude/settings.json 的 env 中添加：
-   export ANTHROPIC_API_KEY="sk-ant-..."       # 或 ANTHROPIC_AUTH_TOKEN
-   export ANTHROPIC_BASE_URL="https://api.anthropic.com"  # 可选，自定义 API 地址
+   在 `~/.claude/settings.json` 的 `env` 中添加：
+   ```json
+   {
+     "env": {
+       "ANTHROPIC_API_KEY": "sk-ant-...",
+       "ANTHROPIC_BASE_URL": "https://api.anthropic.com"
+     }
+   }
    ```
+   > `ANTHROPIC_API_KEY` 也可用 `ANTHROPIC_AUTH_TOKEN` 替代。`ANTHROPIC_BASE_URL` 可选，用于自定义 API 地址。
    > 不配置也能正常使用，记忆提取会降级为规则引擎模式。
 5. 构建工具：
    ```bash
