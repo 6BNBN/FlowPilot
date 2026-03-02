@@ -10,11 +10,16 @@
 2. Enable Agent Teams: add `"env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }` to `~/.claude/settings.json`
 3. Install plugins: run `/plugin` in CC, install `superpowers`, `frontend-design`, `feature-dev`, `code-review`, `context7`
 4. (Optional) Configure environment variables to enable LLM-powered smart extraction and deep analysis:
-   ```bash
-   # Add to the env section of ~/.claude/settings.json:
-   export ANTHROPIC_API_KEY="sk-ant-..."       # or ANTHROPIC_AUTH_TOKEN
-   export ANTHROPIC_BASE_URL="https://api.anthropic.com"  # optional, custom API endpoint
+   Add to the `env` section of `~/.claude/settings.json`:
+   ```json
+   {
+     "env": {
+       "ANTHROPIC_API_KEY": "sk-ant-...",
+       "ANTHROPIC_BASE_URL": "https://api.anthropic.com"
+     }
+   }
    ```
+   > `ANTHROPIC_API_KEY` can also be `ANTHROPIC_AUTH_TOKEN`. `ANTHROPIC_BASE_URL` is optional for custom API endpoints.
    > Works fine without these — memory extraction falls back to rule engine mode.
 5. Build the tool:
    ```bash
