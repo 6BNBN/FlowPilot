@@ -5,6 +5,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { CommitResult, CommitSkipReason } from '../domain/repository';
 
 const FLOWPILOT_RUNTIME_PREFIXES = ['.flowpilot/', '.workflow/'];
@@ -57,10 +58,33 @@ function readGitPaths(cwd: string, args: string[]): string[] {
 }
 
 /** 获取所有子模块路径，无 .gitmodules 时返回空数组，有但命令失败时抛出 */
-function getSubmodules(): string[] {
-  if (!existsSync('.gitmodules')) return [];
-  const out = execFileSync('git', ['submodule', '--quiet', 'foreach', 'echo $sm_path'], { stdio: 'pipe', encoding: 'utf-8' });
-  return out.split('\n').filter(Boolean);
+function getSubmodules(cwd = process.cwd()): string[] {
+  if (!existsSync(join(cwd, '.gitmodules'))) return [];
+  const out = execFileSync('git', ['submodule', '--quiet', 'foreach', 'echo $sm_path'], { stdio: 'pipe', cwd, encoding: 'utf-8' });
+  return out.split('\n').map(normalizeGitPath).filter(Boolean);
+}
+
+/** 递归收集 dirty submodule 内部的真实改动文件 */
+function listDirtySubmoduleFiles(cwd: string, submodulePath: string): string[] {
+  const submoduleCwd = join(cwd, submodulePath);
+  const groups = [
+    readGitPaths(submoduleCwd, ['diff', '--name-only', '--cached']),
+    readGitPaths(submoduleCwd, ['diff', '--name-only']),
+    readGitPaths(submoduleCwd, ['ls-files', '--others', '--exclude-standard']),
+  ];
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const group of groups) {
+    for (const file of group) {
+      const fullPath = normalizeGitPath(`${submodulePath}/${file}`);
+      if (seen.has(fullPath)) continue;
+      seen.add(fullPath);
+      result.push(fullPath);
+    }
+  }
+
+  return result;
 }
 
 /** 按子模块分组文件，返回 { 子模块路径: 相对文件列表 }，空字符串键=父仓库 */
@@ -109,6 +133,8 @@ export function gitCleanup(): void {}
 export function listChangedFiles(cwd = process.cwd()): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
+  const submodules = getSubmodules(cwd);
+  const submoduleSet = new Set(submodules);
   const groups = [
     readGitPaths(cwd, ['diff', '--name-only', '--cached']),
     readGitPaths(cwd, ['diff', '--name-only']),
@@ -117,6 +143,15 @@ export function listChangedFiles(cwd = process.cwd()): string[] {
 
   for (const group of groups) {
     for (const file of group) {
+      if (submoduleSet.has(file)) {
+        for (const nestedFile of listDirtySubmoduleFiles(cwd, file)) {
+          if (seen.has(nestedFile)) continue;
+          seen.add(nestedFile);
+          result.push(nestedFile);
+        }
+        continue;
+      }
+
       if (seen.has(file)) continue;
       seen.add(file);
       result.push(file);
