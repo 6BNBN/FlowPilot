@@ -25,7 +25,7 @@ function loadConfig(cwd: string): { commands?: string[]; timeout?: number } {
 /** 自动检测并执行项目验证脚本 */
 export function runVerify(cwd: string): VerifyResult {
   const config = loadConfig(cwd);
-  const cmds = config.commands?.length ? config.commands : detectCommands(cwd);
+  const cmds = normalizeCommands(cwd, config.commands?.length ? config.commands : detectCommands(cwd));
   const timeout = (config.timeout ?? 300) * 1_000;
   if (!cmds.length) return { passed: true, scripts: [] };
 
@@ -42,6 +42,31 @@ export function runVerify(cwd: string): VerifyResult {
     }
   }
   return { passed: true, scripts: cmds };
+}
+
+function normalizeCommands(cwd: string, commands: string[]): string[] {
+  const testScript = loadPackageScripts(cwd).test;
+  return commands.map(command => shouldForceVitestRun(command, testScript) ? 'npm run test -- --run' : command);
+}
+
+function loadPackageScripts(cwd: string): Record<string, string> {
+  try {
+    const pkg = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf-8'));
+    const scripts = pkg?.scripts;
+    if (!scripts || typeof scripts !== 'object' || Array.isArray(scripts)) return {};
+    return Object.fromEntries(
+      Object.entries(scripts).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+    );
+  } catch {
+    return {};
+  }
+}
+
+function shouldForceVitestRun(command: string, testScript?: string): boolean {
+  if (command !== 'npm run test' || !testScript) return false;
+  const normalizedScript = testScript.replace(/\s+/g, ' ').trim();
+  if (!/\bvitest\b/.test(normalizedScript)) return false;
+  return !/\bvitest\b.*(?:\s|^)(?:run\b|--run\b)/.test(normalizedScript);
 }
 
 /** 按项目标记文件检测验证命令 */
