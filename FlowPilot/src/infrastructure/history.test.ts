@@ -157,15 +157,17 @@ describe('experiment', () => {
   });
 
   it('config target modifies known param (maxRetries)', async () => {
-    mkdirSync(join(base, '.workflow'), { recursive: true });
-    writeFileSync(join(base, '.workflow', 'config.json'), '{"maxRetries":2}');
+    mkdirSync(join(base, '.flowpilot'), { recursive: true });
+    writeFileSync(join(base, '.flowpilot', 'config.json'), '{"maxRetries":2}');
     const report: ReflectReport = {
       timestamp: '', findings: [],
       experiments: [{ trigger: 't', observation: 'o', action: '设置 maxRetries 为 5', expected: 'e', target: 'config' }],
     };
-    await experiment(report, base);
-    const cfg = JSON.parse(readFileSync(join(base, '.workflow', 'config.json'), 'utf-8'));
+    const log = await experiment(report, base);
+    const cfg = JSON.parse(readFileSync(join(base, '.flowpilot', 'config.json'), 'utf-8'));
     expect(cfg.maxRetries).toBe(5);
+    const snapshot = JSON.parse(readFileSync(log.snapshotFile!, 'utf-8'));
+    expect(snapshot.files['.flowpilot/config.json']).toBe('{"maxRetries":2}');
   });
 
   it('appends experiment log to experiments.json', async () => {
@@ -191,7 +193,6 @@ describe('review', () => {
   });
 
   it('metric degradation triggers rollback', async () => {
-    // Setup history with two rounds
     const histDir = join(base, '.flowpilot', 'history');
     mkdirSync(histDir, { recursive: true });
     const good: WorkflowStats = makeStats({ totalTasks: 10, failCount: 1, skipCount: 0, retryTotal: 1 });
@@ -199,14 +200,13 @@ describe('review', () => {
     writeFileSync(join(histDir, '001.json'), JSON.stringify(good));
     writeFileSync(join(histDir, '002.json'), JSON.stringify(bad));
 
-    // Setup experiment log for rollback
     const evoDir = join(base, '.flowpilot', 'evolution');
     mkdirSync(evoDir, { recursive: true });
-    const configPath = join(base, '.workflow', 'config.json');
-    mkdirSync(join(base, '.workflow'), { recursive: true });
+    const configPath = join(base, '.flowpilot', 'config.json');
+    mkdirSync(join(base, '.flowpilot'), { recursive: true });
     writeFileSync(configPath, '{"maxRetries":5}');
     const snapshotPath = join(evoDir, 'snapshot-2024-01-01T00-00-00-000Z.json');
-    writeFileSync(snapshotPath, JSON.stringify({ timestamp: '', files: { 'config.json': '{"maxRetries":2}' } }));
+    writeFileSync(snapshotPath, JSON.stringify({ timestamp: '', files: { '.flowpilot/config.json': '{"maxRetries":2}' } }));
     const expLog = [{ timestamp: '', snapshotFile: snapshotPath, experiments: [
       { trigger: 't', observation: 'o', action: 'a', expected: 'e', target: 'config' as const, applied: true, snapshotBefore: '{"maxRetries":2}' },
     ] }];
@@ -215,14 +215,75 @@ describe('review', () => {
     const result = await review(base);
     expect(result.rolledBack).toBe(true);
     expect(result.rollbackReason).toBeDefined();
-    // Config should be rolled back
     const cfg = JSON.parse(readFileSync(configPath, 'utf-8'));
     expect(cfg.maxRetries).toBe(2);
   });
 
+  it('review rollback keeps compatibility with legacy snapshot config key', async () => {
+    const histDir = join(base, '.flowpilot', 'history');
+    mkdirSync(histDir, { recursive: true });
+    const good: WorkflowStats = makeStats({ totalTasks: 10, failCount: 0, skipCount: 0, retryTotal: 0 });
+    const bad: WorkflowStats = makeStats({ totalTasks: 10, failCount: 4, skipCount: 0, retryTotal: 0 });
+    writeFileSync(join(histDir, '001.json'), JSON.stringify(good));
+    writeFileSync(join(histDir, '002.json'), JSON.stringify(bad));
+
+    const evoDir = join(base, '.flowpilot', 'evolution');
+    mkdirSync(evoDir, { recursive: true });
+    const configPath = join(base, '.flowpilot', 'config.json');
+    mkdirSync(join(base, '.flowpilot'), { recursive: true });
+    writeFileSync(configPath, '{"maxRetries":6}');
+    const snapshotPath = join(evoDir, 'snapshot-2024-01-01T00-00-00-000Z.json');
+    writeFileSync(snapshotPath, JSON.stringify({ timestamp: '', files: { 'config.json': '{"maxRetries":3}' } }));
+    writeFileSync(join(evoDir, 'experiments.json'), JSON.stringify([
+      { timestamp: '', snapshotFile: snapshotPath, experiments: [] },
+    ]));
+
+    const result = await review(base);
+    expect(result.rolledBack).toBe(true);
+    const cfg = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(cfg.maxRetries).toBe(3);
+  });
+
+  it('review rollback restores the latest experiment snapshot when multiple snapshots exist', async () => {
+    const histDir = join(base, '.flowpilot', 'history');
+    mkdirSync(histDir, { recursive: true });
+    const good: WorkflowStats = makeStats({ totalTasks: 10, failCount: 0, skipCount: 0, retryTotal: 0 });
+    const bad: WorkflowStats = makeStats({ totalTasks: 10, failCount: 4, skipCount: 0, retryTotal: 0 });
+    writeFileSync(join(histDir, '001.json'), JSON.stringify(good));
+    writeFileSync(join(histDir, '002.json'), JSON.stringify(bad));
+
+    const evoDir = join(base, '.flowpilot', 'evolution');
+    mkdirSync(evoDir, { recursive: true });
+    const configPath = join(base, '.flowpilot', 'config.json');
+    mkdirSync(join(base, '.flowpilot'), { recursive: true });
+    writeFileSync(configPath, '{"maxRetries":9}');
+
+    const olderSnapshotPath = join(evoDir, 'snapshot-2024-01-01T00-00-00-000Z.json');
+    writeFileSync(olderSnapshotPath, JSON.stringify({
+      timestamp: '',
+      files: { '.flowpilot/config.json': '{"maxRetries":2}' },
+    }));
+
+    const newerSnapshotPath = join(evoDir, 'snapshot-2024-01-02T00-00-00-000Z.json');
+    writeFileSync(newerSnapshotPath, JSON.stringify({
+      timestamp: '',
+      files: { '.flowpilot/config.json': '{"maxRetries":4}' },
+    }));
+
+    writeFileSync(join(evoDir, 'experiments.json'), JSON.stringify([
+      { timestamp: '2024-01-01T00:00:00.000Z', snapshotFile: olderSnapshotPath, experiments: [] },
+      { timestamp: '2024-01-02T00:00:00.000Z', snapshotFile: newerSnapshotPath, experiments: [] },
+    ]));
+
+    const result = await review(base);
+    expect(result.rolledBack).toBe(true);
+    const cfg = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(cfg.maxRetries).toBe(4);
+  });
+
   it('invalid config.json fails check', async () => {
-    mkdirSync(join(base, '.workflow'), { recursive: true });
-    writeFileSync(join(base, '.workflow', 'config.json'), '{broken json!!!');
+    mkdirSync(join(base, '.flowpilot'), { recursive: true });
+    writeFileSync(join(base, '.flowpilot', 'config.json'), '{broken json!!!');
     const result = await review(base);
     const configCheck = result.checks.find(c => c.name === 'config.json');
     expect(configCheck?.passed).toBe(false);
