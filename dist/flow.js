@@ -1376,13 +1376,18 @@ var FsWorkflowRepository = class {
       }
     } catch {
     }
-    const settingsPath = (0, import_path2.join)(this.base, ".claude", "settings.json");
+    const claudeDirPath = (0, import_path2.join)(this.base, ".claude");
+    const settingsPath = (0, import_path2.join)(claudeDirPath, "settings.json");
     try {
       const parsed = JSON.parse(await (0, import_promises2.readFile)(settingsPath, "utf-8"));
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         const cleaned = cleanupHookSettings(parsed, manifest);
         if (cleaned.effect === "delete") {
           await (0, import_promises2.unlink)(settingsPath);
+          try {
+            await (0, import_promises2.rmdir)(claudeDirPath);
+          } catch {
+          }
         } else if (cleaned.effect === "write") {
           await (0, import_promises2.writeFile)(settingsPath, cleaned.content, "utf-8");
         }

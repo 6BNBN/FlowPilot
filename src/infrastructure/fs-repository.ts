@@ -3,7 +3,7 @@
  * @description 文件系统仓储 - 基于 .workflow/.flowpilot 目录的分层记忆存储
  */
 
-import { mkdir, readFile, writeFile, unlink, rm, rename, readdir, stat, access } from 'fs/promises';
+import { mkdir, readFile, writeFile, unlink, rm, rename, readdir, stat, access, rmdir } from 'fs/promises';
 import { join } from 'path';
 import { openSync, closeSync, writeFileSync } from 'fs';
 import { hostname } from 'os';
@@ -698,13 +698,17 @@ export class FsWorkflowRepository implements WorkflowRepository {
       }
     } catch {}
 
-    const settingsPath = join(this.base, '.claude', 'settings.json');
+    const claudeDirPath = join(this.base, '.claude');
+    const settingsPath = join(claudeDirPath, 'settings.json');
     try {
       const parsed = JSON.parse(await readFile(settingsPath, 'utf-8'));
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         const cleaned = cleanupHookSettings(parsed as Record<string, unknown>, manifest);
         if (cleaned.effect === 'delete') {
           await unlink(settingsPath);
+          try {
+            await rmdir(claudeDirPath);
+          } catch {}
         } else if (cleaned.effect === 'write') {
           await writeFile(settingsPath, cleaned.content, 'utf-8');
         }

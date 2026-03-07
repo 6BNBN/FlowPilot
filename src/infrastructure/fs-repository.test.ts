@@ -249,6 +249,7 @@ describe('FsWorkflowRepository', () => {
 
     expect(existsSync(join(dir, 'CLAUDE.md'))).toBe(false);
     expect(existsSync(join(dir, '.claude', 'settings.json'))).toBe(false);
+    expect(existsSync(join(dir, '.claude'))).toBe(false);
     expect(existsSync(join(dir, '.gitignore'))).toBe(false);
   });
 
