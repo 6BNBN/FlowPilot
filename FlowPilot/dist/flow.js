@@ -2,23 +2,81 @@
 "use strict";
 
 // src/infrastructure/fs-repository.ts
-var import_promises = require("fs/promises");
-var import_path = require("path");
-var import_fs = require("fs");
+var import_promises2 = require("fs/promises");
+var import_path2 = require("path");
+var import_fs2 = require("fs");
+var import_os2 = require("os");
 
 // src/infrastructure/git.ts
 var import_node_child_process = require("child_process");
 var import_node_fs = require("fs");
-function getSubmodules() {
-  if (!(0, import_node_fs.existsSync)(".gitmodules")) return [];
-  const out = (0, import_node_child_process.execFileSync)("git", ["submodule", "--quiet", "foreach", "echo $sm_path"], { stdio: "pipe", encoding: "utf-8" });
-  return out.split("\n").filter(Boolean);
+var import_node_path = require("path");
+var FLOWPILOT_RUNTIME_PREFIXES = [".flowpilot/", ".workflow/"];
+var FLOWPILOT_RUNTIME_FILES = /* @__PURE__ */ new Set([".claude/settings.json"]);
+function normalizeGitPath(file) {
+  return file.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
+}
+function isFlowPilotRuntimePath(file) {
+  const norm = normalizeGitPath(file);
+  return FLOWPILOT_RUNTIME_FILES.has(norm) || FLOWPILOT_RUNTIME_PREFIXES.some((prefix) => norm === prefix.slice(0, -1) || norm.startsWith(prefix));
+}
+function filterCommitFiles(files) {
+  const seen = /* @__PURE__ */ new Set();
+  const result = [];
+  for (const file of files) {
+    const norm = normalizeGitPath(file);
+    if (!norm || isFlowPilotRuntimePath(norm) || seen.has(norm)) continue;
+    seen.add(norm);
+    result.push(norm);
+  }
+  return result;
+}
+function hasCachedChanges(cwd, files) {
+  try {
+    (0, import_node_child_process.execFileSync)("git", ["diff", "--cached", "--quiet", "--", ...files], { stdio: "pipe", cwd });
+    return false;
+  } catch (e) {
+    if (e?.status === 1) return true;
+    throw e;
+  }
+}
+function readGitPaths(cwd, args) {
+  try {
+    const out = (0, import_node_child_process.execFileSync)("git", args, { stdio: "pipe", cwd, encoding: "utf-8" });
+    return out.split("\n").map(normalizeGitPath).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+function getSubmodules(cwd = process.cwd()) {
+  if (!(0, import_node_fs.existsSync)((0, import_node_path.join)(cwd, ".gitmodules"))) return [];
+  const out = (0, import_node_child_process.execFileSync)("git", ["submodule", "--quiet", "foreach", "echo $sm_path"], { stdio: "pipe", cwd, encoding: "utf-8" });
+  return out.split("\n").map(normalizeGitPath).filter(Boolean);
+}
+function listDirtySubmoduleFiles(cwd, submodulePath) {
+  const submoduleCwd = (0, import_node_path.join)(cwd, submodulePath);
+  const groups = [
+    readGitPaths(submoduleCwd, ["diff", "--name-only", "--cached"]),
+    readGitPaths(submoduleCwd, ["diff", "--name-only"]),
+    readGitPaths(submoduleCwd, ["ls-files", "--others", "--exclude-standard"])
+  ];
+  const seen = /* @__PURE__ */ new Set();
+  const result = [];
+  for (const group of groups) {
+    for (const file of group) {
+      const fullPath = normalizeGitPath(`${submodulePath}/${file}`);
+      if (seen.has(fullPath)) continue;
+      seen.add(fullPath);
+      result.push(fullPath);
+    }
+  }
+  return result;
 }
 function groupBySubmodule(files, submodules) {
   const sorted = [...submodules].sort((a, b) => b.length - a.length);
   const groups = /* @__PURE__ */ new Map();
   for (const f of files) {
-    const norm = f.replace(/\\/g, "/");
+    const norm = normalizeGitPath(f);
     const sub = sorted.find((s) => norm.startsWith(s + "/"));
     const key = sub ?? "";
     const rel = sub ? norm.slice(sub.length + 1) : norm;
@@ -26,146 +84,208 @@ function groupBySubmodule(files, submodules) {
   }
   return groups;
 }
+function skipped(reason) {
+  return { status: "skipped", reason };
+}
 function commitIn(cwd, files, msg) {
   const opts = { stdio: "pipe", cwd, encoding: "utf-8" };
+  if (!files.length) return skipped("runtime-only");
   try {
-    if (files) {
-      for (const f of files) (0, import_node_child_process.execFileSync)("git", ["add", f], opts);
-    } else {
-      (0, import_node_child_process.execFileSync)("git", ["add", "-A"], opts);
+    for (const f of files) (0, import_node_child_process.execFileSync)("git", ["add", "--", f], opts);
+    if (!hasCachedChanges(cwd, files)) {
+      return skipped("no-staged-changes");
     }
-    const status = (0, import_node_child_process.execSync)("git diff --cached --quiet || echo HAS_CHANGES", opts).trim();
-    if (status === "HAS_CHANGES") {
-      (0, import_node_child_process.execFileSync)("git", ["commit", "-F", "-"], { ...opts, input: msg });
-    }
-    return null;
+    (0, import_node_child_process.execFileSync)("git", ["commit", "-F", "-", "--", ...files], { ...opts, input: msg });
+    return { status: "committed" };
   } catch (e) {
-    return `${cwd}: ${e.stderr?.toString?.() || e.message}`;
+    return { status: "failed", error: `${cwd}: ${e.stderr?.toString?.() || e.message}` };
   }
 }
 function gitCleanup() {
-  try {
-    const status = (0, import_node_child_process.execSync)("git status --porcelain", { stdio: "pipe", encoding: "utf-8" }).trim();
-    if (status) {
-      (0, import_node_child_process.execSync)('git stash push -m "flowpilot-resume: auto-stashed on interrupt recovery"', { stdio: "pipe" });
-    }
-  } catch {
-  }
 }
-function tagTask(taskId) {
+function listChangedFiles(cwd = process.cwd()) {
+  const seen = /* @__PURE__ */ new Set();
+  const result = [];
+  const submodules = getSubmodules(cwd);
+  const submoduleSet = new Set(submodules);
+  const groups = [
+    readGitPaths(cwd, ["diff", "--name-only", "--cached"]),
+    readGitPaths(cwd, ["diff", "--name-only"]),
+    readGitPaths(cwd, ["ls-files", "--others", "--exclude-standard"])
+  ];
+  for (const group of groups) {
+    for (const file of group) {
+      if (submoduleSet.has(file)) {
+        const nestedFiles = listDirtySubmoduleFiles(cwd, file);
+        if (nestedFiles.length === 0) {
+          if (!seen.has(file)) {
+            seen.add(file);
+            result.push(file);
+          }
+          continue;
+        }
+        for (const nestedFile of nestedFiles) {
+          if (seen.has(nestedFile)) continue;
+          seen.add(nestedFile);
+          result.push(nestedFile);
+        }
+        continue;
+      }
+      if (seen.has(file)) continue;
+      seen.add(file);
+      result.push(file);
+    }
+  }
+  return result;
+}
+function tagTask(taskId, cwd = process.cwd()) {
   try {
-    (0, import_node_child_process.execFileSync)("git", ["tag", `flowpilot/task-${taskId}`], { stdio: "pipe" });
+    (0, import_node_child_process.execFileSync)("git", ["tag", `flowpilot/task-${taskId}`], { stdio: "pipe", cwd });
     return null;
   } catch (e) {
     return e.stderr?.toString?.() || e.message;
   }
 }
-function rollbackToTask(taskId) {
+function rollbackToTask(taskId, cwd = process.cwd()) {
   const tag = `flowpilot/task-${taskId}`;
   try {
-    (0, import_node_child_process.execFileSync)("git", ["rev-parse", tag], { stdio: "pipe" });
-    const log2 = (0, import_node_child_process.execFileSync)("git", ["log", "--oneline", `${tag}..HEAD`], { stdio: "pipe", encoding: "utf-8" }).trim();
+    (0, import_node_child_process.execFileSync)("git", ["rev-parse", tag], { stdio: "pipe", cwd });
+    const log2 = (0, import_node_child_process.execFileSync)("git", ["log", "--oneline", `${tag}..HEAD`], { stdio: "pipe", cwd, encoding: "utf-8" }).trim();
     if (!log2) return "\u6CA1\u6709\u9700\u8981\u56DE\u6EDA\u7684\u63D0\u4EA4";
-    (0, import_node_child_process.execFileSync)("git", ["revert", "--no-commit", `${tag}..HEAD`], { stdio: "pipe" });
-    (0, import_node_child_process.execFileSync)("git", ["commit", "-m", `rollback: revert to task-${taskId}`], { stdio: "pipe" });
+    (0, import_node_child_process.execFileSync)("git", ["revert", "--no-commit", `${tag}..HEAD`], { stdio: "pipe", cwd });
+    (0, import_node_child_process.execFileSync)("git", ["commit", "-m", `rollback: revert to task-${taskId}`], { stdio: "pipe", cwd });
     return null;
   } catch (e) {
     try {
-      (0, import_node_child_process.execFileSync)("git", ["revert", "--abort"], { stdio: "pipe" });
+      (0, import_node_child_process.execFileSync)("git", ["revert", "--abort"], { stdio: "pipe", cwd });
     } catch {
     }
     return e.stderr?.toString?.() || e.message;
   }
 }
-function cleanTags() {
+function cleanTags(cwd = process.cwd()) {
   try {
-    const tags = (0, import_node_child_process.execFileSync)("git", ["tag", "-l", "flowpilot/*"], { stdio: "pipe", encoding: "utf-8" }).trim();
+    const tags = (0, import_node_child_process.execFileSync)("git", ["tag", "-l", "flowpilot/*"], { stdio: "pipe", cwd, encoding: "utf-8" }).trim();
     if (!tags) return;
     for (const t of tags.split("\n")) {
-      if (t) (0, import_node_child_process.execFileSync)("git", ["tag", "-d", t], { stdio: "pipe" });
+      if (t) (0, import_node_child_process.execFileSync)("git", ["tag", "-d", t], { stdio: "pipe", cwd });
     }
   } catch {
   }
 }
-function autoCommit(taskId, title, summary, files) {
+function autoCommit(taskId, title, summary, files, cwd = process.cwd()) {
   const msg = `task-${taskId}: ${title}
 
 ${summary}`;
-  const errors = [];
-  const submodules = getSubmodules();
+  if (!files?.length) return skipped("no-files");
+  const commitFiles = filterCommitFiles(files);
+  if (!commitFiles.length) return skipped("runtime-only");
+  const submodules = getSubmodules(cwd);
   if (!submodules.length) {
-    const err = commitIn(process.cwd(), files?.length ? files : null, msg);
-    return err;
+    return commitIn(cwd, commitFiles, msg);
   }
-  if (files?.length) {
-    const groups = groupBySubmodule(files, submodules);
-    for (const [sub, subFiles] of groups) {
-      if (sub) {
-        const err = commitIn(sub, subFiles, msg);
-        if (err) errors.push(err);
-      }
-    }
-    try {
-      const parentFiles = groups.get("") ?? [];
-      const touchedSubs = [...groups.keys()].filter((k) => k !== "");
-      for (const s of touchedSubs) (0, import_node_child_process.execFileSync)("git", ["add", s], { stdio: "pipe" });
-      for (const f of parentFiles) (0, import_node_child_process.execFileSync)("git", ["add", f], { stdio: "pipe" });
-      const status = (0, import_node_child_process.execSync)("git diff --cached --quiet || echo HAS_CHANGES", { stdio: "pipe", encoding: "utf-8" }).trim();
-      if (status === "HAS_CHANGES") {
-        (0, import_node_child_process.execFileSync)("git", ["commit", "-F", "-"], { stdio: "pipe", input: msg });
-      }
-    } catch (e) {
-      errors.push(`parent: ${e.stderr?.toString?.() || e.message}`);
-    }
-  } else {
-    for (const sub of submodules) {
-      const err2 = commitIn(sub, null, msg);
-      if (err2) errors.push(err2);
-    }
-    const err = commitIn(process.cwd(), null, msg);
-    if (err) errors.push(err);
+  const groups = groupBySubmodule(commitFiles, submodules);
+  const results = [];
+  for (const [sub, subFiles] of groups) {
+    if (!sub) continue;
+    results.push(commitIn((0, import_node_path.join)(cwd, sub), subFiles, msg));
   }
-  return errors.length ? errors.join("\n") : null;
+  const parentFiles = groups.get("") ?? [];
+  const touchedSubs = [...groups.keys()].filter((k) => k !== "");
+  const parentTargets = [...touchedSubs, ...parentFiles];
+  if (parentTargets.length) {
+    results.push(commitIn(cwd, parentTargets, msg));
+  }
+  const failures = results.filter((result) => result.status === "failed" && Boolean(result.error));
+  if (failures.length) {
+    return { status: "failed", error: failures.map((result) => result.error).join("\n") };
+  }
+  if (results.some((result) => result.status === "committed")) {
+    return { status: "committed" };
+  }
+  if (results.some((result) => result.status === "skipped" && result.reason === "no-staged-changes")) {
+    return skipped("no-staged-changes");
+  }
+  return skipped("runtime-only");
 }
 
 // src/infrastructure/verify.ts
 var import_node_child_process2 = require("child_process");
 var import_node_fs2 = require("fs");
-var import_node_path = require("path");
+var import_node_path2 = require("path");
 function loadConfig(cwd) {
-  try {
-    const raw = (0, import_node_fs2.readFileSync)((0, import_node_path.join)(cwd, ".workflow", "config.json"), "utf-8");
-    const cfg = JSON.parse(raw);
-    return cfg?.verify ?? {};
-  } catch {
-    return {};
+  for (const configPath of [
+    (0, import_node_path2.join)(cwd, ".flowpilot", "config.json"),
+    (0, import_node_path2.join)(cwd, ".workflow", "config.json")
+  ]) {
+    try {
+      const raw = (0, import_node_fs2.readFileSync)(configPath, "utf-8");
+      const cfg = JSON.parse(raw);
+      return cfg?.verify ?? {};
+    } catch {
+    }
   }
+  return {};
 }
 function runVerify(cwd) {
   const config = loadConfig(cwd);
-  const cmds = config.commands?.length ? config.commands : detectCommands(cwd);
+  const cmds = normalizeCommands(cwd, config.commands?.length ? config.commands : detectCommands(cwd));
   const timeout = (config.timeout ?? 300) * 1e3;
-  if (!cmds.length) return { passed: true, scripts: [] };
+  if (!cmds.length) return { passed: true, status: "not-found", scripts: [], steps: [] };
+  const steps = [];
   for (const cmd of cmds) {
     try {
       (0, import_node_child_process2.execSync)(cmd, { cwd, stdio: "pipe", timeout });
+      steps.push({ command: cmd, status: "passed" });
     } catch (e) {
       const stderr = e.stderr?.length ? e.stderr.toString() : "";
       const stdout = e.stdout?.length ? e.stdout.toString() : "";
       const out = stderr || stdout || "";
-      if (out.includes("No test files found")) continue;
-      if (out.includes("no test files")) continue;
-      return { passed: false, scripts: cmds, error: `${cmd} \u5931\u8D25:
-${out.slice(0, 500)}` };
+      const noTestsReason = detectNoTestsReason(out);
+      if (noTestsReason) {
+        steps.push({ command: cmd, status: "skipped", reason: noTestsReason });
+        continue;
+      }
+      const reason = out.slice(0, 500) || "\u547D\u4EE4\u6267\u884C\u5931\u8D25";
+      steps.push({ command: cmd, status: "failed", reason });
+      return { passed: false, status: "failed", scripts: cmds, steps, error: `${cmd} \u5931\u8D25:
+${reason}` };
     }
   }
-  return { passed: true, scripts: cmds };
+  return { passed: true, status: "passed", scripts: cmds, steps };
+}
+function detectNoTestsReason(output) {
+  if (output.includes("No test files found")) return "\u672A\u627E\u5230\u6D4B\u8BD5\u6587\u4EF6";
+  if (output.includes("no test files")) return "\u672A\u627E\u5230\u6D4B\u8BD5\u6587\u4EF6";
+  return null;
+}
+function normalizeCommands(cwd, commands) {
+  const testScript = loadPackageScripts(cwd).test;
+  return commands.map((command) => shouldForceVitestRun(command, testScript) ? "npm run test -- --run" : command);
+}
+function loadPackageScripts(cwd) {
+  try {
+    const pkg = JSON.parse((0, import_node_fs2.readFileSync)((0, import_node_path2.join)(cwd, "package.json"), "utf-8"));
+    const scripts = pkg?.scripts;
+    if (!scripts || typeof scripts !== "object" || Array.isArray(scripts)) return {};
+    return Object.fromEntries(
+      Object.entries(scripts).filter((entry) => typeof entry[1] === "string")
+    );
+  } catch {
+    return {};
+  }
+}
+function shouldForceVitestRun(command, testScript) {
+  if (command !== "npm run test" || !testScript) return false;
+  const normalizedScript = testScript.replace(/\s+/g, " ").trim();
+  if (!/\bvitest\b/.test(normalizedScript)) return false;
+  return !/\bvitest\b.*(?:\s|^)(?:run\b|--run\b)/.test(normalizedScript);
 }
 function detectCommands(cwd) {
-  const has = (f) => (0, import_node_fs2.existsSync)((0, import_node_path.join)(cwd, f));
+  const has = (f) => (0, import_node_fs2.existsSync)((0, import_node_path2.join)(cwd, f));
   if (has("package.json")) {
     try {
-      const s = JSON.parse((0, import_node_fs2.readFileSync)((0, import_node_path.join)(cwd, "package.json"), "utf-8")).scripts || {};
+      const s = JSON.parse((0, import_node_fs2.readFileSync)((0, import_node_path2.join)(cwd, "package.json"), "utf-8")).scripts || {};
       return ["build", "test", "lint"].filter((k) => k in s).map((k) => `npm run ${k}`);
     } catch {
     }
@@ -176,7 +296,7 @@ function detectCommands(cwd) {
     const cmds = [];
     if (has("pyproject.toml")) {
       try {
-        const txt = (0, import_node_fs2.readFileSync)((0, import_node_path.join)(cwd, "pyproject.toml"), "utf-8");
+        const txt = (0, import_node_fs2.readFileSync)((0, import_node_path2.join)(cwd, "pyproject.toml"), "utf-8");
         if (txt.includes("ruff")) cmds.push("ruff check .");
         if (txt.includes("mypy")) cmds.push("mypy .");
       } catch {
@@ -190,7 +310,7 @@ function detectCommands(cwd) {
   if (has("CMakeLists.txt")) return ["cmake --build build", "ctest --test-dir build"];
   if (has("Makefile")) {
     try {
-      const mk = (0, import_node_fs2.readFileSync)((0, import_node_path.join)(cwd, "Makefile"), "utf-8");
+      const mk = (0, import_node_fs2.readFileSync)((0, import_node_path2.join)(cwd, "Makefile"), "utf-8");
       const targets = [];
       if (/^build\s*:/m.test(mk)) targets.push("make build");
       if (/^test\s*:/m.test(mk)) targets.push("make test");
@@ -307,65 +427,713 @@ echo '\u6458\u8981 [REMEMBER] \u5173\u952E\u53D1\u73B0 [DECISION] \u6280\u672F\u
 
 <!-- flowpilot:end -->`;
 
-// src/infrastructure/fs-repository.ts
-async function loadProtocolTemplate(basePath2) {
+// src/infrastructure/runtime-state.ts
+var import_fs = require("fs");
+var import_promises = require("fs/promises");
+var import_os = require("os");
+var import_path = require("path");
+var DEFAULT_INVALID_LOCK_STALE_AFTER_MS = 3e4;
+var LINUX_BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id";
+var RUNTIME_DIR = ".workflow";
+var ACTIVATED_FILE = "activated.json";
+var DIRTY_BASELINE_FILE = "dirty-baseline.json";
+var OWNED_FILES_FILE = "owned-files.json";
+var SETUP_OWNED_FILES_FILE = "setup-owned.json";
+var INJECTIONS_FILE = "injections.json";
+var RUNTIME_PATH_PREFIXES = [".flowpilot/", ".workflow/"];
+var RUNTIME_FILES = /* @__PURE__ */ new Set([".claude/settings.json"]);
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isValidCreatedAt(value) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+function runtimeDir(basePath2) {
+  return (0, import_path.join)(basePath2, RUNTIME_DIR);
+}
+function runtimePath(basePath2, fileName) {
+  return (0, import_path.join)(runtimeDir(basePath2), fileName);
+}
+function normalizeRuntimePath(file) {
+  return file.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
+}
+function isRuntimeMetadataPath(file) {
+  return RUNTIME_FILES.has(file) || RUNTIME_PATH_PREFIXES.some((prefix) => file === prefix.slice(0, -1) || file.startsWith(prefix));
+}
+function isActivationMetadata(value) {
+  return isRecord(value) && typeof value.time === "number" && Number.isFinite(value.time) && Number.isInteger(value.pid) && value.pid > 0;
+}
+function normalizeDirtyFiles(files) {
+  const seen = /* @__PURE__ */ new Set();
+  const normalized = files.map(normalizeRuntimePath).filter((file) => file.length > 0).filter((file) => !isRuntimeMetadataPath(file));
+  for (const file of normalized) {
+    seen.add(file);
+  }
+  return [...seen].sort();
+}
+function isOwnedFilesState(value) {
+  return isRecord(value) && isRecord(value.byTask);
+}
+function isSetupOwnedState(value) {
+  return isRecord(value) && Array.isArray(value.files);
+}
+function isHookEntry(value) {
+  if (!isRecord(value) || typeof value.matcher !== "string" || !Array.isArray(value.hooks)) {
+    return false;
+  }
+  return value.hooks.every((hook) => isRecord(hook) && typeof hook.type === "string" && typeof hook.prompt === "string");
+}
+function isExactFileSnapshot(value) {
+  return isRecord(value) && typeof value.exists === "boolean" && (value.rawContent === void 0 || typeof value.rawContent === "string");
+}
+function isClaudeMdInjectionState(value) {
+  return isRecord(value) && typeof value.created === "boolean" && typeof value.block === "string" && (value.scaffold === void 0 || typeof value.scaffold === "string");
+}
+function isHooksInjectionState(value) {
+  return isRecord(value) && typeof value.created === "boolean" && Array.isArray(value.preToolUse) && value.preToolUse.every(isHookEntry) && (value.settingsBaseline === void 0 || isExactFileSnapshot(value.settingsBaseline));
+}
+function isGitignoreInjectionState(value) {
+  return isRecord(value) && typeof value.created === "boolean" && Array.isArray(value.rules) && value.rules.every((rule) => typeof rule === "string") && (value.baseline === void 0 || isExactFileSnapshot(value.baseline));
+}
+function isSetupInjectionManifest(value) {
+  return isRecord(value) && (value.claudeMd === void 0 || isClaudeMdInjectionState(value.claudeMd)) && (value.hooks === void 0 || isHooksInjectionState(value.hooks)) && (value.gitignore === void 0 || isGitignoreInjectionState(value.gitignore));
+}
+function normalizeSetupOwnedState(state) {
+  return {
+    files: normalizeDirtyFiles(state.files.filter((file) => typeof file === "string"))
+  };
+}
+function normalizeOwnedFilesState(state) {
+  return {
+    byTask: Object.fromEntries(
+      Object.entries(state.byTask).filter(([taskId]) => taskId.trim().length > 0).map(([taskId, files]) => [taskId, normalizeDirtyFiles(Array.isArray(files) ? files.filter((file) => typeof file === "string") : [])])
+    )
+  };
+}
+function dedupeHookEntries(entries) {
+  const byMatcher = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    byMatcher.set(entry.matcher, {
+      matcher: entry.matcher,
+      hooks: entry.hooks.map((hook) => ({ type: hook.type, prompt: hook.prompt }))
+    });
+  }
+  return [...byMatcher.values()].sort((a, b) => a.matcher.localeCompare(b.matcher));
+}
+function normalizeSetupInjectionManifest(manifest) {
+  const normalized = {};
+  if (manifest.claudeMd) {
+    normalized.claudeMd = {
+      created: manifest.claudeMd.created,
+      block: manifest.claudeMd.block,
+      ...manifest.claudeMd.scaffold !== void 0 ? { scaffold: manifest.claudeMd.scaffold } : {}
+    };
+  }
+  if (manifest.hooks) {
+    normalized.hooks = {
+      created: manifest.hooks.created,
+      preToolUse: dedupeHookEntries(manifest.hooks.preToolUse),
+      ...manifest.hooks.settingsBaseline ? {
+        settingsBaseline: {
+          exists: manifest.hooks.settingsBaseline.exists,
+          ...manifest.hooks.settingsBaseline.rawContent !== void 0 ? { rawContent: manifest.hooks.settingsBaseline.rawContent } : {}
+        }
+      } : {}
+    };
+  }
+  if (manifest.gitignore) {
+    normalized.gitignore = {
+      created: manifest.gitignore.created,
+      rules: [...new Set(manifest.gitignore.rules)],
+      ...manifest.gitignore.baseline ? {
+        baseline: {
+          exists: manifest.gitignore.baseline.exists,
+          ...manifest.gitignore.baseline.rawContent !== void 0 ? { rawContent: manifest.gitignore.baseline.rawContent } : {}
+        }
+      } : {}
+    };
+  }
+  return normalized;
+}
+function compareDirtyFilesAgainstBaseline(currentFiles, baselineFiles) {
+  const normalizedCurrentFiles = normalizeDirtyFiles(currentFiles);
+  const normalizedBaselineFiles = normalizeDirtyFiles(baselineFiles);
+  const baselineSet = new Set(normalizedBaselineFiles);
+  return {
+    currentFiles: normalizedCurrentFiles,
+    preservedBaselineFiles: normalizedCurrentFiles.filter((file) => baselineSet.has(file)),
+    newDirtyFiles: normalizedCurrentFiles.filter((file) => !baselineSet.has(file))
+  };
+}
+function getRuntimeLocalityToken() {
   try {
-    const config = JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(basePath2, ".workflow", "config.json"), "utf-8"));
-    if (config.protocolTemplate) {
-      return await (0, import_promises.readFile)((0, import_path.join)(basePath2, config.protocolTemplate), "utf-8");
-    }
+    const token = (0, import_fs.readFileSync)(LINUX_BOOT_ID_PATH, "utf-8").trim();
+    return token.length > 0 ? token : void 0;
   } catch {
+    return void 0;
+  }
+}
+function createRuntimeLockMetadata() {
+  const localityToken = getRuntimeLocalityToken();
+  return {
+    pid: process.pid,
+    hostname: (0, import_os.hostname)(),
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    ...localityToken ? { localityToken } : {}
+  };
+}
+function serializeRuntimeLock(metadata) {
+  return JSON.stringify(metadata);
+}
+function parseRuntimeLock(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    if (!isRecord(parsed)) return { valid: false, reason: "invalid-shape" };
+    const pid = parsed.pid;
+    const hostname2 = parsed.hostname;
+    const createdAt = parsed.createdAt;
+    const localityToken = parsed.localityToken;
+    if (!Number.isInteger(pid) || pid <= 0 || typeof hostname2 !== "string" || hostname2.length === 0 || !isValidCreatedAt(createdAt) || localityToken !== void 0 && (typeof localityToken !== "string" || localityToken.length === 0)) {
+      return { valid: false, reason: "invalid-shape" };
+    }
+    return {
+      valid: true,
+      metadata: {
+        pid,
+        hostname: hostname2,
+        createdAt,
+        ...typeof localityToken === "string" ? { localityToken } : {}
+      }
+    };
+  } catch {
+    return { valid: false, reason: "invalid-json" };
+  }
+}
+function getRuntimeLockAgeMs(metadata, nowMs = Date.now()) {
+  return Math.max(0, nowMs - Date.parse(metadata.createdAt));
+}
+function isRuntimeLockOwnedByProcess(parsed, pid = process.pid, currentHostname = (0, import_os.hostname)(), currentLocalityToken = getRuntimeLocalityToken()) {
+  if (!parsed.valid || parsed.metadata.pid !== pid || parsed.metadata.hostname !== currentHostname) {
+    return false;
+  }
+  if (parsed.metadata.localityToken === void 0) {
+    return true;
+  }
+  return currentLocalityToken !== void 0 && parsed.metadata.localityToken === currentLocalityToken;
+}
+function isRuntimeLockStale(input) {
+  if (!input.parsed.valid) {
+    return {
+      stale: input.fileAgeMs >= input.staleAfterMs,
+      reason: "invalid-lock-payload",
+      ageMs: input.fileAgeMs
+    };
+  }
+  const ageMs = getRuntimeLockAgeMs(input.parsed.metadata, input.nowMs ?? Date.now());
+  if (input.parsed.metadata.hostname !== input.currentHostname) {
+    return {
+      stale: false,
+      reason: "foreign-host-lock",
+      owner: input.parsed.metadata,
+      ageMs
+    };
+  }
+  if (input.parsed.metadata.localityToken !== void 0 && input.currentLocalityToken !== void 0) {
+    if (input.parsed.metadata.localityToken !== input.currentLocalityToken) {
+      return {
+        stale: false,
+        reason: "foreign-host-lock",
+        owner: input.parsed.metadata,
+        ageMs
+      };
+    }
+  } else {
+    return {
+      stale: false,
+      reason: "unverified-locality",
+      owner: input.parsed.metadata,
+      ageMs
+    };
+  }
+  if (input.isProcessAlive(input.parsed.metadata.pid)) {
+    return {
+      stale: false,
+      reason: "live-owner",
+      owner: input.parsed.metadata,
+      ageMs
+    };
+  }
+  return {
+    stale: true,
+    reason: "dead-owner",
+    owner: input.parsed.metadata,
+    ageMs
+  };
+}
+async function loadActivationState(basePath2) {
+  try {
+    const parsed = JSON.parse(await (0, import_promises.readFile)(runtimePath(basePath2, ACTIVATED_FILE), "utf-8"));
+    if (!isRecord(parsed)) return {};
+    const entries = Object.entries(parsed).filter((entry) => isActivationMetadata(entry[1]));
+    return Object.fromEntries(entries);
+  } catch {
+    return {};
+  }
+}
+async function recordTaskActivations(basePath2, ids, nowMs = Date.now(), pid = process.pid) {
+  const current = await loadActivationState(basePath2);
+  const next = ids.reduce(
+    (state, id) => ({ ...state, [id]: { time: nowMs, pid } }),
+    current
+  );
+  await (0, import_promises.mkdir)(runtimeDir(basePath2), { recursive: true });
+  const path = runtimePath(basePath2, ACTIVATED_FILE);
+  await (0, import_promises.writeFile)(path + ".tmp", JSON.stringify(next), "utf-8");
+  await (0, import_promises.rename)(path + ".tmp", path);
+  return next;
+}
+async function getTaskActivationAge(basePath2, id, _pid = process.pid, nowMs = Date.now()) {
+  const state = await loadActivationState(basePath2);
+  const entry = state[id];
+  if (!entry) return Infinity;
+  return Math.max(0, nowMs - entry.time);
+}
+async function loadDirtyBaseline(basePath2) {
+  try {
+    const parsed = JSON.parse(await (0, import_promises.readFile)(runtimePath(basePath2, DIRTY_BASELINE_FILE), "utf-8"));
+    if (!isRecord(parsed) || !isValidCreatedAt(parsed.capturedAt) || !Array.isArray(parsed.files)) {
+      return null;
+    }
+    const files = parsed.files.filter((file) => typeof file === "string");
+    return {
+      capturedAt: parsed.capturedAt,
+      files: normalizeDirtyFiles(files)
+    };
+  } catch {
+    return null;
+  }
+}
+async function saveDirtyBaseline(basePath2, files, capturedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+  const baseline = {
+    capturedAt,
+    files: normalizeDirtyFiles(files)
+  };
+  await (0, import_promises.mkdir)(runtimeDir(basePath2), { recursive: true });
+  const path = runtimePath(basePath2, DIRTY_BASELINE_FILE);
+  await (0, import_promises.writeFile)(path + ".tmp", JSON.stringify(baseline), "utf-8");
+  await (0, import_promises.rename)(path + ".tmp", path);
+  return baseline;
+}
+async function loadOwnedFiles(basePath2) {
+  try {
+    const parsed = JSON.parse(await (0, import_promises.readFile)(runtimePath(basePath2, OWNED_FILES_FILE), "utf-8"));
+    if (!isOwnedFilesState(parsed)) {
+      return { byTask: {} };
+    }
+    return normalizeOwnedFilesState(parsed);
+  } catch {
+    return { byTask: {} };
+  }
+}
+async function recordOwnedFiles(basePath2, taskId, files) {
+  const current = await loadOwnedFiles(basePath2);
+  const next = normalizeOwnedFilesState({
+    byTask: {
+      ...current.byTask,
+      [taskId]: normalizeDirtyFiles(files)
+    }
+  });
+  await (0, import_promises.mkdir)(runtimeDir(basePath2), { recursive: true });
+  const path = runtimePath(basePath2, OWNED_FILES_FILE);
+  await (0, import_promises.writeFile)(path + ".tmp", JSON.stringify(next), "utf-8");
+  await (0, import_promises.rename)(path + ".tmp", path);
+  return next;
+}
+async function loadSetupOwnedFiles(basePath2) {
+  try {
+    const parsed = JSON.parse(await (0, import_promises.readFile)(runtimePath(basePath2, SETUP_OWNED_FILES_FILE), "utf-8"));
+    if (!isSetupOwnedState(parsed)) {
+      return { files: [] };
+    }
+    return normalizeSetupOwnedState(parsed);
+  } catch {
+    return { files: [] };
+  }
+}
+async function saveSetupOwnedFiles(basePath2, files) {
+  const next = normalizeSetupOwnedState({ files });
+  await (0, import_promises.mkdir)(runtimeDir(basePath2), { recursive: true });
+  const path = runtimePath(basePath2, SETUP_OWNED_FILES_FILE);
+  await (0, import_promises.writeFile)(path + ".tmp", JSON.stringify(next), "utf-8");
+  await (0, import_promises.rename)(path + ".tmp", path);
+  return next;
+}
+async function loadSetupInjectionManifest(basePath2) {
+  try {
+    const parsed = JSON.parse(await (0, import_promises.readFile)(runtimePath(basePath2, INJECTIONS_FILE), "utf-8"));
+    if (!isSetupInjectionManifest(parsed)) {
+      return {};
+    }
+    return normalizeSetupInjectionManifest(parsed);
+  } catch {
+    return {};
+  }
+}
+async function mergeSetupInjectionManifest(basePath2, patch) {
+  const current = await loadSetupInjectionManifest(basePath2);
+  const next = normalizeSetupInjectionManifest({
+    ...current,
+    ...patch.claudeMd ? { claudeMd: patch.claudeMd } : {},
+    ...patch.gitignore ? { gitignore: patch.gitignore } : {},
+    ...patch.hooks ? {
+      hooks: {
+        created: current.hooks?.created || patch.hooks.created,
+        preToolUse: [
+          ...current.hooks?.preToolUse ?? [],
+          ...patch.hooks.preToolUse
+        ],
+        settingsBaseline: current.hooks?.settingsBaseline ?? patch.hooks.settingsBaseline
+      }
+    } : {}
+  });
+  await (0, import_promises.mkdir)(runtimeDir(basePath2), { recursive: true });
+  const path = runtimePath(basePath2, INJECTIONS_FILE);
+  await (0, import_promises.writeFile)(path + ".tmp", JSON.stringify(next), "utf-8");
+  await (0, import_promises.rename)(path + ".tmp", path);
+  return next;
+}
+function collectOwnedFiles(state) {
+  const allFiles = Object.values(state.byTask).flatMap((files) => files);
+  return normalizeDirtyFiles(allFiles);
+}
+function defaultInvalidLockStaleAfterMs() {
+  return DEFAULT_INVALID_LOCK_STALE_AFTER_MS;
+}
+
+// src/infrastructure/fs-repository.ts
+var PERSISTENT_DIR = ".flowpilot";
+var LEGACY_RUNTIME_DIR = ".workflow";
+var CONFIG_FILE = "config.json";
+var VALID_WORKFLOW_STATUS = /* @__PURE__ */ new Set(["idle", "running", "finishing", "completed", "aborted"]);
+var VALID_TASK_STATUS = /* @__PURE__ */ new Set(["pending", "active", "done", "skipped", "failed"]);
+function parseProgressMarkdown(raw) {
+  const lines = raw.split("\n");
+  const name = (lines[0] ?? "").replace(/^#\s*/, "").trim();
+  let status = "idle";
+  let current = null;
+  let startTime;
+  const tasks = [];
+  for (const line of lines) {
+    if (line.startsWith("\u72B6\u6001: ")) {
+      const parsedStatus = line.slice(4).trim();
+      status = VALID_WORKFLOW_STATUS.has(parsedStatus) ? parsedStatus : "idle";
+    }
+    if (line.startsWith("\u5F53\u524D: ")) current = line.slice(4).trim();
+    if (current === "\u65E0") current = null;
+    if (line.startsWith("\u5F00\u59CB: ")) startTime = line.slice(4).trim();
+    const matchedTask = line.match(/^\|\s*(\d{3,})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
+    if (matchedTask) {
+      const depsRaw = matchedTask[4].trim();
+      tasks.push({
+        id: matchedTask[1],
+        title: matchedTask[2],
+        type: matchedTask[3],
+        deps: depsRaw === "-" ? [] : depsRaw.split(",").map((dep) => dep.trim()),
+        status: VALID_TASK_STATUS.has(matchedTask[5]) ? matchedTask[5] : "pending",
+        retries: parseInt(matchedTask[6], 10),
+        summary: matchedTask[7] === "-" ? "" : matchedTask[7],
+        description: matchedTask[8] === "-" ? "" : matchedTask[8]
+      });
+    }
+  }
+  return { name, status, current, tasks, ...startTime ? { startTime } : {} };
+}
+async function readConfigFile(path) {
+  try {
+    const parsed = JSON.parse(await (0, import_promises2.readFile)(path, "utf-8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+async function readPersistedConfig(basePath2) {
+  const currentConfig = await readConfigFile((0, import_path2.join)(basePath2, PERSISTENT_DIR, CONFIG_FILE));
+  if (currentConfig) return currentConfig;
+  return readConfigFile((0, import_path2.join)(basePath2, LEGACY_RUNTIME_DIR, CONFIG_FILE));
+}
+async function loadProtocolTemplate(basePath2) {
+  const config = await readPersistedConfig(basePath2);
+  const protocolTemplate = config?.protocolTemplate;
+  if (typeof protocolTemplate === "string" && protocolTemplate.length > 0) {
+    try {
+      return await (0, import_promises2.readFile)((0, import_path2.join)(basePath2, protocolTemplate), "utf-8");
+    } catch {
+    }
   }
   return PROTOCOL_TEMPLATE;
+}
+function hookEntry(matcher) {
+  return {
+    matcher,
+    hooks: [{ type: "prompt", prompt: "BLOCK this tool call. FlowPilot requires using node flow.js commands instead of native task tools." }]
+  };
+}
+function dedupeHookEntries2(entries) {
+  const seen = /* @__PURE__ */ new Set();
+  const result = [];
+  for (const entry of entries) {
+    if (seen.has(entry.matcher)) continue;
+    seen.add(entry.matcher);
+    result.push({
+      matcher: entry.matcher,
+      hooks: entry.hooks.map((hook) => ({ type: hook.type, prompt: hook.prompt }))
+    });
+  }
+  return result;
+}
+function isHookEntry2(value) {
+  return Boolean(value) && typeof value === "object" && typeof value.matcher === "string" && Array.isArray(value.hooks) && value.hooks.every((hook) => Boolean(hook) && typeof hook.type === "string" && typeof hook.prompt === "string");
+}
+function serializeHookEntry(entry) {
+  return JSON.stringify({
+    matcher: entry.matcher,
+    hooks: entry.hooks.map((hook) => ({ type: hook.type, prompt: hook.prompt }))
+  });
+}
+function normalizeCleanupContent(content) {
+  if (content.trim().length === 0) {
+    return "";
+  }
+  return content.replace(/^\n+/, "").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+}
+function cleanupClaudeContent(content, manifest) {
+  const claude = manifest.claudeMd;
+  if (!claude || claude.block.length === 0 || !content.includes(claude.block)) {
+    return { effect: "noop" };
+  }
+  let next = content.replace(claude.block, "");
+  if (claude.created && claude.scaffold && next.startsWith(claude.scaffold)) {
+    next = next.slice(claude.scaffold.length);
+  }
+  const normalized = normalizeCleanupContent(next);
+  if (normalized.length === 0) {
+    return { effect: "delete" };
+  }
+  return normalized === content ? { effect: "noop" } : { effect: "write", content: normalized };
+}
+function cleanupHookSettings(settings, manifest) {
+  const hooksManifest = manifest.hooks;
+  if (!hooksManifest) return { effect: "noop" };
+  const settingsHooks = settings.hooks;
+  const hooks = settingsHooks && typeof settingsHooks === "object" && !Array.isArray(settingsHooks) ? settingsHooks : {};
+  const currentPreToolUse = hooks.PreToolUse;
+  const existingPreToolUse = Array.isArray(currentPreToolUse) ? currentPreToolUse.filter(isHookEntry2) : [];
+  const ownedCounts = hooksManifest.preToolUse.reduce((counts, entry) => {
+    const key = serializeHookEntry(entry);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    return counts;
+  }, /* @__PURE__ */ new Map());
+  const remainingPreToolUse = existingPreToolUse.filter((entry) => {
+    const key = serializeHookEntry(entry);
+    const remaining = ownedCounts.get(key) ?? 0;
+    if (remaining === 0) return true;
+    ownedCounts.set(key, remaining - 1);
+    return false;
+  });
+  const nextHooks = { ...hooks };
+  if (remainingPreToolUse.length > 0) {
+    nextHooks.PreToolUse = remainingPreToolUse;
+  } else {
+    delete nextHooks.PreToolUse;
+  }
+  const nextSettings = { ...settings };
+  if (Object.keys(nextHooks).length > 0) {
+    nextSettings.hooks = nextHooks;
+  } else {
+    delete nextSettings.hooks;
+  }
+  if (hooksManifest.created && Object.keys(nextSettings).length === 0) {
+    return { effect: "delete" };
+  }
+  const serializedCurrent = JSON.stringify(settings, null, 2) + "\n";
+  const baselineRaw = hooksManifest.settingsBaseline?.rawContent;
+  if (hooksManifest.settingsBaseline?.exists && baselineRaw !== void 0) {
+    try {
+      const parsedBaseline = JSON.parse(baselineRaw);
+      if (JSON.stringify(parsedBaseline) === JSON.stringify(nextSettings)) {
+        return baselineRaw === serializedCurrent ? { effect: "noop" } : { effect: "write", content: baselineRaw };
+      }
+    } catch {
+    }
+  }
+  const serializedNext = JSON.stringify(nextSettings, null, 2) + "\n";
+  return serializedNext === serializedCurrent ? { effect: "noop" } : { effect: "write", content: serializedNext };
+}
+function isExactFileSnapshotEqual(snapshot, current) {
+  if (!snapshot) return false;
+  if (snapshot.exists !== current.exists) return false;
+  if (!snapshot.exists) return true;
+  return snapshot.rawContent === current.rawContent;
+}
+function cleanupGitignoreContent(content, manifest) {
+  const gitignore = manifest.gitignore;
+  if (!gitignore) return { effect: "noop" };
+  const ownedRules = new Set(gitignore.rules.map((rule) => rule.trimEnd()));
+  let removed = false;
+  const remainingLines = content.split(/\r?\n/).filter((line) => {
+    if (ownedRules.has(line.trimEnd())) {
+      removed = true;
+      return false;
+    }
+    return true;
+  });
+  if (!removed) {
+    return { effect: "noop" };
+  }
+  while (remainingLines.length > 0 && remainingLines[remainingLines.length - 1] === "") {
+    remainingLines.pop();
+  }
+  const normalized = remainingLines.length > 0 ? `${remainingLines.join("\n")}
+` : "";
+  if (normalized.length === 0) {
+    return { effect: "noop" };
+  }
+  return normalized === content ? { effect: "noop" } : { effect: "write", content: normalized };
 }
 var FsWorkflowRepository = class {
   root;
   ctxDir;
   historyDir;
   evolutionDir;
+  configDir;
   base;
+  async snapshotExactFile(path) {
+    try {
+      return {
+        exists: true,
+        rawContent: await (0, import_promises2.readFile)(path, "utf-8")
+      };
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        return { exists: false };
+      }
+      throw error;
+    }
+  }
   constructor(basePath2) {
     this.base = basePath2;
-    this.root = (0, import_path.join)(basePath2, ".workflow");
-    this.ctxDir = (0, import_path.join)(this.root, "context");
-    this.historyDir = (0, import_path.join)(basePath2, ".flowpilot", "history");
-    this.evolutionDir = (0, import_path.join)(basePath2, ".flowpilot", "evolution");
+    this.root = (0, import_path2.join)(basePath2, LEGACY_RUNTIME_DIR);
+    this.ctxDir = (0, import_path2.join)(this.root, "context");
+    this.configDir = (0, import_path2.join)(basePath2, PERSISTENT_DIR);
+    this.historyDir = (0, import_path2.join)(basePath2, PERSISTENT_DIR, "history");
+    this.evolutionDir = (0, import_path2.join)(basePath2, PERSISTENT_DIR, "evolution");
   }
   projectRoot() {
     return this.base;
   }
   async ensure(dir) {
-    await (0, import_promises.mkdir)(dir, { recursive: true });
+    await (0, import_promises2.mkdir)(dir, { recursive: true });
+  }
+  isProcessAlive(pid) {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      if (error?.code === "ESRCH") return false;
+      return true;
+    }
+  }
+  async reclaimStaleLock(lockPath) {
+    try {
+      const [raw, fileStat] = await Promise.all([
+        (0, import_promises2.readFile)(lockPath, "utf-8"),
+        (0, import_promises2.stat)(lockPath)
+      ]);
+      const parsed = parseRuntimeLock(raw);
+      const decision = isRuntimeLockStale({
+        parsed,
+        fileAgeMs: Date.now() - fileStat.mtimeMs,
+        staleAfterMs: defaultInvalidLockStaleAfterMs(),
+        isProcessAlive: (pid) => this.isProcessAlive(pid),
+        currentHostname: (0, import_os2.hostname)(),
+        currentLocalityToken: getRuntimeLocalityToken()
+      });
+      if (!decision.stale) return false;
+      await (0, import_promises2.unlink)(lockPath);
+      return true;
+    } catch (error) {
+      if (error?.code === "ENOENT") return true;
+      return false;
+    }
+  }
+  async describeLockFailure(lockPath) {
+    try {
+      const raw = await (0, import_promises2.readFile)(lockPath, "utf-8");
+      const parsed = parseRuntimeLock(raw);
+      if (!parsed.valid) return "\u65E0\u6CD5\u83B7\u53D6\u6587\u4EF6\u9501\uFF1A\u73B0\u6709\u9501\u5143\u6570\u636E\u65E0\u6548\u4E14\u672A\u8FBE\u5230\u5B89\u5168\u56DE\u6536\u6761\u4EF6";
+      const ageMs = Math.max(0, Date.now() - Date.parse(parsed.metadata.createdAt));
+      if (parsed.metadata.hostname === (0, import_os2.hostname)() && parsed.metadata.localityToken === void 0) {
+        return "\u65E0\u6CD5\u83B7\u53D6\u6587\u4EF6\u9501\uFF1A\u540C\u4E3B\u673A\u9501\u7F3A\u5C11\u53EF\u8BC1\u660E\u672C\u5730\u6027\u7684\u5143\u6570\u636E\uFF0C\u62D2\u7EDD\u76F2\u76EE\u56DE\u6536";
+      }
+      return `\u65E0\u6CD5\u83B7\u53D6\u6587\u4EF6\u9501\uFF1A\u5F53\u524D\u7531 pid ${parsed.metadata.pid} \u5728 ${parsed.metadata.hostname} \u4E0A\u6301\u6709\uFF0C\u5DF2\u5B58\u5728 ${ageMs}ms`;
+    } catch {
+      return "\u65E0\u6CD5\u83B7\u53D6\u6587\u4EF6\u9501";
+    }
   }
   /** 文件锁：用 O_EXCL 创建 lockfile，防止并发读写 */
   async lock(maxWait = 5e3) {
     await this.ensure(this.root);
-    const lockPath = (0, import_path.join)(this.root, ".lock");
+    const lockPath = (0, import_path2.join)(this.root, ".lock");
     const start = Date.now();
-    while (Date.now() - start < maxWait) {
+    const tryAcquire = async () => {
+      let fd;
       try {
-        const fd = (0, import_fs.openSync)(lockPath, "wx");
-        (0, import_fs.closeSync)(fd);
-        return;
-      } catch {
-        await new Promise((r) => setTimeout(r, 50));
+        fd = (0, import_fs2.openSync)(lockPath, "wx");
+      } catch (error) {
+        if (error?.code === "EEXIST") return false;
+        throw error;
       }
+      try {
+        const payload = serializeRuntimeLock(createRuntimeLockMetadata());
+        (0, import_fs2.writeFileSync)(fd, payload, "utf-8");
+      } catch (error) {
+        try {
+          (0, import_fs2.closeSync)(fd);
+        } catch {
+        }
+        try {
+          await (0, import_promises2.unlink)(lockPath);
+        } catch {
+        }
+        throw error;
+      }
+      try {
+        (0, import_fs2.closeSync)(fd);
+        return true;
+      } catch (error) {
+        try {
+          await (0, import_promises2.unlink)(lockPath);
+        } catch {
+        }
+        throw error;
+      }
+    };
+    while (Date.now() - start < maxWait) {
+      if (await tryAcquire()) return;
+      await new Promise((r) => setTimeout(r, 50));
     }
-    try {
-      await (0, import_promises.unlink)(lockPath);
-    } catch {
-    }
-    try {
-      const fd = (0, import_fs.openSync)(lockPath, "wx");
-      (0, import_fs.closeSync)(fd);
-      return;
-    } catch {
-      throw new Error("\u65E0\u6CD5\u83B7\u53D6\u6587\u4EF6\u9501");
-    }
+    const reclaimed = await this.reclaimStaleLock(lockPath);
+    if (reclaimed && await tryAcquire()) return;
+    throw new Error(await this.describeLockFailure(lockPath));
   }
   async unlock() {
+    const lockPath = (0, import_path2.join)(this.root, ".lock");
     try {
-      await (0, import_promises.unlink)((0, import_path.join)(this.root, ".lock"));
+      const raw = await (0, import_promises2.readFile)(lockPath, "utf-8");
+      const parsed = parseRuntimeLock(raw);
+      if (!isRuntimeLockOwnedByProcess(parsed)) return;
+      await (0, import_promises2.unlink)(lockPath);
     } catch {
     }
   }
@@ -387,68 +1155,34 @@ var FsWorkflowRepository = class {
       const esc = (s) => (s || "-").replace(/\|/g, "\u2223").replace(/\n/g, " ");
       lines.push(`| ${t.id} | ${esc(t.title)} | ${t.type} | ${deps} | ${t.status} | ${t.retries} | ${esc(t.summary)} | ${esc(t.description)} |`);
     }
-    const p = (0, import_path.join)(this.root, "progress.md");
-    await (0, import_promises.writeFile)(p + ".tmp", lines.join("\n") + "\n", "utf-8");
-    await (0, import_promises.rename)(p + ".tmp", p);
+    const p = (0, import_path2.join)(this.root, "progress.md");
+    await (0, import_promises2.writeFile)(p + ".tmp", lines.join("\n") + "\n", "utf-8");
+    await (0, import_promises2.rename)(p + ".tmp", p);
   }
   async loadProgress() {
     try {
-      const raw = await (0, import_promises.readFile)((0, import_path.join)(this.root, "progress.md"), "utf-8");
-      return this.parseProgress(raw);
+      const raw = await (0, import_promises2.readFile)((0, import_path2.join)(this.root, "progress.md"), "utf-8");
+      return parseProgressMarkdown(raw);
     } catch {
       return null;
     }
   }
-  parseProgress(raw) {
-    const validWfStatus = /* @__PURE__ */ new Set(["idle", "running", "finishing", "completed", "aborted"]);
-    const validTaskStatus = /* @__PURE__ */ new Set(["pending", "active", "done", "skipped", "failed"]);
-    const lines = raw.split("\n");
-    const name = (lines[0] ?? "").replace(/^#\s*/, "").trim();
-    let status = "idle";
-    let current = null;
-    let startTime;
-    const tasks = [];
-    for (const line of lines) {
-      if (line.startsWith("\u72B6\u6001: ")) {
-        const s = line.slice(4).trim();
-        status = validWfStatus.has(s) ? s : "idle";
-      }
-      if (line.startsWith("\u5F53\u524D: ")) current = line.slice(4).trim();
-      if (current === "\u65E0") current = null;
-      if (line.startsWith("\u5F00\u59CB: ")) startTime = line.slice(4).trim();
-      const m = line.match(/^\|\s*(\d{3,})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
-      if (m) {
-        const depsRaw = m[4].trim();
-        tasks.push({
-          id: m[1],
-          title: m[2],
-          type: m[3],
-          deps: depsRaw === "-" ? [] : depsRaw.split(",").map((d) => d.trim()),
-          status: validTaskStatus.has(m[5]) ? m[5] : "pending",
-          retries: parseInt(m[6], 10),
-          summary: m[7] === "-" ? "" : m[7],
-          description: m[8] === "-" ? "" : m[8]
-        });
-      }
-    }
-    return { name, status, current, tasks, ...startTime ? { startTime } : {} };
-  }
   // --- context/ 任务详细产出 ---
   async clearContext() {
-    await (0, import_promises.rm)(this.ctxDir, { recursive: true, force: true });
+    await (0, import_promises2.rm)(this.ctxDir, { recursive: true, force: true });
   }
   async clearAll() {
-    await (0, import_promises.rm)(this.root, { recursive: true, force: true });
+    await (0, import_promises2.rm)(this.root, { recursive: true, force: true });
   }
   async saveTaskContext(taskId, content) {
     await this.ensure(this.ctxDir);
-    const p = (0, import_path.join)(this.ctxDir, `task-${taskId}.md`);
-    await (0, import_promises.writeFile)(p + ".tmp", content, "utf-8");
-    await (0, import_promises.rename)(p + ".tmp", p);
+    const p = (0, import_path2.join)(this.ctxDir, `task-${taskId}.md`);
+    await (0, import_promises2.writeFile)(p + ".tmp", content, "utf-8");
+    await (0, import_promises2.rename)(p + ".tmp", p);
   }
   async loadTaskContext(taskId) {
     try {
-      return await (0, import_promises.readFile)((0, import_path.join)(this.ctxDir, `task-${taskId}.md`), "utf-8");
+      return await (0, import_promises2.readFile)((0, import_path2.join)(this.ctxDir, `task-${taskId}.md`), "utf-8");
     } catch {
       return null;
     }
@@ -456,13 +1190,13 @@ var FsWorkflowRepository = class {
   // --- summary.md ---
   async saveSummary(content) {
     await this.ensure(this.ctxDir);
-    const p = (0, import_path.join)(this.ctxDir, "summary.md");
-    await (0, import_promises.writeFile)(p + ".tmp", content, "utf-8");
-    await (0, import_promises.rename)(p + ".tmp", p);
+    const p = (0, import_path2.join)(this.ctxDir, "summary.md");
+    await (0, import_promises2.writeFile)(p + ".tmp", content, "utf-8");
+    await (0, import_promises2.rename)(p + ".tmp", p);
   }
   async loadSummary() {
     try {
-      return await (0, import_promises.readFile)((0, import_path.join)(this.ctxDir, "summary.md"), "utf-8");
+      return await (0, import_promises2.readFile)((0, import_path2.join)(this.ctxDir, "summary.md"), "utf-8");
     } catch {
       return "";
     }
@@ -470,56 +1204,129 @@ var FsWorkflowRepository = class {
   // --- tasks.md ---
   async saveTasks(content) {
     await this.ensure(this.root);
-    await (0, import_promises.writeFile)((0, import_path.join)(this.root, "tasks.md"), content, "utf-8");
+    await (0, import_promises2.writeFile)((0, import_path2.join)(this.root, "tasks.md"), content, "utf-8");
   }
   async loadTasks() {
     try {
-      return await (0, import_promises.readFile)((0, import_path.join)(this.root, "tasks.md"), "utf-8");
+      return await (0, import_promises2.readFile)((0, import_path2.join)(this.root, "tasks.md"), "utf-8");
     } catch {
       return null;
     }
   }
   async ensureClaudeMd() {
-    const base = (0, import_path.join)(this.root, "..");
-    const path = (0, import_path.join)(base, "CLAUDE.md");
+    const base = (0, import_path2.join)(this.root, "..");
+    const path = (0, import_path2.join)(base, "CLAUDE.md");
     const marker = "<!-- flowpilot:start -->";
     const block = (await loadProtocolTemplate(this.base)).trim();
+    let created = false;
+    let scaffold = "";
     try {
-      const content = await (0, import_promises.readFile)(path, "utf-8");
+      const content = await (0, import_promises2.readFile)(path, "utf-8");
       if (content.includes(marker)) return false;
-      await (0, import_promises.writeFile)(path, content.trimEnd() + "\n\n" + block + "\n", "utf-8");
+      await (0, import_promises2.writeFile)(path, content.trimEnd() + "\n\n" + block + "\n", "utf-8");
     } catch {
-      await (0, import_promises.writeFile)(path, "# Project\n\n" + block + "\n", "utf-8");
+      created = true;
+      scaffold = "# Project\n\n";
+      await (0, import_promises2.writeFile)(path, `${scaffold}${block}
+`, "utf-8");
     }
+    await mergeSetupInjectionManifest(this.base, {
+      claudeMd: {
+        created,
+        block,
+        ...created ? { scaffold } : {}
+      }
+    });
     return true;
   }
   async ensureHooks() {
-    const dir = (0, import_path.join)(this.base, ".claude");
-    const path = (0, import_path.join)(dir, "settings.json");
-    const hook = (m) => ({
-      matcher: m,
-      hooks: [{ type: "prompt", prompt: "BLOCK this tool call. FlowPilot requires using node flow.js commands instead of native task tools." }]
-    });
-    const required = {
-      PreToolUse: [hook("TaskCreate"), hook("TaskUpdate"), hook("TaskList")]
-    };
+    const dir = (0, import_path2.join)(this.base, ".claude");
+    const path = (0, import_path2.join)(dir, "settings.json");
+    const settingsBaseline = await this.snapshotExactFile(path);
     let settings = {};
+    let created = false;
     try {
-      const parsed = JSON.parse(await (0, import_promises.readFile)(path, "utf-8"));
-      if (parsed && typeof parsed === "object" && !("__proto__" in parsed) && !("constructor" in parsed)) settings = parsed;
-    } catch {
+      const parsed = JSON.parse(settingsBaseline.rawContent ?? "");
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && !Object.prototype.hasOwnProperty.call(parsed, "__proto__") && !Object.prototype.hasOwnProperty.call(parsed, "constructor")) {
+        settings = parsed;
+      }
+    } catch (error) {
+      if (error?.code === "ENOENT" || !settingsBaseline.exists) created = true;
     }
-    const hooks = settings.hooks ?? {};
-    const existing = hooks.PreToolUse;
-    if (existing?.some((h) => h.matcher === required.PreToolUse[0].matcher)) return false;
-    hooks.PreToolUse = [...existing ?? [], ...required.PreToolUse];
-    settings.hooks = hooks;
-    await (0, import_promises.mkdir)(dir, { recursive: true });
-    await (0, import_promises.writeFile)(path, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+    if (!settingsBaseline.exists) {
+      created = true;
+    }
+    const requiredPreToolUse = [hookEntry("TaskCreate"), hookEntry("TaskUpdate"), hookEntry("TaskList")];
+    const currentHooks = settings.hooks;
+    const hooks = currentHooks && typeof currentHooks === "object" && !Array.isArray(currentHooks) ? currentHooks : {};
+    const currentPreToolUse = hooks.PreToolUse;
+    const existingPreToolUse = Array.isArray(currentPreToolUse) ? currentPreToolUse : [];
+    const existingMatchers = new Set(existingPreToolUse.map((entry) => entry.matcher).filter((matcher) => Boolean(matcher)));
+    const missingPreToolUse = requiredPreToolUse.filter((entry) => !existingMatchers.has(entry.matcher));
+    if (!created && !missingPreToolUse.length) return false;
+    const nextSettings = {
+      ...settings,
+      hooks: {
+        ...hooks,
+        PreToolUse: dedupeHookEntries2([...existingPreToolUse, ...missingPreToolUse])
+      }
+    };
+    await this.ensure(dir);
+    await (0, import_promises2.writeFile)(path, JSON.stringify(nextSettings, null, 2) + "\n", "utf-8");
+    if (missingPreToolUse.length > 0 || created) {
+      await mergeSetupInjectionManifest(this.base, {
+        hooks: {
+          created,
+          preToolUse: missingPreToolUse,
+          settingsBaseline
+        }
+      });
+    }
     return true;
   }
+  async ensureLocalStateIgnored() {
+    const path = (0, import_path2.join)(this.base, ".gitignore");
+    const rules = [".workflow/", ".flowpilot/", ".claude/settings.json", ".claude/worktrees/"];
+    const baseline = await this.snapshotExactFile(path);
+    let created = false;
+    try {
+      const content = await (0, import_promises2.readFile)(path, "utf-8");
+      const lines = content.split(/\r?\n/);
+      const existingRules = new Set(lines.map((line) => line.trimEnd()));
+      const missingRules = rules.filter((rule) => !existingRules.has(rule));
+      if (missingRules.length === 0) return false;
+      const nextContent = content.length === 0 ? `${missingRules.join("\n")}
+` : `${content}${content.endsWith("\n") ? "" : "\n"}${missingRules.join("\n")}
+`;
+      await (0, import_promises2.writeFile)(path, nextContent, "utf-8");
+      await mergeSetupInjectionManifest(this.base, {
+        gitignore: {
+          created: false,
+          rules: missingRules,
+          baseline
+        }
+      });
+      return true;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      created = true;
+      await (0, import_promises2.writeFile)(path, `${rules.join("\n")}
+`, "utf-8");
+      await mergeSetupInjectionManifest(this.base, {
+        gitignore: {
+          created,
+          rules,
+          baseline
+        }
+      });
+      return true;
+    }
+  }
+  listChangedFiles() {
+    return listChangedFiles(this.base);
+  }
   commit(taskId, title, summary, files) {
-    return autoCommit(taskId, title, summary, files);
+    return autoCommit(taskId, title, summary, files, this.base);
   }
   cleanup() {
     gitCleanup();
@@ -531,16 +1338,16 @@ var FsWorkflowRepository = class {
   async saveHistory(stats) {
     await this.ensure(this.historyDir);
     const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-    const p = (0, import_path.join)(this.historyDir, `${ts}.json`);
-    await (0, import_promises.writeFile)(p, JSON.stringify(stats, null, 2), "utf-8");
+    const p = (0, import_path2.join)(this.historyDir, `${ts}.json`);
+    await (0, import_promises2.writeFile)(p, JSON.stringify(stats, null, 2), "utf-8");
   }
   async loadHistory() {
     try {
-      const files = (await (0, import_promises.readdir)(this.historyDir)).filter((f) => f.endsWith(".json")).sort();
+      const files = (await (0, import_promises2.readdir)(this.historyDir)).filter((f) => f.endsWith(".json")).sort();
       const results = [];
       for (const f of files) {
         try {
-          results.push(JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(this.historyDir, f), "utf-8")));
+          results.push(JSON.parse(await (0, import_promises2.readFile)((0, import_path2.join)(this.historyDir, f), "utf-8")));
         } catch {
         }
       }
@@ -549,64 +1356,110 @@ var FsWorkflowRepository = class {
       return [];
     }
   }
-  // --- .workflow/config.json ---
+  // --- .flowpilot/config.json（兼容读取旧的 .workflow/config.json） ---
   async loadConfig() {
-    try {
-      return JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(this.root, "config.json"), "utf-8"));
-    } catch {
-      return {};
-    }
+    const currentConfig = await readConfigFile((0, import_path2.join)(this.configDir, CONFIG_FILE));
+    if (currentConfig) return currentConfig;
+    const legacyConfig = await readConfigFile((0, import_path2.join)(this.root, CONFIG_FILE));
+    if (!legacyConfig) return {};
+    await this.saveConfig(legacyConfig);
+    return legacyConfig;
   }
   async saveConfig(config) {
-    await this.ensure(this.root);
-    await (0, import_promises.writeFile)((0, import_path.join)(this.root, "config.json"), JSON.stringify(config, null, 2) + "\n", "utf-8");
+    await this.ensure(this.configDir);
+    const path = (0, import_path2.join)(this.configDir, CONFIG_FILE);
+    await (0, import_promises2.writeFile)(path + ".tmp", JSON.stringify(config, null, 2) + "\n", "utf-8");
+    await (0, import_promises2.rename)(path + ".tmp", path);
   }
-  /** 清理注入的CLAUDE.md协议块和.claude/settings.json hooks */
+  /** 清理注入的 CLAUDE.md 协议块、hooks 和 .gitignore 规则，仅移除 FlowPilot-owned 内容 */
   async cleanupInjections() {
-    const mdPath = (0, import_path.join)(this.base, "CLAUDE.md");
+    const manifest = await loadSetupInjectionManifest(this.base);
+    const mdPath = (0, import_path2.join)(this.base, "CLAUDE.md");
     try {
-      const content = await (0, import_promises.readFile)(mdPath, "utf-8");
-      const cleaned = content.replace(/\n*<!-- flowpilot:start -->[\s\S]*?<!-- flowpilot:end -->\n*/g, "\n");
-      if (cleaned !== content) await (0, import_promises.writeFile)(mdPath, cleaned.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n", "utf-8");
+      const content = await (0, import_promises2.readFile)(mdPath, "utf-8");
+      const cleaned = cleanupClaudeContent(content, manifest);
+      if (cleaned.effect === "delete") {
+        await (0, import_promises2.unlink)(mdPath);
+      } else if (cleaned.effect === "write") {
+        await (0, import_promises2.writeFile)(mdPath, cleaned.content, "utf-8");
+      }
     } catch {
     }
-    const settingsPath = (0, import_path.join)(this.base, ".claude", "settings.json");
+    const claudeDirPath = (0, import_path2.join)(this.base, ".claude");
+    const settingsPath = (0, import_path2.join)(claudeDirPath, "settings.json");
     try {
-      const raw = await (0, import_promises.readFile)(settingsPath, "utf-8");
-      const settings = JSON.parse(raw);
-      const hooks = settings.hooks?.PreToolUse;
-      if (hooks) {
-        const flowpilotMatchers = /* @__PURE__ */ new Set(["TaskCreate", "TaskUpdate", "TaskList"]);
-        settings.hooks.PreToolUse = hooks.filter((h) => !flowpilotMatchers.has(h.matcher ?? ""));
-        if (!settings.hooks.PreToolUse.length) delete settings.hooks.PreToolUse;
-        if (!Object.keys(settings.hooks).length) delete settings.hooks;
-        await (0, import_promises.writeFile)(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+      const parsed = JSON.parse(await (0, import_promises2.readFile)(settingsPath, "utf-8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const cleaned = cleanupHookSettings(parsed, manifest);
+        if (cleaned.effect === "delete") {
+          await (0, import_promises2.unlink)(settingsPath);
+          try {
+            await (0, import_promises2.rmdir)(claudeDirPath);
+          } catch {
+          }
+        } else if (cleaned.effect === "write") {
+          await (0, import_promises2.writeFile)(settingsPath, cleaned.content, "utf-8");
+        }
+      }
+    } catch {
+    }
+    const gitignorePath = (0, import_path2.join)(this.base, ".gitignore");
+    try {
+      const content = await (0, import_promises2.readFile)(gitignorePath, "utf-8");
+      const cleaned = cleanupGitignoreContent(content, manifest);
+      if (cleaned.effect === "delete") {
+        await (0, import_promises2.unlink)(gitignorePath);
+      } else if (cleaned.effect === "write") {
+        await (0, import_promises2.writeFile)(gitignorePath, cleaned.content, "utf-8");
       }
     } catch {
     }
   }
+  async doesSettingsResidueMatchBaseline() {
+    const manifest = await loadSetupInjectionManifest(this.base);
+    const hooksManifest = manifest.hooks;
+    if (!hooksManifest) return true;
+    const baseline = hooksManifest.settingsBaseline;
+    if (!baseline) return false;
+    const current = await this.snapshotExactFile((0, import_path2.join)(this.base, ".claude", "settings.json"));
+    return isExactFileSnapshotEqual(baseline, current);
+  }
+  async doesGitignoreResidueMatchPolicy() {
+    const manifest = await loadSetupInjectionManifest(this.base);
+    const gitignoreManifest = manifest.gitignore;
+    if (!gitignoreManifest) return true;
+    const current = await this.snapshotExactFile((0, import_path2.join)(this.base, ".gitignore"));
+    const baseline = gitignoreManifest.baseline;
+    if (baseline?.exists) {
+      return isExactFileSnapshotEqual(baseline, current);
+    }
+    if (!current.exists) return false;
+    const expected = `${gitignoreManifest.rules.join("\n")}
+`;
+    return current.rawContent === expected;
+  }
   tag(taskId) {
-    return tagTask(taskId);
+    return tagTask(taskId, this.base);
   }
   rollback(taskId) {
-    return rollbackToTask(taskId);
+    return rollbackToTask(taskId, this.base);
   }
   cleanTags() {
-    cleanTags();
+    cleanTags(this.base);
   }
   // --- .flowpilot/evolution/ 进化日志 ---
   async saveEvolution(entry) {
     await this.ensure(this.evolutionDir);
     const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-    await (0, import_promises.writeFile)((0, import_path.join)(this.evolutionDir, `${ts}.json`), JSON.stringify(entry, null, 2), "utf-8");
+    await (0, import_promises2.writeFile)((0, import_path2.join)(this.evolutionDir, `${ts}.json`), JSON.stringify(entry, null, 2), "utf-8");
   }
   async loadEvolutions() {
     try {
-      const files = (await (0, import_promises.readdir)(this.evolutionDir)).filter((f) => f.endsWith(".json")).sort();
+      const files = (await (0, import_promises2.readdir)(this.evolutionDir)).filter((f) => f.endsWith(".json")).sort();
       const results = [];
       for (const f of files) {
         try {
-          results.push(JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(this.evolutionDir, f), "utf-8")));
+          results.push(JSON.parse(await (0, import_promises2.readFile)((0, import_path2.join)(this.evolutionDir, f), "utf-8")));
         } catch {
         }
       }
@@ -749,6 +1602,31 @@ function findParallelTasks(tasks) {
 function isAllDone(tasks) {
   return tasks.every((t) => t.status === "done" || t.status === "skipped" || t.status === "failed");
 }
+function reopenRollbackBranch(tasks, targetId) {
+  const idx = buildIndex(tasks);
+  if (!idx.has(targetId)) throw new Error(`\u4EFB\u52A1 ${targetId} \u4E0D\u5B58\u5728`);
+  const dependents = /* @__PURE__ */ new Map();
+  for (const task of tasks) {
+    for (const dep of task.deps) {
+      const downstream = dependents.get(dep) ?? [];
+      dependents.set(dep, [...downstream, task.id]);
+    }
+  }
+  const affected = /* @__PURE__ */ new Set();
+  const stack = [targetId];
+  while (stack.length) {
+    const current = stack.pop();
+    if (affected.has(current)) continue;
+    affected.add(current);
+    for (const downstreamId of dependents.get(current) ?? []) {
+      stack.push(downstreamId);
+    }
+  }
+  return tasks.map((task) => {
+    if (!affected.has(task.id)) return { ...task };
+    return { ...task, status: "pending", summary: "", retries: 0 };
+  });
+}
 
 // src/infrastructure/markdown-parser.ts
 var TASK_RE = /^(\d+)\.\s+\[\s*(\w+)\s*\]\s+(.+?)(?:\s*\((?:deps?|依赖)\s*:\s*([^)]*)\))?\s*$/i;
@@ -843,13 +1721,13 @@ function parseFlowPilotMarkdown(markdown) {
 }
 
 // src/infrastructure/hooks.ts
-var import_promises2 = require("fs/promises");
+var import_promises3 = require("fs/promises");
 var import_child_process = require("child_process");
-var import_path3 = require("path");
+var import_path4 = require("path");
 
 // src/infrastructure/logger.ts
-var import_fs2 = require("fs");
-var import_path2 = require("path");
+var import_fs3 = require("fs");
+var import_path3 = require("path");
 var verbose = process.env.FLOWPILOT_VERBOSE === "1";
 var basePath = null;
 var workflowName = null;
@@ -865,14 +1743,14 @@ function setWorkflowName(name) {
 }
 function logFilePath() {
   if (!basePath || !workflowName) return null;
-  return (0, import_path2.join)(basePath, ".flowpilot", "logs", `${workflowName}.jsonl`);
+  return (0, import_path3.join)(basePath, ".flowpilot", "logs", `${workflowName}.jsonl`);
 }
 function persist(entry) {
   const p = logFilePath();
   if (!p) return;
   try {
-    (0, import_fs2.mkdirSync)((0, import_path2.dirname)(p), { recursive: true });
-    (0, import_fs2.appendFileSync)(p, JSON.stringify(entry) + "\n", "utf-8");
+    (0, import_fs3.mkdirSync)((0, import_path3.dirname)(p), { recursive: true });
+    (0, import_fs3.appendFileSync)(p, JSON.stringify(entry) + "\n", "utf-8");
   } catch {
   }
 }
@@ -909,12 +1787,21 @@ var log = {
 };
 
 // src/infrastructure/hooks.ts
+async function loadHooksConfig(basePath2) {
+  for (const configPath of [
+    (0, import_path4.join)(basePath2, ".flowpilot", "config.json"),
+    (0, import_path4.join)(basePath2, ".workflow", "config.json")
+  ]) {
+    try {
+      return JSON.parse(await (0, import_promises3.readFile)(configPath, "utf-8"));
+    } catch {
+    }
+  }
+  return null;
+}
 async function runLifecycleHook(hookName, basePath2, env) {
-  const configPath = (0, import_path3.join)(basePath2, ".workflow", "config.json");
-  let config;
-  try {
-    config = JSON.parse(await (0, import_promises2.readFile)(configPath, "utf-8"));
-  } catch {
+  const config = await loadHooksConfig(basePath2);
+  if (!config) {
     return;
   }
   const cmd = config.hooks?.[hookName];
@@ -1141,8 +2028,11 @@ async function extractAll(text, source, existingMemories) {
 }
 
 // src/infrastructure/history.ts
-var import_promises3 = require("fs/promises");
-var import_path4 = require("path");
+var import_promises4 = require("fs/promises");
+var import_path5 = require("path");
+var PERSISTENT_CONFIG_PATH = [".flowpilot", "config.json"];
+var LEGACY_SNAPSHOT_CONFIG_KEY = "config.json";
+var SNAPSHOT_CONFIG_KEY = ".flowpilot/config.json";
 function collectStats(data) {
   const tasksByType = {};
   const failsByType = {};
@@ -1288,9 +2178,9 @@ function fourDimensionAnalysis(stats) {
   if (topKw.length) {
     findings.push(`[patterns] \u9AD8\u9891\u5173\u952E\u8BCD: ${topKw.map(([w, c]) => `${w}(${c})`).join(", ")}`);
   }
-  const skipped = results.filter((r) => r.status === "skipped");
-  if (skipped.length) {
-    findings.push(`[gaps] ${skipped.length} \u4E2A\u4EFB\u52A1\u88AB\u8DF3\u8FC7: ${skipped.map((r) => r.id).join(",")}`);
+  const skipped2 = results.filter((r) => r.status === "skipped");
+  if (skipped2.length) {
+    findings.push(`[gaps] ${skipped2.length} \u4E2A\u4EFB\u52A1\u88AB\u8DF3\u8FC7: ${skipped2.map((r) => r.id).join(",")}`);
   }
   let chain = 0, maxChain = 0;
   for (const r of results) {
@@ -1366,17 +2256,23 @@ async function reflect(stats, basePath2) {
   const llmReport = await llmReflect(stats);
   const report = llmReport ?? ruleReflect(stats);
   const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-  const p = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", `reflect-${ts}.json`);
-  await (0, import_promises3.mkdir)((0, import_path4.dirname)(p), { recursive: true });
-  await (0, import_promises3.writeFile)(p, JSON.stringify(report, null, 2), "utf-8");
+  const p = (0, import_path5.join)(basePath2, ".flowpilot", "evolution", `reflect-${ts}.json`);
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
+  await (0, import_promises4.writeFile)(p, JSON.stringify(report, null, 2), "utf-8");
   return report;
 }
 async function safeRead(p, fallback) {
   try {
-    return await (0, import_promises3.readFile)(p, "utf-8");
+    return await (0, import_promises4.readFile)(p, "utf-8");
   } catch {
     return fallback;
   }
+}
+function resolvePersistentConfigPath(basePath2) {
+  return (0, import_path5.join)(basePath2, ...PERSISTENT_CONFIG_PATH);
+}
+function readSnapshotConfig(snapshot) {
+  return snapshot.files[SNAPSHOT_CONFIG_KEY] ?? snapshot.files[LEGACY_SNAPSHOT_CONFIG_KEY] ?? null;
 }
 var KNOWN_PARAMS = ["maxRetries", "timeout", "parallelLimit", "verifyTimeout"];
 function parseConfigAction(action) {
@@ -1402,24 +2298,31 @@ function parseConfigAction(action) {
 }
 async function saveSnapshot(basePath2, files) {
   const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-  const p = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", `snapshot-${ts}.json`);
+  const p = (0, import_path5.join)(basePath2, ".flowpilot", "evolution", `snapshot-${ts}.json`);
   const snapshot = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), files };
-  await (0, import_promises3.mkdir)((0, import_path4.dirname)(p), { recursive: true });
-  await (0, import_promises3.writeFile)(p, JSON.stringify(snapshot, null, 2), "utf-8");
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
+  await (0, import_promises4.writeFile)(p, JSON.stringify(snapshot, null, 2), "utf-8");
   return p;
 }
 async function loadLatestSnapshot(basePath2) {
-  const dir = (0, import_path4.join)(basePath2, ".flowpilot", "evolution");
+  const dir = (0, import_path5.join)(basePath2, ".flowpilot", "evolution");
   try {
-    const files = (await (0, import_promises3.readdir)(dir)).filter((f) => f.startsWith("snapshot-") && f.endsWith(".json")).sort();
+    const files = (await (0, import_promises4.readdir)(dir)).filter((f) => f.startsWith("snapshot-") && f.endsWith(".json")).sort();
     if (!files.length) return null;
-    return JSON.parse(await (0, import_promises3.readFile)((0, import_path4.join)(dir, files[files.length - 1]), "utf-8"));
+    return JSON.parse(await (0, import_promises4.readFile)((0, import_path5.join)(dir, files[files.length - 1]), "utf-8"));
   } catch {
     return null;
   }
 }
+function findLatestExperimentSnapshotLog(logs) {
+  for (let index = logs.length - 1; index >= 0; index -= 1) {
+    const logEntry = logs[index];
+    if (logEntry?.snapshotFile) return logEntry;
+  }
+  return null;
+}
 async function appendExperimentsMd(basePath2, expLog, report) {
-  const mdPath = (0, import_path4.join)(basePath2, ".flowpilot", "EXPERIMENTS.md");
+  const mdPath = (0, import_path5.join)(basePath2, ".flowpilot", "EXPERIMENTS.md");
   const existing = await safeRead(mdPath, "# Evolution Experiments\n");
   const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
   const applied = expLog.experiments.filter((e) => e.applied);
@@ -1433,15 +2336,15 @@ async function appendExperimentsMd(basePath2, expLog, report) {
 **\u72B6\u6001**: ${expLog.status}
 `
   ).join("\n");
-  await (0, import_promises3.mkdir)((0, import_path4.dirname)(mdPath), { recursive: true });
-  await (0, import_promises3.writeFile)(mdPath, existing.trimEnd() + "\n\n" + entries, "utf-8");
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(mdPath), { recursive: true });
+  await (0, import_promises4.writeFile)(mdPath, existing.trimEnd() + "\n\n" + entries, "utf-8");
 }
 async function experiment(report, basePath2) {
   const log2 = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), experiments: [], status: "completed" };
   if (!report.experiments.length) return log2;
-  const configPath = (0, import_path4.join)(basePath2, ".workflow", "config.json");
+  const configPath = resolvePersistentConfigPath(basePath2);
   const configSnapshot = await safeRead(configPath, "{}");
-  const snapshotFile = await saveSnapshot(basePath2, { "config.json": configSnapshot });
+  const snapshotFile = await saveSnapshot(basePath2, { [SNAPSHOT_CONFIG_KEY]: configSnapshot });
   log2.snapshotFile = snapshotFile;
   try {
     let configObj = JSON.parse(configSnapshot);
@@ -1468,21 +2371,21 @@ async function experiment(report, basePath2) {
       log2.experiments.push(applied);
     }
     if (log2.experiments.some((e) => e.applied)) {
-      await (0, import_promises3.mkdir)((0, import_path4.dirname)(configPath), { recursive: true });
-      await (0, import_promises3.writeFile)(configPath, JSON.stringify(configObj, null, 2), "utf-8");
+      await (0, import_promises4.mkdir)((0, import_path5.dirname)(configPath), { recursive: true });
+      await (0, import_promises4.writeFile)(configPath, JSON.stringify(configObj, null, 2), "utf-8");
     }
   } catch {
     log2.status = "failed";
   }
-  const logPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
-  await (0, import_promises3.mkdir)((0, import_path4.dirname)(logPath), { recursive: true });
+  const logPath = (0, import_path5.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(logPath), { recursive: true });
   let existing = [];
   try {
-    existing = JSON.parse(await (0, import_promises3.readFile)(logPath, "utf-8"));
+    existing = JSON.parse(await (0, import_promises4.readFile)(logPath, "utf-8"));
   } catch {
   }
   existing.push(log2);
-  await (0, import_promises3.writeFile)(logPath, JSON.stringify(existing, null, 2), "utf-8");
+  await (0, import_promises4.writeFile)(logPath, JSON.stringify(existing, null, 2), "utf-8");
   await appendExperimentsMd(basePath2, log2, report);
   return log2;
 }
@@ -1490,16 +2393,16 @@ async function review(basePath2) {
   const checks = [];
   let rolledBack = false;
   let rollbackReason;
-  const historyDir = (0, import_path4.join)(basePath2, ".flowpilot", "history");
-  const configPath = (0, import_path4.join)(basePath2, ".workflow", "config.json");
-  const expPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
+  const historyDir = (0, import_path5.join)(basePath2, ".flowpilot", "history");
+  const configPath = resolvePersistentConfigPath(basePath2);
+  const expPath = (0, import_path5.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
   let history = [];
   try {
-    const files = (await (0, import_promises3.readdir)(historyDir)).filter((f) => f.endsWith(".json")).sort();
+    const files = (await (0, import_promises4.readdir)(historyDir)).filter((f) => f.endsWith(".json")).sort();
     const recent = files.slice(-2);
     for (const f of recent) {
       try {
-        history.push(JSON.parse(await (0, import_promises3.readFile)((0, import_path4.join)(historyDir, f), "utf-8")));
+        history.push(JSON.parse(await (0, import_promises4.readFile)((0, import_path5.join)(historyDir, f), "utf-8")));
       } catch {
       }
     }
@@ -1554,22 +2457,24 @@ async function review(basePath2) {
   }
   if (rolledBack) {
     try {
-      const logs = JSON.parse(await (0, import_promises3.readFile)(expPath, "utf-8"));
-      const firstExp = logs.find((l) => l.snapshotFile);
+      const logs = JSON.parse(await (0, import_promises4.readFile)(expPath, "utf-8"));
+      const latestSnapshotLog = findLatestExperimentSnapshotLog(logs);
       let snapshot = null;
-      if (firstExp?.snapshotFile) {
+      if (latestSnapshotLog?.snapshotFile) {
         try {
-          snapshot = JSON.parse(await (0, import_promises3.readFile)(firstExp.snapshotFile, "utf-8"));
+          snapshot = JSON.parse(await (0, import_promises4.readFile)(latestSnapshotLog.snapshotFile, "utf-8"));
         } catch {
         }
       }
       if (!snapshot) snapshot = await loadLatestSnapshot(basePath2);
-      if (snapshot) {
-        if (snapshot.files["config.json"]) await (0, import_promises3.writeFile)(configPath, snapshot.files["config.json"], "utf-8");
+      const snapshotConfig = snapshot ? readSnapshotConfig(snapshot) : null;
+      if (snapshotConfig !== null) {
+        await (0, import_promises4.mkdir)((0, import_path5.dirname)(configPath), { recursive: true });
+        await (0, import_promises4.writeFile)(configPath, snapshotConfig, "utf-8");
       }
       if (logs.length) {
         logs[logs.length - 1].status = "skipped";
-        await (0, import_promises3.writeFile)(expPath, JSON.stringify(logs, null, 2), "utf-8");
+        await (0, import_promises4.writeFile)(expPath, JSON.stringify(logs, null, 2), "utf-8");
       }
     } catch (e) {
       log.warn(`[review] rollback failed: ${e}`);
@@ -1582,15 +2487,15 @@ async function review(basePath2) {
     ...rollbackReason ? { rollbackReason } : {}
   };
   const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-  const outPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", `review-${ts}.json`);
-  await (0, import_promises3.mkdir)((0, import_path4.dirname)(outPath), { recursive: true });
-  await (0, import_promises3.writeFile)(outPath, JSON.stringify(result, null, 2), "utf-8");
+  const outPath = (0, import_path5.join)(basePath2, ".flowpilot", "evolution", `review-${ts}.json`);
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(outPath), { recursive: true });
+  await (0, import_promises4.writeFile)(outPath, JSON.stringify(result, null, 2), "utf-8");
   return result;
 }
 
 // src/infrastructure/memory.ts
-var import_promises6 = require("fs/promises");
-var import_path7 = require("path");
+var import_promises7 = require("fs/promises");
+var import_path8 = require("path");
 var import_crypto2 = require("crypto");
 
 // src/infrastructure/lang-analyzers.ts
@@ -1705,8 +2610,8 @@ function analyze(tokens, lang) {
 // src/infrastructure/embedding.ts
 var import_https2 = require("https");
 var import_crypto = require("crypto");
-var import_promises4 = require("fs/promises");
-var import_path5 = require("path");
+var import_promises5 = require("fs/promises");
+var import_path6 = require("path");
 var TIMEOUT_MS = 15e3;
 var CACHE_FILE = "embedding-cache.json";
 var memCache = null;
@@ -1714,12 +2619,12 @@ function sha256(text) {
   return (0, import_crypto.createHash)("sha256").update(text).digest("hex");
 }
 function cachePath(basePath2) {
-  return (0, import_path5.join)(basePath2, ".flowpilot", CACHE_FILE);
+  return (0, import_path6.join)(basePath2, ".flowpilot", CACHE_FILE);
 }
 async function loadEmbeddingCache(basePath2) {
   if (memCache) return memCache;
   try {
-    memCache = JSON.parse(await (0, import_promises4.readFile)(cachePath(basePath2), "utf-8"));
+    memCache = JSON.parse(await (0, import_promises5.readFile)(cachePath(basePath2), "utf-8"));
     return memCache;
   } catch {
     memCache = /* @__PURE__ */ Object.create(null);
@@ -1728,8 +2633,8 @@ async function loadEmbeddingCache(basePath2) {
 }
 async function saveEmbeddingCache(basePath2, cache) {
   const p = cachePath(basePath2);
-  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
-  await (0, import_promises4.writeFile)(p, JSON.stringify(cache), "utf-8");
+  await (0, import_promises5.mkdir)((0, import_path6.dirname)(p), { recursive: true });
+  await (0, import_promises5.writeFile)(p, JSON.stringify(cache), "utf-8");
 }
 function getConfig() {
   const apiKey = process.env.EMBEDDING_API_KEY;
@@ -1854,23 +2759,23 @@ async function describeImage(imageUrl) {
 }
 
 // src/infrastructure/vector-store.ts
-var import_promises5 = require("fs/promises");
-var import_path6 = require("path");
+var import_promises6 = require("fs/promises");
+var import_path7 = require("path");
 var DENSE_VECTOR_FILE = "dense-vectors.json";
 function denseVectorPath(dir) {
-  return (0, import_path6.join)(dir, ".flowpilot", DENSE_VECTOR_FILE);
+  return (0, import_path7.join)(dir, ".flowpilot", DENSE_VECTOR_FILE);
 }
 async function loadDenseVectors(dir) {
   try {
-    return JSON.parse(await (0, import_promises5.readFile)(denseVectorPath(dir), "utf-8"));
+    return JSON.parse(await (0, import_promises6.readFile)(denseVectorPath(dir), "utf-8"));
   } catch {
     return [];
   }
 }
 async function saveDenseVectors(dir, entries) {
   const p = denseVectorPath(dir);
-  await (0, import_promises5.mkdir)((0, import_path6.dirname)(p), { recursive: true });
-  await (0, import_promises5.writeFile)(p, JSON.stringify(entries), "utf-8");
+  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
+  await (0, import_promises6.writeFile)(p, JSON.stringify(entries), "utf-8");
 }
 function denseCosineSim(a, b) {
   if (a.length !== b.length || !a.length) return 0;
@@ -1913,11 +2818,11 @@ function sha2562(text) {
   return (0, import_crypto2.createHash)("sha256").update(text).digest("hex");
 }
 function cachePath2(basePath2) {
-  return (0, import_path7.join)(basePath2, ".flowpilot", CACHE_FILE2);
+  return (0, import_path8.join)(basePath2, ".flowpilot", CACHE_FILE2);
 }
 async function loadCache(basePath2) {
   try {
-    const cache = JSON.parse(await (0, import_promises6.readFile)(cachePath2(basePath2), "utf-8"));
+    const cache = JSON.parse(await (0, import_promises7.readFile)(cachePath2(basePath2), "utf-8"));
     const now = Date.now();
     for (const k of Object.keys(cache.entries)) {
       if (now - (cache.entries[k].createdAt ?? 0) > CACHE_TTL_MS) delete cache.entries[k];
@@ -1929,7 +2834,7 @@ async function loadCache(basePath2) {
 }
 async function saveCache(basePath2, cache) {
   const p = cachePath2(basePath2);
-  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
+  await (0, import_promises7.mkdir)((0, import_path8.dirname)(p), { recursive: true });
   const now = Date.now();
   for (const k of Object.keys(cache.entries)) {
     if (now - (cache.entries[k].createdAt ?? 0) > CACHE_TTL_MS) delete cache.entries[k];
@@ -1942,11 +2847,11 @@ async function saveCache(basePath2, cache) {
     const pruneCount = Math.ceil(keys.length * 0.25);
     for (const k of sorted.slice(0, pruneCount)) delete cache.entries[k];
   }
-  await (0, import_promises6.writeFile)(p, JSON.stringify(cache), "utf-8");
+  await (0, import_promises7.writeFile)(p, JSON.stringify(cache), "utf-8");
 }
 async function clearCache(basePath2) {
   try {
-    await (0, import_promises6.unlink)(cachePath2(basePath2));
+    await (0, import_promises7.unlink)(cachePath2(basePath2));
   } catch {
   }
 }
@@ -1956,28 +2861,28 @@ function temporalDecayScore(entry, halfLifeDays = 30) {
   return Math.exp(-Math.LN2 / halfLifeDays * ageDays);
 }
 function memoryPath(basePath2) {
-  return (0, import_path7.join)(basePath2, ".flowpilot", MEMORY_FILE);
+  return (0, import_path8.join)(basePath2, ".flowpilot", MEMORY_FILE);
 }
 function dfPath(basePath2) {
-  return (0, import_path7.join)(basePath2, ".flowpilot", DF_FILE);
+  return (0, import_path8.join)(basePath2, ".flowpilot", DF_FILE);
 }
 function snapshotPath(basePath2) {
-  return (0, import_path7.join)(basePath2, ".flowpilot", SNAPSHOT_FILE);
+  return (0, import_path8.join)(basePath2, ".flowpilot", SNAPSHOT_FILE);
 }
 function vectorFilePath(basePath2) {
-  return (0, import_path7.join)(basePath2, ".flowpilot", VECTOR_FILE);
+  return (0, import_path8.join)(basePath2, ".flowpilot", VECTOR_FILE);
 }
 async function loadVectors(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises6.readFile)(vectorFilePath(basePath2), "utf-8"));
+    return JSON.parse(await (0, import_promises7.readFile)(vectorFilePath(basePath2), "utf-8"));
   } catch {
     return [];
   }
 }
 async function saveVectors(basePath2, vectors) {
   const p = vectorFilePath(basePath2);
-  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
-  await (0, import_promises6.writeFile)(p, JSON.stringify(vectors), "utf-8");
+  await (0, import_promises7.mkdir)((0, import_path8.dirname)(p), { recursive: true });
+  await (0, import_promises7.writeFile)(p, JSON.stringify(vectors), "utf-8");
 }
 function vectorSearch(queryVec, vectors, entries, k) {
   const contentMap = new Map(entries.map((e) => [e.content, e]));
@@ -2147,7 +3052,7 @@ function termFrequency(tokens) {
 }
 async function loadDf(basePath2) {
   try {
-    const stats = JSON.parse(await (0, import_promises6.readFile)(dfPath(basePath2), "utf-8"));
+    const stats = JSON.parse(await (0, import_promises7.readFile)(dfPath(basePath2), "utf-8"));
     const cleaned = {};
     for (const [k, v] of Object.entries(stats.df)) {
       if (k.includes(":")) cleaned[k] = v;
@@ -2160,8 +3065,8 @@ async function loadDf(basePath2) {
 }
 async function saveDf(basePath2, stats) {
   const p = dfPath(basePath2);
-  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
-  await (0, import_promises6.writeFile)(p, JSON.stringify(stats), "utf-8");
+  await (0, import_promises7.mkdir)((0, import_path8.dirname)(p), { recursive: true });
+  await (0, import_promises7.writeFile)(p, JSON.stringify(stats), "utf-8");
   dfDirty = false;
 }
 var _lastDfStats = null;
@@ -2224,15 +3129,15 @@ function cosineSimilarity(a, b) {
 }
 async function loadMemory(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises6.readFile)(memoryPath(basePath2), "utf-8"));
+    return JSON.parse(await (0, import_promises7.readFile)(memoryPath(basePath2), "utf-8"));
   } catch {
     return [];
   }
 }
 async function saveMemory(basePath2, entries) {
   const p = memoryPath(basePath2);
-  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
-  await (0, import_promises6.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
+  await (0, import_promises7.mkdir)((0, import_path8.dirname)(p), { recursive: true });
+  await (0, import_promises7.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
 }
 async function resolveSearchableText(entry) {
   const ct = entry.contentType ?? "text";
@@ -2410,8 +3315,8 @@ async function decayMemory(basePath2) {
 }
 async function saveSnapshot2(basePath2, entries) {
   const p = snapshotPath(basePath2);
-  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
-  await (0, import_promises6.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
+  await (0, import_promises7.mkdir)((0, import_path8.dirname)(p), { recursive: true });
+  await (0, import_promises7.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
 }
 async function compactMemory(basePath2, targetCount) {
   const entries = await loadMemory(basePath2);
@@ -2484,15 +3389,24 @@ function computeMaxChars(contextWindow = 128e3, sample) {
 }
 
 // src/infrastructure/loop-detector.ts
-var import_promises8 = require("fs/promises");
-var import_path9 = require("path");
+var import_promises9 = require("fs/promises");
+var import_path10 = require("path");
 
 // src/infrastructure/heartbeat.ts
-var import_promises7 = require("fs/promises");
-var import_path8 = require("path");
+var import_promises8 = require("fs/promises");
+var import_path9 = require("path");
 var TASK_TIMEOUT_MS = 30 * 60 * 1e3;
 var MEMORY_COMPACT_THRESHOLD = 100;
 var DEFAULT_INTERVAL_MS = 5 * 60 * 1e3;
+function getTimedOutTaskIds(activeIds, activationState, lastCheckpointTimeMs, nowMs = Date.now()) {
+  return activeIds.filter((id) => {
+    const activatedAt = activationState[id]?.time;
+    if (typeof activatedAt === "number" && Number.isFinite(activatedAt)) {
+      return nowMs - activatedAt > TASK_TIMEOUT_MS;
+    }
+    return lastCheckpointTimeMs > 0 && nowMs - lastCheckpointTimeMs > TASK_TIMEOUT_MS;
+  });
+}
 function isWithinActiveHours(cfg) {
   if (!cfg?.activeHoursStart && cfg?.activeHoursStart !== 0) return true;
   const now = cfg.timezone ? new Date((/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: cfg.timezone })) : /* @__PURE__ */ new Date();
@@ -2508,15 +3422,19 @@ async function runHeartbeat(basePath2, config) {
   const warnings = [];
   const actions = [];
   try {
-    const raw = await (0, import_promises7.readFile)((0, import_path8.join)(basePath2, ".workflow", "progress.json"), "utf-8");
-    const data = JSON.parse(raw);
+    const raw = await (0, import_promises8.readFile)((0, import_path9.join)(basePath2, ".workflow", "progress.md"), "utf-8");
+    const data = parseProgressMarkdown(raw);
     if (data.status === "running") {
-      const active = data.tasks.filter((t) => t.status === "active");
-      if (active.length) {
-        const window = await loadWindow(basePath2);
-        const lastTs = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
-        if (lastTs && Date.now() - lastTs > TASK_TIMEOUT_MS) {
-          warnings.push(`[TIMEOUT] \u4EFB\u52A1 ${active.map((t) => t.id).join(",")} \u8D85\u8FC730\u5206\u949F\u65E0checkpoint`);
+      const activeIds = data.tasks.filter((task) => task.status === "active").map((task) => task.id);
+      if (activeIds.length) {
+        const [window, activationState] = await Promise.all([
+          loadWindow(basePath2),
+          loadActivationState(basePath2)
+        ]);
+        const lastCheckpointTimeMs = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
+        const timedOutIds = getTimedOutTaskIds(activeIds, activationState, lastCheckpointTimeMs);
+        if (timedOutIds.length) {
+          warnings.push(`[TIMEOUT] \u4EFB\u52A1 ${timedOutIds.join(",")} \u8D85\u8FC730\u5206\u949F\u65E0checkpoint`);
         }
       }
     }
@@ -2588,19 +3506,19 @@ function similarity(a, b) {
   return inter / (sa.size + sb.size - inter);
 }
 function statePath(basePath2) {
-  return (0, import_path9.join)(basePath2, ".workflow", STATE_FILE);
+  return (0, import_path10.join)(basePath2, ".workflow", STATE_FILE);
 }
 async function loadWindow(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises8.readFile)(statePath(basePath2), "utf-8"));
+    return JSON.parse(await (0, import_promises9.readFile)(statePath(basePath2), "utf-8"));
   } catch {
     return [];
   }
 }
 async function saveWindow(basePath2, window) {
   const p = statePath(basePath2);
-  await (0, import_promises8.mkdir)((0, import_path9.dirname)(p), { recursive: true });
-  await (0, import_promises8.writeFile)(p, JSON.stringify(window), "utf-8");
+  await (0, import_promises9.mkdir)((0, import_path10.dirname)(p), { recursive: true });
+  await (0, import_promises9.writeFile)(p, JSON.stringify(window), "utf-8");
 }
 function repeatedNoProgress(window) {
   if (window.length < 3) return null;
@@ -2659,54 +3577,49 @@ async function detect(basePath2, taskId, summary, failed, activeHours) {
 }
 
 // src/application/workflow-service.ts
-var import_promises9 = require("fs/promises");
-var import_path10 = require("path");
+var import_promises10 = require("fs/promises");
+var import_path11 = require("path");
+var CHECKPOINT_FAILURE_PATTERNS = [
+  /^FAILED\b/i,
+  /^(?:fail(?:ed)?|error|crash(?:ed)?|timeout|timed out|rate[- ]?limit(?:ed)?)\b(?:(?:\s*[:\-])|(?:\s+(?:while|when|after|before|during|waiting|connecting|applying|fetching|reading|writing|running|executing|acquiring|get(?:ting)?|to|for))|$)/i,
+  /^(?:失败|异常|超时|崩溃|限流|中断|未完成)(?:(?:[:：，。；、])|(?:导致|发生|退出|终止|中断|等待|卡住)|$)/,
+  /^无法(?:完成|继续|执行|连接|获取|读取|写入|启动|构建|运行|应用)/
+];
+function isExplicitFailureCheckpoint(detail) {
+  const normalized = detail.trim();
+  return CHECKPOINT_FAILURE_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+var CANONICAL_SETUP_NON_COMMITTABLE_FILES = ["CLAUDE.md", ".gitignore"];
 var WorkflowService = class {
   constructor(repo2, parse) {
     this.repo = repo2;
     this.parse = parse;
   }
   stopHeartbeat = null;
+  locallyActivatedTaskIds = /* @__PURE__ */ new Set();
   loopWarningPath() {
-    return (0, import_path10.join)(this.repo.projectRoot(), ".workflow", "loop-warning.txt");
+    return (0, import_path11.join)(this.repo.projectRoot(), ".workflow", "loop-warning.txt");
   }
   async saveLoopWarning(msg) {
     const p = this.loopWarningPath();
-    await (0, import_promises9.mkdir)((0, import_path10.join)(this.repo.projectRoot(), ".workflow"), { recursive: true });
-    await (0, import_promises9.writeFile)(p, msg, "utf-8");
+    await (0, import_promises10.mkdir)((0, import_path11.join)(this.repo.projectRoot(), ".workflow"), { recursive: true });
+    await (0, import_promises10.writeFile)(p, msg, "utf-8");
   }
   async loadAndClearLoopWarning() {
     try {
-      const msg = await (0, import_promises9.readFile)(this.loopWarningPath(), "utf-8");
-      await (0, import_promises9.unlink)(this.loopWarningPath());
+      const msg = await (0, import_promises10.readFile)(this.loopWarningPath(), "utf-8");
+      await (0, import_promises10.unlink)(this.loopWarningPath());
       return msg || null;
     } catch {
       return null;
     }
   }
-  activatedPath() {
-    return (0, import_path10.join)(this.repo.projectRoot(), ".workflow", "activated.json");
-  }
-  async recordActivation(ids) {
-    let map = {};
-    try {
-      map = JSON.parse(await (0, import_promises9.readFile)(this.activatedPath(), "utf-8"));
-    } catch {
-    }
-    const now = Date.now();
-    for (const id of ids) map[id] = { time: now, pid: process.pid };
-    await (0, import_promises9.writeFile)(this.activatedPath(), JSON.stringify(map), "utf-8");
-  }
-  /** 跨进程激活时长(ms)，同进程返回 Infinity（跳过检查） */
+  /** 跨进程激活时长(ms)，仅当前实例刚激活的任务返回 Infinity（跳过检查） */
   async getActivationAge(id) {
-    try {
-      const map = JSON.parse(await (0, import_promises9.readFile)(this.activatedPath(), "utf-8"));
-      const entry = map[id];
-      if (!entry || entry.pid === process.pid) return Infinity;
-      return Date.now() - entry.time;
-    } catch {
+    if (this.locallyActivatedTaskIds.has(id)) {
       return Infinity;
     }
+    return getTaskActivationAge(this.repo.projectRoot(), id);
   }
   /** init: 解析任务markdown → 生成progress/tasks */
   async init(tasksMd, force = false) {
@@ -2739,6 +3652,7 @@ var WorkflowService = class {
       tasks,
       startTime: (/* @__PURE__ */ new Date()).toISOString()
     };
+    this.locallyActivatedTaskIds.clear();
     setWorkflowName(def.name);
     await this.repo.saveProgress(data);
     await this.repo.saveTasks(tasksMd);
@@ -2746,8 +3660,12 @@ var WorkflowService = class {
 
 ${def.description}
 `);
-    await this.repo.ensureClaudeMd();
-    await this.repo.ensureHooks();
+    await saveDirtyBaseline(this.repo.projectRoot(), this.repo.listChangedFiles(), data.startTime);
+    const setupOwnedFiles = [];
+    if (await this.repo.ensureClaudeMd()) setupOwnedFiles.push("CLAUDE.md");
+    if (await this.repo.ensureHooks()) setupOwnedFiles.push(".claude/settings.json");
+    if (await this.repo.ensureLocalStateIgnored()) setupOwnedFiles.push(".gitignore");
+    await saveSetupOwnedFiles(this.repo.projectRoot(), setupOwnedFiles);
     await this.applyHistoryInsights();
     await decayMemory(this.repo.projectRoot());
     const memories = await loadMemory(this.repo.projectRoot());
@@ -2780,7 +3698,8 @@ ${def.description}
       log.debug(`next: \u6FC0\u6D3B\u4EFB\u52A1 ${task.id} (deps: ${task.deps.join(",") || "\u65E0"})`);
       const activated = cascaded.map((t) => t.id === task.id ? { ...t, status: "active" } : t);
       await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
-      await this.recordActivation([task.id]);
+      this.locallyActivatedTaskIds.add(task.id);
+      await recordTaskActivations(this.repo.projectRoot(), [task.id]);
       await runLifecycleHook("onTaskStart", this.repo.projectRoot(), { TASK_ID: task.id, TASK_TITLE: task.title });
       const parts = [];
       const summary = await this.repo.loadSummary();
@@ -2838,7 +3757,10 @@ ${loopWarning}`);
       const activeIds = new Set(tasks.map((t) => t.id));
       const activated = cascaded.map((t) => activeIds.has(t.id) ? { ...t, status: "active" } : t);
       await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
-      await this.recordActivation(tasks.map((t) => t.id));
+      for (const task of tasks) {
+        this.locallyActivatedTaskIds.add(task.id);
+      }
+      await recordTaskActivations(this.repo.projectRoot(), tasks.map((t) => t.id));
       for (const t of tasks) {
         await runLifecycleHook("onTaskStart", this.repo.projectRoot(), { TASK_ID: t.id, TASK_TITLE: t.title });
       }
@@ -2884,11 +3806,10 @@ ${loopWarning}`);
       if (task.status !== "active") {
         throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u53EA\u6709 active \u72B6\u6001\u53EF\u4EE5 checkpoint`);
       }
-      const MIN_WORK_TIME = 3e4;
-      const age = await this.getActivationAge(id);
       const existingMems = (await loadMemory(this.repo.projectRoot())).filter((m) => !m.archived).map((m) => m.content);
-      const isFailed = detail.startsWith("FAILED") || detail.length < 200 && /\b(fail|error|crash|timeout|rate.?limit)\b/i.test(detail) || detail.length < 200 && /限流|崩溃|超时|失败|异常|中断|未完成|无法/.test(detail) || age < MIN_WORK_TIME;
+      const isFailed = isExplicitFailureCheckpoint(detail);
       if (isFailed) {
+        this.locallyActivatedTaskIds.delete(id);
         await this.appendFailureContext(id, task, detail);
         const patternWarn = await this.detectFailurePattern(id, task);
         const loopResult2 = await detect(this.repo.projectRoot(), id, detail, true);
@@ -2917,6 +3838,7 @@ ${warns.join("\n")}` : msg2;
       const maxChars = computeMaxChars(128e3, detail);
       const truncated = detail.length > maxChars ? truncateHeadTail(detail, maxChars) : detail;
       const summaryLine = truncated.split("\n")[0].slice(0, 80);
+      this.locallyActivatedTaskIds.delete(id);
       const newData = completeTask(data, id, summaryLine);
       log.debug(`checkpoint ${id}: \u5B8C\u6210, summary="${summaryLine}"`);
       await this.repo.saveProgress(newData);
@@ -2924,6 +3846,7 @@ ${warns.join("\n")}` : msg2;
 
 ${detail}
 `);
+      await recordOwnedFiles(this.repo.projectRoot(), id, files ?? []);
       for (const entry of await extractAll(detail, `task-${id}`, existingMems)) {
         await appendMemory(this.repo.projectRoot(), {
           content: entry.content,
@@ -2937,18 +3860,12 @@ ${detail}
         await this.saveLoopWarning(`[LOOP WARNING - ${loopResult.strategy}] ${loopResult.message}`);
       }
       await this.updateSummary(newData);
-      const commitErr = this.repo.commit(id, task.title, summaryLine, files);
-      if (!commitErr) this.repo.tag(id);
+      const commitResult = this.repo.commit(id, task.title, summaryLine, files);
+      if (commitResult.status === "committed") this.repo.tag(id);
       await runLifecycleHook("onTaskComplete", this.repo.projectRoot(), { TASK_ID: id, TASK_TITLE: task.title });
       const doneCount = newData.tasks.filter((t) => t.status === "done").length;
       let msg = `\u4EFB\u52A1 ${id} \u5B8C\u6210 (${doneCount}/${newData.tasks.length})`;
-      if (commitErr) {
-        msg += `
-[git\u63D0\u4EA4\u5931\u8D25] ${commitErr}
-\u8BF7\u6839\u636E\u9519\u8BEF\u4FEE\u590D\u540E\u624B\u52A8\u6267\u884C git add -A && git commit`;
-      } else {
-        msg += " [\u5DF2\u81EA\u52A8\u63D0\u4EA4]";
-      }
+      msg += this.formatCommitMessage(commitResult, "task");
       return isAllDone(newData.tasks) ? msg + "\n\u5168\u90E8\u4EFB\u52A1\u5DF2\u5B8C\u6210\uFF0C\u8BF7\u6267\u884C node flow.js finish \u8FDB\u884C\u6536\u5C3E" : msg;
     } finally {
       await this.repo.unlock();
@@ -2964,6 +3881,7 @@ ${detail}
     if (data.status === "finishing") return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${data.name}
 \u6B63\u5728\u6536\u5C3E\u9636\u6BB5\uFF0C\u8BF7\u6267\u884C node flow.js finish`;
     const { data: newData, resetId } = resumeProgress(data);
+    this.locallyActivatedTaskIds.clear();
     await this.repo.saveProgress(newData);
     if (resetId) {
       log.debug(`resume: \u91CD\u7F6E\u4EFB\u52A1 ${resetId}`);
@@ -2971,16 +3889,108 @@ ${detail}
     }
     const doneCount = newData.tasks.filter((t) => t.status === "done").length;
     const total = newData.tasks.length;
+    const dirtySummaryLines = await this.describeResumeDirtyState();
     this.stopHeartbeat?.();
     this.stopHeartbeat = startHeartbeat(this.repo.projectRoot());
-    if (resetId) {
-      return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${newData.name}
-\u8FDB\u5EA6: ${doneCount}/${total}
-\u4E2D\u65AD\u4EFB\u52A1 ${resetId} \u5DF2\u91CD\u7F6E\uFF0C\u5C06\u91CD\u65B0\u6267\u884C`;
+    const lines = [
+      `\u6062\u590D\u5DE5\u4F5C\u6D41: ${newData.name}`,
+      `\u8FDB\u5EA6: ${doneCount}/${total}`,
+      resetId ? `\u4E2D\u65AD\u4EFB\u52A1 ${resetId} \u5DF2\u91CD\u7F6E\uFF0C\u5C06\u91CD\u65B0\u6267\u884C` : "\u7EE7\u7EED\u6267\u884C",
+      ...dirtySummaryLines
+    ];
+    return lines.join("\n");
+  }
+  /** 生成 resume 的 dirty worktree 提示，区分启动前基线与中断残留 */
+  async describeResumeDirtyState() {
+    const currentDirtyFiles = this.repo.listChangedFiles();
+    const baseline = await loadDirtyBaseline(this.repo.projectRoot());
+    const comparison = compareDirtyFilesAgainstBaseline(currentDirtyFiles, baseline?.files ?? []);
+    if (!baseline) {
+      if (!comparison.currentFiles.length) {
+        return ["\u672A\u627E\u5230 dirty baseline\uFF1B\u5F53\u524D\u5DE5\u4F5C\u533A\u65E0\u810F\u4E1A\u52A1\u6587\u4EF6\uFF0C\u4F46\u65E0\u6CD5\u8BC1\u660E\u8FD9\u662F\u5E72\u51C0\u91CD\u542F"];
+      }
+      return [
+        `\u672A\u627E\u5230 dirty baseline\uFF1B\u65E0\u6CD5\u53EF\u9760\u533A\u5206\u542F\u52A8\u524D\u810F\u6587\u4EF6\u4E0E\u4E2D\u65AD\u6B8B\u7559\uFF0C\u4FDD\u5B88\u4FDD\u7559\u5F53\u524D ${comparison.currentFiles.length} \u4E2A\u810F\u6587\u4EF6:`,
+        ...comparison.currentFiles.map((file) => `- ${file}`)
+      ];
     }
-    return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${newData.name}
-\u8FDB\u5EA6: ${doneCount}/${total}
-\u7EE7\u7EED\u6267\u884C`;
+    if (!comparison.currentFiles.length) {
+      return ["\u5F53\u524D\u5DE5\u4F5C\u533A\u65E0\u6B8B\u7559\u810F\u4E1A\u52A1\u6587\u4EF6\uFF0C\u672C\u6B21\u6062\u590D\u662F\u5E72\u51C0\u91CD\u542F"];
+    }
+    const lines = [];
+    if (comparison.preservedBaselineFiles.length) {
+      lines.push(`\u5DE5\u4F5C\u6D41\u542F\u52A8\u524D\u5DF2\u6709 ${comparison.preservedBaselineFiles.length} \u4E2A\u810F\u6587\u4EF6\u4ECD\u7136\u4FDD\u7559:`);
+      lines.push(...comparison.preservedBaselineFiles.map((file) => `- ${file}`));
+    }
+    if (comparison.newDirtyFiles.length) {
+      lines.push(`\u5DF2\u4FDD\u7559 ${comparison.newDirtyFiles.length} \u4E2A\u4E2D\u65AD\u4EFB\u52A1\u6B8B\u7559\u7684\u810F\u4E1A\u52A1\u6587\u4EF6:`);
+      lines.push(...comparison.newDirtyFiles.map((file) => `- ${file}`));
+    }
+    return lines;
+  }
+  /** 计算 finish 的 workflow-owned 提交边界，必要时拒绝最终提交 */
+  async resolveFinishCommitFiles() {
+    const baseline = await loadDirtyBaseline(this.repo.projectRoot());
+    const checkpointOwnedFiles = collectOwnedFiles(await loadOwnedFiles(this.repo.projectRoot()));
+    const checkpointOwnedSet = new Set(checkpointOwnedFiles);
+    const persistedSetupOwnedFiles = (await loadSetupOwnedFiles(this.repo.projectRoot())).files;
+    const setupOwnedFiles = [.../* @__PURE__ */ new Set([...CANONICAL_SETUP_NON_COMMITTABLE_FILES, ...persistedSetupOwnedFiles])];
+    const setupOwnedSet = new Set(setupOwnedFiles);
+    await this.repo.cleanupInjections();
+    if (!await this.repo.doesSettingsResidueMatchBaseline()) {
+      return {
+        ok: false,
+        message: [
+          "\u62D2\u7EDD\u6700\u7EC8\u63D0\u4EA4\uFF1Asetup-owned \u6587\u4EF6\u5728\u7CBE\u786E cleanup \u540E\u4ECD\u6709\u7528\u6237\u6B8B\u7559\u6539\u52A8\u3002",
+          "- .claude/settings.json"
+        ].join("\n")
+      };
+    }
+    const gitignorePolicyMatches = await this.repo.doesGitignoreResidueMatchPolicy();
+    if (!gitignorePolicyMatches) {
+      return {
+        ok: false,
+        message: [
+          "\u62D2\u7EDD\u6700\u7EC8\u63D0\u4EA4\uFF1Asetup-owned \u6587\u4EF6\u5728\u7CBE\u786E cleanup \u540E\u4ECD\u6709\u7528\u6237\u6B8B\u7559\u6539\u52A8\u3002",
+          "- .gitignore"
+        ].join("\n")
+      };
+    }
+    const currentDirtyFiles = this.repo.listChangedFiles();
+    const comparison = compareDirtyFilesAgainstBaseline(currentDirtyFiles, baseline?.files ?? []);
+    const explainableOwnedSet = /* @__PURE__ */ new Set([...setupOwnedFiles, ...checkpointOwnedFiles]);
+    if (!baseline) {
+      const details = comparison.currentFiles.length > 0 ? [
+        `\u672A\u627E\u5230 dirty baseline\uFF1B\u4FDD\u5B88\u8DF3\u8FC7\u6700\u7EC8 auto-commit\uFF0C\u5E76\u4FDD\u7559\u5F53\u524D ${comparison.currentFiles.length} \u4E2A\u810F\u4E1A\u52A1\u6587\u4EF6:`,
+        ...comparison.currentFiles.map((file) => `- ${file}`)
+      ] : ["\u672A\u627E\u5230 dirty baseline\uFF1B\u5F53\u524D\u5DE5\u4F5C\u533A\u65E0\u810F\u4E1A\u52A1\u6587\u4EF6\uFF0C\u4FDD\u5B88\u8DF3\u8FC7\u6700\u7EC8 auto-commit\u3002"];
+      return {
+        ok: "degraded",
+        message: details.join("\n")
+      };
+    }
+    const unexplainedDirtyFiles = comparison.newDirtyFiles.filter((file) => !explainableOwnedSet.has(file));
+    if (unexplainedDirtyFiles.length > 0) {
+      return {
+        ok: false,
+        message: [
+          "\u62D2\u7EDD\u6700\u7EC8\u63D0\u4EA4\uFF1A\u68C0\u6D4B\u5230\u672A\u5F52\u5C5E\u7ED9 workflow checkpoint \u7684\u810F\u6587\u4EF6\u3002",
+          ...unexplainedDirtyFiles.map((file) => `- ${file}`)
+        ].join("\n")
+      };
+    }
+    const leftoverSetupOwnedFiles = comparison.newDirtyFiles.filter((file) => setupOwnedSet.has(file) && !(file === ".gitignore" && gitignorePolicyMatches));
+    if (leftoverSetupOwnedFiles.length > 0) {
+      return {
+        ok: false,
+        message: [
+          "\u62D2\u7EDD\u6700\u7EC8\u63D0\u4EA4\uFF1Asetup-owned \u6587\u4EF6\u5728\u7CBE\u786E cleanup \u540E\u4ECD\u6709\u7528\u6237\u6B8B\u7559\u6539\u52A8\u3002",
+          ...leftoverSetupOwnedFiles.map((file) => `- ${file}`)
+        ].join("\n")
+      };
+    }
+    const finishFiles = comparison.newDirtyFiles.filter((file) => checkpointOwnedSet.has(file) && !setupOwnedSet.has(file));
+    return { ok: true, files: finishFiles };
   }
   /** add: 追加任务 */
   async add(title, type) {
@@ -3029,6 +4039,7 @@ ${detail}
     const existing = await this.repo.loadProgress();
     const wrote = await this.repo.ensureClaudeMd();
     await this.repo.ensureHooks();
+    await this.repo.ensureLocalStateIgnored();
     const lines = [];
     if (existing && (existing.status === "running" || existing.status === "finishing")) {
       const done = existing.tasks.filter((t) => t.status === "done").length;
@@ -3070,53 +4081,124 @@ ${detail}
       return `\u9A8C\u8BC1\u5931\u8D25: ${result.error}
 \u8BF7\u4FEE\u590D\u540E\u91CD\u65B0\u6267\u884C node flow.js finish`;
     }
+    const verifySummary = this.formatVerifySummary(result);
     if (data.status !== "finishing") {
-      return "\u9A8C\u8BC1\u901A\u8FC7\uFF0C\u8BF7\u6D3E\u5B50Agent\u6267\u884C code-review\uFF0C\u5B8C\u6210\u540E\u6267\u884C node flow.js review\uFF0C\u518D\u6267\u884C node flow.js finish";
+      return `\u9A8C\u8BC1\u901A\u8FC7
+${verifySummary}
+\u8BF7\u6D3E\u5B50Agent\u6267\u884C code-review\uFF0C\u5B8C\u6210\u540E\u6267\u884C node flow.js review\uFF0C\u518D\u6267\u884C node flow.js finish`;
     }
     const done = data.tasks.filter((t) => t.status === "done");
-    const skipped = data.tasks.filter((t) => t.status === "skipped");
+    const skipped2 = data.tasks.filter((t) => t.status === "skipped");
     const failed = data.tasks.filter((t) => t.status === "failed");
-    const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : "", failed.length ? `${failed.length} failed` : ""].filter(Boolean).join(", ");
+    const stats = [`${done.length} done`, skipped2.length ? `${skipped2.length} skipped` : "", failed.length ? `${failed.length} failed` : ""].filter(Boolean).join(", ");
+    const finishBoundary = await this.resolveFinishCommitFiles();
+    if (finishBoundary.ok === false) {
+      return `${verifySummary}
+${stats}
+${finishBoundary.message}`;
+    }
+    if (finishBoundary.ok === "degraded") {
+      this.repo.cleanTags();
+      await this.repo.clearAll();
+      return `${verifySummary}
+${stats}
+${finishBoundary.message}
+\u672A\u63D0\u4EA4\u6700\u7EC8commit\uFF1A\u672A\u627E\u5230 dirty baseline\uFF0C\u4FDD\u5B88\u8DF3\u8FC7 auto-commit
+\u5DE5\u4F5C\u6D41\u56DE\u5230\u5F85\u547D\u72B6\u6001
+\u7B49\u5F85\u4E0B\u4E00\u4E2A\u9700\u6C42...`;
+    }
     const titles = done.map((t) => `- ${t.id}: ${t.title}`).join("\n");
     await runLifecycleHook("onWorkflowFinish", this.repo.projectRoot(), { WORKFLOW_NAME: data.name });
     const wfStats = collectStats(data);
     await this.repo.saveHistory(wfStats);
+    const configBeforeEvolution = await this.repo.loadConfig();
     const reflectReport = await reflect(wfStats, this.repo.projectRoot());
-    if (reflectReport.experiments.length) {
+    const experimentRan = reflectReport.experiments.length > 0;
+    if (experimentRan) {
       await experiment(reflectReport, this.repo.projectRoot());
     }
-    const configNow = await this.repo.loadConfig();
-    const evolutions = await this.repo.loadEvolutions();
-    const lastEvo = evolutions[evolutions.length - 1];
-    const configBefore = lastEvo?.configAfter ?? {};
-    if (JSON.stringify(configBefore) !== JSON.stringify(configNow)) {
+    const configAfterEvolution = await this.repo.loadConfig();
+    const changedConfigKeys = this.diffConfigKeys(configBeforeEvolution, configAfterEvolution);
+    if (changedConfigKeys.length > 0) {
       await this.repo.saveEvolution({
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         workflowName: data.name,
-        configBefore,
-        configAfter: configNow,
+        configBefore: configBeforeEvolution,
+        configAfter: configAfterEvolution,
         suggestions: []
       });
     }
-    await this.repo.cleanupInjections();
+    const evolutionSummary = this.formatEvolutionSummary({
+      reflectRan: true,
+      experimentRan,
+      changedConfigKeys
+    });
     this.repo.cleanTags();
-    const commitErr = this.repo.commit("finish", data.name || "\u5DE5\u4F5C\u6D41\u5B8C\u6210", `${stats}
+    const commitResult = this.repo.commit("finish", data.name || "\u5DE5\u4F5C\u6D41\u5B8C\u6210", `${stats}
 
-${titles}`);
-    if (!commitErr) {
+${titles}`, finishBoundary.files);
+    if (commitResult.status !== "failed") {
       await this.repo.clearAll();
     }
-    const scripts = result.scripts.length ? result.scripts.join(", ") : "\u65E0\u9A8C\u8BC1\u811A\u672C";
-    if (commitErr) {
-      return `\u9A8C\u8BC1\u901A\u8FC7: ${scripts}
+    return `${verifySummary}
 ${stats}
-[git\u63D0\u4EA4\u5931\u8D25] ${commitErr}
-\u8BF7\u6839\u636E\u9519\u8BEF\u4FEE\u590D\u540E\u624B\u52A8\u6267\u884C git add -A && git commit`;
-    }
-    return `\u9A8C\u8BC1\u901A\u8FC7: ${scripts}
-${stats}
-\u5DF2\u63D0\u4EA4\u6700\u7EC8commit\uFF0C\u5DE5\u4F5C\u6D41\u56DE\u5230\u5F85\u547D\u72B6\u6001
+${evolutionSummary}${this.formatCommitMessage(commitResult, "finish")}
+\u5DE5\u4F5C\u6D41\u56DE\u5230\u5F85\u547D\u72B6\u6001
 \u7B49\u5F85\u4E0B\u4E00\u4E2A\u9700\u6C42...`;
+  }
+  /** 计算 config 变更的键列表（浅比较，键名排序） */
+  diffConfigKeys(before, after) {
+    const keys = /* @__PURE__ */ new Set([...Object.keys(before), ...Object.keys(after)]);
+    return [...keys].filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key])).sort();
+  }
+  /** 格式化 finish 阶段的进化摘要 */
+  formatEvolutionSummary(summary) {
+    const changedKeysText = summary.changedConfigKeys.length ? summary.changedConfigKeys.join(", ") : "\u65E0";
+    return [
+      "\u8FDB\u5316\u6458\u8981:",
+      `- reflect: ${summary.reflectRan ? "\u5DF2\u6267\u884C" : "\u672A\u6267\u884C"}`,
+      `- experiment: ${summary.experimentRan ? "\u5DF2\u6267\u884C" : "\u672A\u6267\u884C"}`,
+      `- config\u53D8\u66F4: ${summary.changedConfigKeys.length > 0 ? "\u662F" : "\u5426"}`,
+      `- \u53D8\u66F4\u952E: ${changedKeysText}`
+    ].join("\n");
+  }
+  /** 格式化验证结果，让 passed/skipped/not-found 对用户可见 */
+  formatVerifySummary(result) {
+    if (result.status === "not-found") {
+      return "\u9A8C\u8BC1\u7ED3\u679C: \u672A\u53D1\u73B0\u53EF\u6267\u884C\u7684\u9A8C\u8BC1\u547D\u4EE4";
+    }
+    const steps = result.steps ?? result.scripts.map((command) => ({ command, status: "passed" }));
+    const lines = ["\u9A8C\u8BC1\u7ED3\u679C:"];
+    for (const step of steps) {
+      if (step.status === "passed") {
+        lines.push(`- \u901A\u8FC7: ${step.command}`);
+        continue;
+      }
+      if (step.status === "skipped") {
+        lines.push(`- \u8DF3\u8FC7: ${step.command}${step.reason ? `\uFF08${step.reason}\uFF09` : ""}`);
+      }
+    }
+    return lines.join("\n");
+  }
+  /** 将 git 提交结果映射为面向用户的真实提示语 */
+  formatCommitMessage(result, stage) {
+    if (result.status === "committed") {
+      return stage === "task" ? " [\u5DF2\u81EA\u52A8\u63D0\u4EA4]" : "\n\u5DF2\u63D0\u4EA4\u6700\u7EC8commit";
+    }
+    if (result.status === "failed") {
+      return `
+[git\u63D0\u4EA4\u5931\u8D25] ${result.error}
+\u8BF7\u6839\u636E\u9519\u8BEF\u4FEE\u590D\u540E\u624B\u52A8\u68C0\u67E5\u5E76\u63D0\u4EA4\u9700\u8981\u7684\u6587\u4EF6`;
+    }
+    const reasonMap = {
+      "no-files": "\u672A\u63D0\u4F9B --files\uFF0C\u672A\u81EA\u52A8\u63D0\u4EA4",
+      "runtime-only": "\u4EC5\u68C0\u6D4B\u5230 FlowPilot \u8FD0\u884C\u65F6\u6587\u4EF6\uFF0C\u672A\u81EA\u52A8\u63D0\u4EA4",
+      "no-staged-changes": "\u6307\u5B9A\u6587\u4EF6\u65E0\u53EF\u63D0\u4EA4\u53D8\u66F4\uFF0C\u672A\u81EA\u52A8\u63D0\u4EA4"
+    };
+    const reason = result.reason ? reasonMap[result.reason] : "\u672A\u81EA\u52A8\u63D0\u4EA4";
+    return stage === "task" ? `
+[\u672A\u81EA\u52A8\u63D0\u4EA4] ${reason}` : `
+\u672A\u63D0\u4EA4\u6700\u7EC8commit\uFF1A${reason}`;
   }
   /** rollback: 回滚到指定任务的快照 */
   async rollback(id) {
@@ -3128,12 +4210,13 @@ ${stats}
       if (task.status !== "done") throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u53EA\u80FD\u56DE\u6EDA\u5DF2\u5B8C\u6210\u7684\u4EFB\u52A1`);
       const err = this.repo.rollback(id);
       if (err) return `\u56DE\u6EDA\u5931\u8D25: ${err}`;
-      const idx = parseInt(id, 10);
-      const newTasks = data.tasks.map(
-        (t) => parseInt(t.id, 10) >= idx && t.status === "done" ? { ...t, status: "pending", summary: "" } : t
-      );
-      await this.repo.saveProgress({ ...data, current: null, tasks: newTasks });
-      const resetCount = newTasks.filter((t, i) => t.status === "pending" && data.tasks[i].status === "done").length;
+      const newTasks = reopenRollbackBranch(data.tasks, id);
+      const newData = { ...data, status: "running", current: null, tasks: newTasks };
+      await this.repo.saveProgress(newData);
+      await this.updateSummary(newData);
+      const resetCount = newTasks.filter(
+        (taskEntry, index) => taskEntry.status === "pending" && data.tasks[index].status !== "pending"
+      ).length;
       return `\u5DF2\u56DE\u6EDA\u5230\u4EFB\u52A1 ${id} \u4E4B\u524D\u7684\u72B6\u6001\uFF0C${resetCount} \u4E2A\u4EFB\u52A1\u91CD\u7F6E\u4E3A pending`;
     } finally {
       await this.repo.unlock();
@@ -3357,8 +4440,8 @@ ${entry}`;
 };
 
 // src/interfaces/cli.ts
-var import_fs3 = require("fs");
-var import_path11 = require("path");
+var import_fs4 = require("fs");
+var import_path12 = require("path");
 
 // src/interfaces/formatter.ts
 var ICON = {
@@ -3491,9 +4574,9 @@ var CLI = class {
           }
         }
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
-          const filePath = (0, import_path11.resolve)(rest[fileIdx + 1]);
-          if ((0, import_path11.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
-          detail = (0, import_fs3.readFileSync)(filePath, "utf-8");
+          const filePath = (0, import_path12.resolve)(rest[fileIdx + 1]);
+          if ((0, import_path12.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
+          detail = (0, import_fs4.readFileSync)(filePath, "utf-8");
         } else if (rest.length > 1 && fileIdx < 0 && filesIdx < 0) {
           detail = rest.slice(1).join(" ");
         } else {

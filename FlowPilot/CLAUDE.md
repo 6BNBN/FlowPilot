@@ -35,4 +35,4 @@ checkpoint 时自动提取知识到 `.flowpilot/memory.json`，next 时语义检
 
 ## 进化引擎
 
-进化结果写入 `.workflow/config.json`，被 maxRetries/parallelLimit/hints 消费。
+进化结果写入 `.flowpilot/config.json`，被 maxRetries/parallelLimit/hints/verify/hooks 消费。

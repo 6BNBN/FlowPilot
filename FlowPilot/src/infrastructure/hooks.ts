@@ -1,6 +1,6 @@
 /**
  * @module infrastructure/hooks
- * @description 生命周期钩子 - 从 .workflow/config.json 读取并执行 shell 命令
+ * @description 生命周期钩子 - 优先从 .flowpilot/config.json 读取，兼容旧的 .workflow/config.json
  */
 
 import { readFile } from 'fs/promises';
@@ -17,16 +17,27 @@ interface HooksConfig {
 /**
  * 执行生命周期钩子，失败只 warn 不阻塞
  */
+async function loadHooksConfig(basePath: string): Promise<HooksConfig | null> {
+  for (const configPath of [
+    join(basePath, '.flowpilot', 'config.json'),
+    join(basePath, '.workflow', 'config.json'),
+  ]) {
+    try {
+      return JSON.parse(await readFile(configPath, 'utf-8')) as HooksConfig;
+    } catch {
+      // 尝试下一个兼容路径
+    }
+  }
+  return null;
+}
+
 export async function runLifecycleHook(
   hookName: HookName,
   basePath: string,
   env?: Record<string, string>,
 ): Promise<void> {
-  const configPath = join(basePath, '.workflow', 'config.json');
-  let config: HooksConfig;
-  try {
-    config = JSON.parse(await readFile(configPath, 'utf-8'));
-  } catch {
+  const config = await loadHooksConfig(basePath);
+  if (!config) {
     return;
   }
 

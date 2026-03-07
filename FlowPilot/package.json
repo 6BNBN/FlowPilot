@@ -1,6 +1,6 @@
 {
   "name": "flowpilot",
-  "version": "0.3.1",
+  "version": "0.3.3",
   "license": "MIT",
   "bin": {
     "flow": "./dist/flow.js"
@@ -9,6 +9,8 @@
     "build": "tsup",
     "dev": "tsx src/main.ts",
     "test": "vitest",
+    "test:run": "vitest run",
+    "test:smoke": "vitest run src/application/workflow-service.test.ts src/application/workflow-service.verify.test.ts src/infrastructure/fs-repository.test.ts src/infrastructure/git.test.ts src/infrastructure/runtime-state.test.ts src/infrastructure/verify.test.ts src/e2e/operational-readiness.test.ts",
     "setup": "npm run build && npm link"
   },
   "devDependencies": {

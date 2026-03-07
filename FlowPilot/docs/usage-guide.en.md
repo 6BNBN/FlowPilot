@@ -35,7 +35,8 @@ node flow.js init
 
 This auto-generates:
 - `CLAUDE.md` — Embedded dispatch protocol (`<!-- flowpilot:start/end -->` markers)
-- `.workflow/` directory — Task state persistence
+- `.workflow/` directory — local transient runtime state
+- local-state `.gitignore` rules when missing — by default `.workflow/`, `.flowpilot/`, `.claude/settings.json`, and `.claude/worktrees/`
 
 ### Step 3: Describe Your Requirements
 
@@ -74,8 +75,13 @@ Computer shut down, CC crashed, context full — no problem:
 ```
 # Open a new CC window
 You: Continue task
-CC: Resuming workflow: Blog System | Progress: 7/12 | Continuing execution
+CC: Resuming workflow: Blog System | Progress: 7/12 | Interrupted task 008 reset and will be re-run
 ```
+
+If the worktree is still dirty, `resume` also reports the real boundary state instead of using a generic success message:
+- baseline dirty files that existed before the workflow and are still present
+- newly dirty business files left behind by interrupted tasks and intentionally preserved
+- a conservative warning when the dirty baseline is missing and FlowPilot can no longer prove this is a clean restart
 
 ## Command Reference
 
@@ -90,7 +96,7 @@ CC: Resuming workflow: Blog System | Progress: 7/12 | Continuing execution
 | `node flow.js skip <id>` | Skip a task |
 | `node flow.js resume` | Interruption recovery (reset active→pending) |
 | `node flow.js review` | Mark code-review as done (required before finish) |
-| `node flow.js finish` | Smart finalization (verify+report skipped/failed+commit, requires review) |
+| `node flow.js finish` | Smart finalization (verify+report passed/skipped steps+refuse unsafe final commits, requires review) |
 | `node flow.js add <desc> [--type T]` | Add new task (argument order flexible) |
 | `node flow.js recall <keyword>` | Search historical memories (BM25 + MMR + temporal decay) |
 | `node flow.js evolve` | Accept AI reflection results and apply evolution (stdin) |
@@ -272,6 +278,14 @@ flow next --batch → Re-dispatch all 3 tasks in parallel
 
 `flow resume` resets **all** active tasks to pending, regardless of count. This means after a parallel interruption, that entire batch is redone. Already checkpointed tasks are unaffected.
 
+At the same time, resume now reports the dirty-worktree state truthfully:
+- `Current worktree has no leftover dirty business files; this resume is a clean restart`
+- `N dirty files from before workflow start are still preserved`
+- `Preserved N dirty business files left behind by interrupted tasks`
+- `Dirty baseline missing; cannot reliably distinguish pre-existing dirt from interrupted-task residue`
+
+These lines are boundary diagnostics, not errors. Their job is to prevent a dirty worktree from being mislabeled as perfectly clean.
+
 ### Parallel Development Notes
 
 1. **File conflicts**: Parallel sub-agents may modify the same file. Design tasks so parallel tasks operate on different files
@@ -284,7 +298,7 @@ During finalization, `flow finish` auto-detects and runs verification:
 
 | Project Type | Detection File | Commands |
 |---|---|---|
-| Node.js | package.json | npm run build/test/lint |
+| Node.js | package.json | Whatever scripts exist among build/test/lint, in order; in this repo that means `npm run build` and `npm run test` |
 | Rust | Cargo.toml | cargo build/test |
 | Go | go.mod | go build/test |
 | Python | pyproject.toml | pytest/ruff/mypy |
@@ -292,6 +306,13 @@ During finalization, `flow finish` auto-detects and runs verification:
 | Java (Gradle) | build.gradle | gradle build |
 | C/C++ | CMakeLists.txt | cmake --build/ctest |
 | Generic | Makefile | make build/test/lint |
+
+Verification results are intentionally explicit:
+- **passed**: the command ran successfully, for example `- Passed: npm run build`
+- **skipped**: the command ran but confirmed there was nothing to do, such as Vitest reporting `No test files found`
+- **not found**: the repository has no runnable verification commands at all, so finish prints `Verification result: no runnable verification commands found`
+
+In other words, finish does not blur together “no command exists” and “a command failed.”
 
 ## Environment Variables
 
@@ -333,8 +354,23 @@ Yes. Just tell CC the new requirement and it will run `flow add` to append a tas
 **Q: What if I don't want a certain plugin?**
 Plugins are optional. Without the frontend-design plugin, frontend tasks execute in general mode.
 
+**Q: Why did `flow finish` refuse the final commit?**
+The most common causes are:
+1. newly dirty files that were never owned by any checkpoint `--files` declaration
+2. leftover user changes in `CLAUDE.md`, `.claude/settings.json`, or `.gitignore` after cleanup
+3. a missing dirty baseline, so FlowPilot can no longer prove the workflow boundary is safe
+
+When this happens, FlowPilot stays in `finishing` state and lists the suspicious files instead of committing on your behalf.
+
 **Q: Should .workflow be committed to git?**
-During development, committing is recommended so team members can see task progress and historical decisions. Note that `flow finish` auto-cleans the `.workflow/` directory on successful completion.
+Usually no. `.workflow/` is local transient runtime state, `flow finish` removes it on successful completion, and the default `.gitignore` policy ignores it.
+
+**Q: How are `CLAUDE.md`, `.claude/settings.json`, and `.gitignore` cleaned up?**
+They follow ownership-based symmetric cleanup:
+- if FlowPilot created them during setup/init and the contents still exactly match the injected content, finish deletes them or restores them precisely
+- if they already existed, finish removes only the FlowPilot-owned injected portion and keeps your original content
+- the FlowPilot-owned `.gitignore` rules cover `.workflow/`, `.flowpilot/`, `.claude/settings.json`, and `.claude/worktrees/`, but do not ignore the entire `.claude/` directory
+- if user residue still remains after cleanup, finish refuses the final commit and names the file
 
 **Q: Will summaries get too long with many tasks?**
 No. After 10+ completed tasks, summaries auto-compress by type, keeping only the 3 most recent task names per group.
@@ -432,10 +468,10 @@ finish(verify) → review(code-review) → evolve → finish(verify again)
 ```
 
 Detailed flow:
-1. `flow finish` — runs build/test/lint verification
+1. `flow finish` — runs verification and prints each step as passed or skipped under `Verification result:`
 2. On pass, prompts for code-review → `flow review` marks it done
-3. `flow finish` again → triggers reflect + experiment (auto-evolution)
-4. If verification fails → fix issues, re-run finish, loop until both gates (verify + review) pass
+3. `flow finish` again → runs cleanup first, then checks the dirty baseline and owned-file boundary; only a safe boundary can proceed to reflect + experiment + final commit
+4. If verification fails, or if unowned dirty files / leftover user changes remain in setup-owned files, finish refuses the final commit; fix the issue and run finish again until verify + review + ownership boundary all pass
 
 ### Evolution Result Consumption
 

@@ -8,7 +8,8 @@ import { loadMemory, loadDf, saveDf, rebuildDf, compactMemory } from './memory';
 import { loadWindow } from './loop-detector';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import type { ProgressData } from '../domain/types';
+import { parseProgressMarkdown } from './fs-repository';
+import { loadActivationState } from './runtime-state';
 
 export interface ActiveHoursConfig {
   activeHoursStart?: number; // 0-23
@@ -25,6 +26,22 @@ export interface HeartbeatResult {
 const TASK_TIMEOUT_MS = 30 * 60 * 1000;
 const MEMORY_COMPACT_THRESHOLD = 100;
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
+
+function getTimedOutTaskIds(
+  activeIds: string[],
+  activationState: Record<string, { time: number }>,
+  lastCheckpointTimeMs: number,
+  nowMs = Date.now(),
+): string[] {
+  return activeIds.filter((id) => {
+    const activatedAt = activationState[id]?.time;
+    if (typeof activatedAt === 'number' && Number.isFinite(activatedAt)) {
+      return nowMs - activatedAt > TASK_TIMEOUT_MS;
+    }
+
+    return lastCheckpointTimeMs > 0 && nowMs - lastCheckpointTimeMs > TASK_TIMEOUT_MS;
+  });
+}
 
 /** 判断当前是否在活跃时间窗口内 */
 export function isWithinActiveHours(cfg?: ActiveHoursConfig): boolean {
@@ -48,15 +65,23 @@ export async function runHeartbeat(basePath: string, config?: ActiveHoursConfig)
 
   // 1. 活跃任务超时
   try {
-    const raw = await readFile(join(basePath, '.workflow', 'progress.json'), 'utf-8');
-    const data: ProgressData = JSON.parse(raw);
+    const raw = await readFile(join(basePath, '.workflow', 'progress.md'), 'utf-8');
+    const data = parseProgressMarkdown(raw);
     if (data.status === 'running') {
-      const active = data.tasks.filter(t => t.status === 'active');
-      if (active.length) {
-        const window = await loadWindow(basePath);
-        const lastTs = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
-        if (lastTs && Date.now() - lastTs > TASK_TIMEOUT_MS) {
-          warnings.push(`[TIMEOUT] 任务 ${active.map(t => t.id).join(',')} 超过30分钟无checkpoint`);
+      const activeIds = data.tasks
+        .filter(task => task.status === 'active')
+        .map(task => task.id);
+      if (activeIds.length) {
+        const [window, activationState] = await Promise.all([
+          loadWindow(basePath),
+          loadActivationState(basePath),
+        ]);
+        const lastCheckpointTimeMs = window.length
+          ? new Date(window[window.length - 1].timestamp).getTime()
+          : 0;
+        const timedOutIds = getTimedOutTaskIds(activeIds, activationState, lastCheckpointTimeMs);
+        if (timedOutIds.length) {
+          warnings.push(`[TIMEOUT] 任务 ${timedOutIds.join(',')} 超过30分钟无checkpoint`);
         }
       }
     }

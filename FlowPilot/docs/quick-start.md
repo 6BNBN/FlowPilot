@@ -25,7 +25,11 @@
    ```bash
    cd FlowPilot目录
    npm install && npm run build
+   npm run test:smoke
    ```
+6. 常用自动化脚本：
+   - `npm run test:run`：一次性跑完整 Vitest 测试集（CI / verify 友好）
+   - `npm run test:smoke`：只跑工作流边界相关冒烟测试，适合改文档、脚本和发布前快速核对
 
 ## 开始一个新项目
 
@@ -36,6 +40,7 @@ cp FlowPilot目录/dist/flow.js  你的项目/
 # 2. 进入项目，初始化
 cd 你的项目
 node flow.js init
+# 会确保 .workflow/、.flowpilot/、.claude/settings.json、.claude/worktrees/ 被写入 .gitignore（若缺失）
 
 # 3. 用全自动模式启动 Claude Code，直接描述需求
 claude --dangerously-skip-permissions
@@ -81,6 +86,11 @@ claude --dangerously-skip-permissions --continue
 
 进去后说「继续任务」，它会自动从断点继续，之前做的不会丢。
 
+如果工作区里仍有脏业务文件，`resume` 现在会如实说明它们属于哪一类：
+- 工作流启动前就已经存在、恢复后仍保留的 baseline 脏文件
+- 中断任务留下、被保守保留的新增脏文件
+- 如果缺少 dirty baseline，则会明确提示“无法证明这是干净重启”，而不会误报一切干净
+
 如果想从历史对话列表里挑一个恢复：
 ```bash
 claude --dangerously-skip-permissions --resume
@@ -122,6 +132,17 @@ node flow.js status
 ```
 
 或者直接问 CC："现在进度怎么样了？"
+
+## finish 会在什么时候拒绝最终提交
+
+`node flow.js finish` 只有在验证通过、已经执行过 `node flow.js review`，并且工作区边界可证明安全时才会做最终提交。
+
+如果 finish 发现以下情况，会明确拒绝最终提交，而不是帮你“赌一把”：
+- 存在不属于本轮 workflow checkpoint 的新增脏文件
+- `CLAUDE.md`、`.claude/settings.json`、`.gitignore` 在 cleanup 之后仍残留用户改动
+- 缺少 dirty baseline，无法证明哪些脏文件是工作流之外的历史遗留
+
+一句话理解：FlowPilot 只会最终提交“本轮任务明确声明归属的业务文件”，其余脏文件一律先停下来让你处理。
 
 ## 就这些
 

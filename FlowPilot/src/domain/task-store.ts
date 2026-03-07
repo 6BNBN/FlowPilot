@@ -159,3 +159,36 @@ export function findParallelTasks(tasks: readonly TaskEntry[]): TaskEntry[] {
 export function isAllDone(tasks: TaskEntry[]): boolean {
   return tasks.every(t => t.status === 'done' || t.status === 'skipped' || t.status === 'failed');
 }
+
+/**
+ * 回滚时重开目标任务及其所有传递下游终态任务。
+ * 仅重开受影响分支，保留无关分支状态不变。
+ */
+export function reopenRollbackBranch(tasks: readonly TaskEntry[], targetId: string): TaskEntry[] {
+  const idx = buildIndex(tasks);
+  if (!idx.has(targetId)) throw new Error(`任务 ${targetId} 不存在`);
+
+  const dependents = new Map<string, string[]>();
+  for (const task of tasks) {
+    for (const dep of task.deps) {
+      const downstream = dependents.get(dep) ?? [];
+      dependents.set(dep, [...downstream, task.id]);
+    }
+  }
+
+  const affected = new Set<string>();
+  const stack = [targetId];
+  while (stack.length) {
+    const current = stack.pop()!;
+    if (affected.has(current)) continue;
+    affected.add(current);
+    for (const downstreamId of dependents.get(current) ?? []) {
+      stack.push(downstreamId);
+    }
+  }
+
+  return tasks.map(task => {
+    if (!affected.has(task.id)) return { ...task };
+    return { ...task, status: 'pending' as const, summary: '', retries: 0 };
+  });
+}
