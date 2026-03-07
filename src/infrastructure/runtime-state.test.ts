@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
+  compareDirtyFilesAgainstBaseline,
   getTaskActivationAge,
   isRuntimeLockStale,
   loadActivationState,
@@ -78,7 +79,7 @@ describe('runtime-state shared metadata', () => {
       '002': { time: 4_000, pid: 222 },
     });
     await expect(getTaskActivationAge(dir, '002', 999, 10_000)).resolves.toBe(6_000);
-    await expect(getTaskActivationAge(dir, '002', 222, 10_000)).resolves.toBe(Infinity);
+    await expect(getTaskActivationAge(dir, '002', 222, 10_000)).resolves.toBe(6_000);
   });
 
   it('loadDirtyBaseline falls back safely when older workflows have no baseline file', async () => {
@@ -101,8 +102,30 @@ describe('runtime-state shared metadata', () => {
 
     expect(baseline).toEqual({
       capturedAt: '2026-03-07T00:00:00.000Z',
-      files: ['.claude/settings.json', 'README.md', 'src/app.ts'],
+      files: ['README.md', 'src/app.ts'],
     });
     await expect(loadDirtyBaseline(dir)).resolves.toEqual(baseline);
+  });
+
+  it('compareDirtyFilesAgainstBaseline distinguishes preserved baseline files from interrupted residue', () => {
+    expect(compareDirtyFilesAgainstBaseline(
+      ['src\\feature.ts', './README.md', '.workflow/progress.md'],
+      ['/README.md'],
+    )).toEqual({
+      currentFiles: ['README.md', 'src/feature.ts'],
+      preservedBaselineFiles: ['README.md'],
+      newDirtyFiles: ['src/feature.ts'],
+    });
+  });
+
+  it('compareDirtyFilesAgainstBaseline excludes FlowPilot-managed runtime dirt from both sides', () => {
+    expect(compareDirtyFilesAgainstBaseline(
+      ['.claude/settings.json', '.workflow/progress.md', 'src\\feature.ts', './README.md'],
+      ['.claude/settings.json', '/README.md', '.flowpilot/history/latest.json'],
+    )).toEqual({
+      currentFiles: ['README.md', 'src/feature.ts'],
+      preservedBaselineFiles: ['README.md'],
+      newDirtyFiles: ['src/feature.ts'],
+    });
   });
 });

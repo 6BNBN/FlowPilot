@@ -14,6 +14,7 @@ const RUNTIME_DIR = '.workflow';
 const ACTIVATED_FILE = 'activated.json';
 const DIRTY_BASELINE_FILE = 'dirty-baseline.json';
 const RUNTIME_PATH_PREFIXES = ['.flowpilot/', '.workflow/'];
+const RUNTIME_FILES = new Set(['.claude/settings.json']);
 
 /** 运行时锁元数据 */
 export interface RuntimeLockMetadata {
@@ -33,6 +34,13 @@ export interface TaskActivationMetadata {
 export interface DirtyBaseline {
   capturedAt: string;
   files: string[];
+}
+
+/** 当前 dirty 文件相对 baseline 的对比结果 */
+export interface DirtyFileComparison {
+  currentFiles: string[];
+  preservedBaselineFiles: string[];
+  newDirtyFiles: string[];
 }
 
 /** 运行时锁解析结果 */
@@ -80,7 +88,8 @@ function normalizeRuntimePath(file: string): string {
 }
 
 function isRuntimeMetadataPath(file: string): boolean {
-  return RUNTIME_PATH_PREFIXES.some(prefix => file === prefix.slice(0, -1) || file.startsWith(prefix));
+  return RUNTIME_FILES.has(file)
+    || RUNTIME_PATH_PREFIXES.some(prefix => file === prefix.slice(0, -1) || file.startsWith(prefix));
 }
 
 function isActivationMetadata(value: unknown): value is TaskActivationMetadata {
@@ -103,6 +112,22 @@ function normalizeDirtyFiles(files: string[]): string[] {
   }
 
   return [...seen].sort();
+}
+
+/** 对比当前 dirty 文件与 workflow 启动 baseline，区分历史脏文件与中断残留 */
+export function compareDirtyFilesAgainstBaseline(
+  currentFiles: string[],
+  baselineFiles: string[],
+): DirtyFileComparison {
+  const normalizedCurrentFiles = normalizeDirtyFiles(currentFiles);
+  const normalizedBaselineFiles = normalizeDirtyFiles(baselineFiles);
+  const baselineSet = new Set(normalizedBaselineFiles);
+
+  return {
+    currentFiles: normalizedCurrentFiles,
+    preservedBaselineFiles: normalizedCurrentFiles.filter(file => baselineSet.has(file)),
+    newDirtyFiles: normalizedCurrentFiles.filter(file => !baselineSet.has(file)),
+  };
 }
 
 /** 读取当前机器可证明的本地性令牌 */
@@ -277,16 +302,16 @@ export async function recordTaskActivations(
   return next;
 }
 
-/** 读取指定任务的跨进程激活时长(ms)，同进程返回 Infinity */
+/** 读取指定任务的持久化激活时长(ms)，缺失时返回 Infinity */
 export async function getTaskActivationAge(
   basePath: string,
   id: string,
-  pid = process.pid,
+  _pid = process.pid,
   nowMs = Date.now(),
 ): Promise<number> {
   const state = await loadActivationState(basePath);
   const entry = state[id];
-  if (!entry || entry.pid === pid) return Infinity;
+  if (!entry) return Infinity;
   return Math.max(0, nowMs - entry.time);
 }
 
