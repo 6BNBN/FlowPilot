@@ -56,6 +56,40 @@ describe('FsWorkflowRepository', () => {
     expect(await repo.loadSummary()).toBe('# 摘要');
   });
 
+  it('ensureClaudeWorktreesIgnored 创建缺失的 .gitignore', async () => {
+    const changed = await repo.ensureClaudeWorktreesIgnored();
+
+    expect(changed).toBe(true);
+    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe('.claude/worktrees/\n');
+  });
+
+  it('ensureClaudeWorktreesIgnored 追加规则且不覆盖原内容', async () => {
+    await writeFile(join(dir, '.gitignore'), 'node_modules/\n', 'utf-8');
+
+    const changed = await repo.ensureClaudeWorktreesIgnored();
+
+    expect(changed).toBe(true);
+    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe('node_modules/\n.claude/worktrees/\n');
+  });
+
+  it('ensureClaudeWorktreesIgnored 在无尾换行时正确追加', async () => {
+    await writeFile(join(dir, '.gitignore'), 'node_modules/', 'utf-8');
+
+    const changed = await repo.ensureClaudeWorktreesIgnored();
+
+    expect(changed).toBe(true);
+    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe('node_modules/\n.claude/worktrees/\n');
+  });
+
+  it('ensureClaudeWorktreesIgnored 幂等且不重复追加规则', async () => {
+    await writeFile(join(dir, '.gitignore'), 'node_modules/\n.claude/worktrees/\n', 'utf-8');
+
+    const changed = await repo.ensureClaudeWorktreesIgnored();
+
+    expect(changed).toBe(false);
+    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe('node_modules/\n.claude/worktrees/\n');
+  });
+
   it('ensureClaudeMd 首次创建', async () => {
     const wrote = await repo.ensureClaudeMd();
     expect(wrote).toBe(true);
@@ -95,11 +129,12 @@ describe('FsWorkflowRepository', () => {
     expect(content).not.toContain('flowpilot:start');
   });
 
-  it('cleanupInjections 移除 hooks', async () => {
+  it('cleanupInjections 不移除 hooks', async () => {
     await repo.ensureHooks();
     await repo.cleanupInjections();
     const settings = JSON.parse(await readFile(join(dir, '.claude', 'settings.json'), 'utf-8'));
-    expect(settings.hooks?.PreToolUse).toBeUndefined();
+    expect(settings.hooks.PreToolUse).toHaveLength(3);
+    expect(settings.hooks.PreToolUse[0].matcher).toBe('TaskCreate');
   });
 
   it('history 保存和加载', async () => {
@@ -117,9 +152,40 @@ describe('FsWorkflowRepository', () => {
   it('ensureHooks 写入 settings.json', async () => {
     const wrote = await repo.ensureHooks();
     expect(wrote).toBe(true);
+    expect(existsSync(join(dir, '.claude', 'settings.json'))).toBe(true);
     const settings = JSON.parse(await readFile(join(dir, '.claude', 'settings.json'), 'utf-8'));
     expect(settings.hooks.PreToolUse).toHaveLength(3);
     expect(settings.hooks.PreToolUse[0].matcher).toBe('TaskCreate');
+  });
+
+  it('ensureHooks 幂等追加 hooks', async () => {
+    await repo.ensureHooks();
+    const wrote = await repo.ensureHooks();
+    expect(wrote).toBe(false);
+    const settings = JSON.parse(await readFile(join(dir, '.claude', 'settings.json'), 'utf-8'));
+    expect(settings.hooks.PreToolUse).toHaveLength(3);
+  });
+
+  it('ensureHooks 保留已有配置并仅补齐缺失 hooks', async () => {
+    await mkdir(join(dir, '.claude'), { recursive: true });
+    await writeFile(join(dir, '.claude', 'settings.json'), JSON.stringify({
+      model: 'opus',
+      hooks: {
+        PreToolUse: [
+          { matcher: 'TaskCreate', hooks: [{ type: 'prompt', prompt: 'existing task create hook' }] },
+          { matcher: 'OtherTool', hooks: [{ type: 'prompt', prompt: 'keep me' }] },
+        ],
+      },
+    }, null, 2), 'utf-8');
+
+    const wrote = await repo.ensureHooks();
+    expect(wrote).toBe(true);
+
+    const settings = JSON.parse(await readFile(join(dir, '.claude', 'settings.json'), 'utf-8'));
+    const preToolUse = settings.hooks.PreToolUse as Array<{ matcher: string }>;
+    expect(settings.model).toBe('opus');
+    expect(preToolUse.map(entry => entry.matcher)).toEqual(['TaskCreate', 'OtherTool', 'TaskUpdate', 'TaskList']);
+    expect(preToolUse.filter(entry => entry.matcher === 'TaskCreate')).toHaveLength(1);
   });
 
   it('lock/unlock 基本流程', async () => {

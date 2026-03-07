@@ -12,6 +12,16 @@ export interface VerifyResult {
   error?: string;
 }
 
+/** 自动 git 提交跳过原因 */
+export type CommitSkipReason = 'no-files' | 'runtime-only' | 'no-staged-changes';
+
+/** 自动 git 提交结果 */
+export interface CommitResult {
+  status: 'committed' | 'skipped' | 'failed';
+  reason?: CommitSkipReason;
+  error?: string;
+}
+
 /** 仓储接口 */
 export interface WorkflowRepository {
   /** 保存进度数据到 progress.md */
@@ -32,6 +42,7 @@ export interface WorkflowRepository {
   ensureClaudeMd(): Promise<boolean>;
   /** 确保.claude/settings.json包含hooks */
   ensureHooks(): Promise<boolean>;
+  ensureClaudeWorktreesIgnored(): Promise<boolean>;
   /** 清理 context/ 目录（finish后释放上下文） */
   clearContext(): Promise<void>;
   /** 清理整个 .workflow/ 目录 */
@@ -41,8 +52,10 @@ export interface WorkflowRepository {
   /** 文件锁 */
   lock(maxWait?: number): Promise<void>;
   unlock(): Promise<void>;
-  /** Git自动提交，返回错误信息或null */
-  commit(taskId: string, title: string, summary: string, files?: string[]): string | null;
+  /** 列出当前工作区真实业务改动文件（staged/unstaged/untracked） */
+  listChangedFiles(): string[];
+  /** Git自动提交，返回真实提交结果 */
+  commit(taskId: string, title: string, summary: string, files?: string[]): CommitResult;
   /** Git清理未提交变更（resume时调用），用stash保留而非丢弃 */
   cleanup(): void;
   /** 执行项目验证（build/test/lint） */

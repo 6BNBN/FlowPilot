@@ -7,8 +7,8 @@ import { mkdir, readFile, writeFile, unlink, rm, rename, readdir } from 'fs/prom
 import { join } from 'path';
 import { openSync, closeSync } from 'fs';
 import type { ProgressData, TaskEntry, WorkflowStats, EvolutionEntry } from '../domain/types';
-import type { WorkflowRepository, VerifyResult } from '../domain/repository';
-import { autoCommit, gitCleanup, tagTask, rollbackToTask, cleanTags as gitCleanTags } from './git';
+import type { WorkflowRepository, VerifyResult, CommitResult } from '../domain/repository';
+import { autoCommit, gitCleanup, tagTask, rollbackToTask, cleanTags as gitCleanTags, listChangedFiles as gitListChangedFiles } from './git';
 import { runVerify } from './verify';
 import { PROTOCOL_TEMPLATE } from './protocol-template';
 
@@ -218,31 +218,80 @@ export class FsWorkflowRepository implements WorkflowRepository {
   async ensureHooks(): Promise<boolean> {
     const dir = join(this.base, '.claude');
     const path = join(dir, 'settings.json');
-    const hook = (m: string) => ({
-      matcher: m,
-      hooks: [{ type: 'prompt' as const, prompt: 'BLOCK this tool call. FlowPilot requires using node flow.js commands instead of native task tools.' }]
-    });
-    const required = {
-      PreToolUse: [hook('TaskCreate'), hook('TaskUpdate'), hook('TaskList')]
-    };
+
     let settings: Record<string, unknown> = {};
     try {
       const parsed = JSON.parse(await readFile(path, 'utf-8'));
-      if (parsed && typeof parsed === 'object' && !('__proto__' in parsed) && !('constructor' in parsed)) settings = parsed;
+      if (
+        parsed
+        && typeof parsed === 'object'
+        && !Array.isArray(parsed)
+        && !Object.prototype.hasOwnProperty.call(parsed, '__proto__')
+        && !Object.prototype.hasOwnProperty.call(parsed, 'constructor')
+      ) {
+        settings = parsed;
+      }
     } catch {}
-    const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
-    // 幂等：已有 FlowPilot 的 matcher 则跳过
-    const existing = hooks.PreToolUse as Array<{ matcher?: string }> | undefined;
-    if (existing?.some(h => h.matcher === required.PreToolUse[0].matcher)) return false;
-    hooks.PreToolUse = [...(existing ?? []), ...required.PreToolUse];
-    settings.hooks = hooks;
-    await mkdir(dir, { recursive: true });
-    await writeFile(path, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
+
+    const hook = (matcher: string) => ({
+      matcher,
+      hooks: [{ type: 'prompt' as const, prompt: 'BLOCK this tool call. FlowPilot requires using node flow.js commands instead of native task tools.' }]
+    });
+    const requiredPreToolUse = [hook('TaskCreate'), hook('TaskUpdate'), hook('TaskList')];
+    const currentHooks = settings.hooks;
+    const hooks = currentHooks && typeof currentHooks === 'object' && !Array.isArray(currentHooks)
+      ? currentHooks as Record<string, unknown>
+      : {};
+    const currentPreToolUse = hooks.PreToolUse;
+    const existingPreToolUse = Array.isArray(currentPreToolUse)
+      ? currentPreToolUse as Array<{ matcher?: string }>
+      : [];
+    const existingMatchers = new Set(existingPreToolUse
+      .map(entry => entry.matcher)
+      .filter((matcher): matcher is string => Boolean(matcher)));
+    const missingPreToolUse = requiredPreToolUse.filter(entry => !existingMatchers.has(entry.matcher));
+    if (!missingPreToolUse.length) return false;
+
+    const nextSettings = {
+      ...settings,
+      hooks: {
+        ...hooks,
+        PreToolUse: [...existingPreToolUse, ...missingPreToolUse],
+      },
+    };
+
+    await this.ensure(dir);
+    await writeFile(path, JSON.stringify(nextSettings, null, 2) + '\n', 'utf-8');
     return true;
   }
 
-  commit(taskId: string, title: string, summary: string, files?: string[]): string | null {
-    return autoCommit(taskId, title, summary, files);
+  async ensureClaudeWorktreesIgnored(): Promise<boolean> {
+    const path = join(this.base, '.gitignore');
+    const rule = '.claude/worktrees/';
+
+    try {
+      const content = await readFile(path, 'utf-8');
+      const hasRule = content.split(/\r?\n/).some(line => line.trimEnd() === rule);
+      if (hasRule) return false;
+
+      const nextContent = content.length === 0
+        ? `${rule}\n`
+        : `${content}${content.endsWith('\n') ? '' : '\n'}${rule}\n`;
+      await writeFile(path, nextContent, 'utf-8');
+      return true;
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error;
+      await writeFile(path, `${rule}\n`, 'utf-8');
+      return true;
+    }
+  }
+
+  listChangedFiles(): string[] {
+    return gitListChangedFiles(this.base);
+  }
+
+  commit(taskId: string, title: string, summary: string, files?: string[]): CommitResult {
+    return autoCommit(taskId, title, summary, files, this.base);
   }
 
   cleanup(): void {
@@ -292,35 +341,19 @@ export class FsWorkflowRepository implements WorkflowRepository {
     await writeFile(join(this.root, 'config.json'), JSON.stringify(config, null, 2) + '\n', 'utf-8');
   }
 
-  /** 清理注入的CLAUDE.md协议块和.claude/settings.json hooks */
+  /** 清理注入的 CLAUDE.md 协议块；运行期不回写 .claude/* */
   async cleanupInjections(): Promise<void> {
-    // 1) 移除 CLAUDE.md 中 flowpilot:start/end 块
     const mdPath = join(this.base, 'CLAUDE.md');
     try {
       const content = await readFile(mdPath, 'utf-8');
       const cleaned = content.replace(/\n*<!-- flowpilot:start -->[\s\S]*?<!-- flowpilot:end -->\n*/g, '\n');
       if (cleaned !== content) await writeFile(mdPath, cleaned.replace(/\n{3,}/g, '\n\n').trimEnd() + '\n', 'utf-8');
     } catch {}
-
-    // 2) 移除 .claude/settings.json 中 FlowPilot 注入的 PreToolUse hooks
-    const settingsPath = join(this.base, '.claude', 'settings.json');
-    try {
-      const raw = await readFile(settingsPath, 'utf-8');
-      const settings = JSON.parse(raw);
-      const hooks = settings.hooks?.PreToolUse as Array<{ matcher?: string }> | undefined;
-      if (hooks) {
-        const flowpilotMatchers = new Set(['TaskCreate', 'TaskUpdate', 'TaskList']);
-        settings.hooks.PreToolUse = hooks.filter(h => !flowpilotMatchers.has(h.matcher ?? ''));
-        if (!settings.hooks.PreToolUse.length) delete settings.hooks.PreToolUse;
-        if (!Object.keys(settings.hooks).length) delete settings.hooks;
-        await writeFile(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
-      }
-    } catch {}
   }
 
-  tag(taskId: string): string | null { return tagTask(taskId); }
-  rollback(taskId: string): string | null { return rollbackToTask(taskId); }
-  cleanTags(): void { gitCleanTags(); }
+  tag(taskId: string): string | null { return tagTask(taskId, this.base); }
+  rollback(taskId: string): string | null { return rollbackToTask(taskId, this.base); }
+  cleanTags(): void { gitCleanTags(this.base); }
 
   // --- .flowpilot/evolution/ 进化日志 ---
 
