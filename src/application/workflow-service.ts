@@ -15,12 +15,25 @@ import { extractAll } from '../infrastructure/extractor';
 import { truncateHeadTail, computeMaxChars } from '../infrastructure/truncation';
 import { detect as detectLoop, type LoopDetection } from '../infrastructure/loop-detector';
 import { startHeartbeat, runHeartbeat } from '../infrastructure/heartbeat';
-import { getTaskActivationAge, recordTaskActivations, saveDirtyBaseline } from '../infrastructure/runtime-state';
+import { compareDirtyFilesAgainstBaseline, getTaskActivationAge, loadDirtyBaseline, recordTaskActivations, saveDirtyBaseline } from '../infrastructure/runtime-state';
 import { writeFile, readFile, unlink, mkdir } from 'fs/promises';
 import { join } from 'path';
 
+const CHECKPOINT_FAILURE_PATTERNS = [
+  /^FAILED\b/i,
+  /^(?:fail(?:ed)?|error|crash(?:ed)?|timeout|timed out|rate[- ]?limit(?:ed)?)\b(?:(?:\s*[:\-])|(?:\s+(?:while|when|after|before|during|waiting|connecting|applying|fetching|reading|writing|running|executing|acquiring|get(?:ting)?|to|for))|$)/i,
+  /^(?:失败|异常|超时|崩溃|限流|中断|未完成)(?:(?:[:：，。；、])|(?:导致|发生|退出|终止|中断|等待|卡住)|$)/,
+  /^无法(?:完成|继续|执行|连接|获取|读取|写入|启动|构建|运行|应用)/,
+] as const;
+
+function isExplicitFailureCheckpoint(detail: string): boolean {
+  const normalized = detail.trim();
+  return CHECKPOINT_FAILURE_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 export class WorkflowService {
   private stopHeartbeat: (() => void) | null = null;
+  private readonly locallyActivatedTaskIds = new Set<string>();
 
   constructor(
     private readonly repo: WorkflowRepository,
@@ -45,8 +58,11 @@ export class WorkflowService {
     } catch { return null; }
   }
 
-  /** 跨进程激活时长(ms)，同进程返回 Infinity（跳过检查） */
+  /** 跨进程激活时长(ms)，仅当前实例刚激活的任务返回 Infinity（跳过检查） */
   private async getActivationAge(id: string): Promise<number> {
+    if (this.locallyActivatedTaskIds.has(id)) {
+      return Infinity;
+    }
     return getTaskActivationAge(this.repo.projectRoot(), id);
   }
 
@@ -83,6 +99,7 @@ export class WorkflowService {
       tasks,
       startTime: new Date().toISOString(),
     };
+    this.locallyActivatedTaskIds.clear();
     setWorkflowName(def.name);
     await this.repo.saveProgress(data);
     await this.repo.saveTasks(tasksMd);
@@ -137,6 +154,7 @@ export class WorkflowService {
       log.debug(`next: 激活任务 ${task.id} (deps: ${task.deps.join(',') || '无'})`);
       const activated = cascaded.map(t => t.id === task.id ? { ...t, status: 'active' as const } : t);
       await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
+      this.locallyActivatedTaskIds.add(task.id);
       await recordTaskActivations(this.repo.projectRoot(), [task.id]);
       await runLifecycleHook('onTaskStart', this.repo.projectRoot(), { TASK_ID: task.id, TASK_TITLE: task.title });
 
@@ -211,6 +229,9 @@ export class WorkflowService {
       const activeIds = new Set(tasks.map(t => t.id));
       const activated = cascaded.map(t => activeIds.has(t.id) ? { ...t, status: 'active' as const } : t);
       await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
+      for (const task of tasks) {
+        this.locallyActivatedTaskIds.add(task.id);
+      }
       await recordTaskActivations(this.repo.projectRoot(), tasks.map(t => t.id));
       for (const t of tasks) {
         await runLifecycleHook('onTaskStart', this.repo.projectRoot(), { TASK_ID: t.id, TASK_TITLE: t.title });
@@ -262,18 +283,13 @@ export class WorkflowService {
         throw new Error(`任务 ${id} 状态为 ${task.status}，只有 active 状态可以 checkpoint`);
       }
 
-      const MIN_WORK_TIME = 30_000;
-      const age = await this.getActivationAge(id);
-
       // 预加载现有记忆，供 extractAll 去重
       const existingMems = (await loadMemory(this.repo.projectRoot())).filter(m => !m.archived).map(m => m.content);
 
-      const isFailed = detail.startsWith('FAILED')
-        || (detail.length < 200 && /\b(fail|error|crash|timeout|rate.?limit)\b/i.test(detail))
-        || (detail.length < 200 && /限流|崩溃|超时|失败|异常|中断|未完成|无法/.test(detail))
-        || age < MIN_WORK_TIME;
+      const isFailed = isExplicitFailureCheckpoint(detail);
 
       if (isFailed) {
+        this.locallyActivatedTaskIds.delete(id);
         // 记录失败原因到 context
         await this.appendFailureContext(id, task, detail);
         // 检测重复失败模式
@@ -313,6 +329,7 @@ export class WorkflowService {
       const truncated = detail.length > maxChars ? truncateHeadTail(detail, maxChars) : detail;
 
       const summaryLine = truncated.split('\n')[0].slice(0, 80);
+      this.locallyActivatedTaskIds.delete(id);
       const newData = completeTask(data, id, summaryLine);
       log.debug(`checkpoint ${id}: 完成, summary="${summaryLine}"`);
 
@@ -359,6 +376,7 @@ export class WorkflowService {
     if (data.status === 'finishing') return `恢复工作流: ${data.name}\n正在收尾阶段，请执行 node flow.js finish`;
 
     const { data: newData, resetId } = resumeProgress(data);
+    this.locallyActivatedTaskIds.clear();
     await this.repo.saveProgress(newData);
     if (resetId) {
       log.debug(`resume: 重置任务 ${resetId}`);
@@ -367,15 +385,51 @@ export class WorkflowService {
 
     const doneCount = newData.tasks.filter(t => t.status === 'done').length;
     const total = newData.tasks.length;
+    const dirtySummaryLines = await this.describeResumeDirtyState();
 
     // 启动心跳自检
     this.stopHeartbeat?.();
     this.stopHeartbeat = startHeartbeat(this.repo.projectRoot());
 
-    if (resetId) {
-      return `恢复工作流: ${newData.name}\n进度: ${doneCount}/${total}\n中断任务 ${resetId} 已重置，将重新执行`;
+    const lines = [
+      `恢复工作流: ${newData.name}`,
+      `进度: ${doneCount}/${total}`,
+      resetId ? `中断任务 ${resetId} 已重置，将重新执行` : '继续执行',
+      ...dirtySummaryLines,
+    ];
+    return lines.join('\n');
+  }
+
+  /** 生成 resume 的 dirty worktree 提示，区分启动前基线与中断残留 */
+  private async describeResumeDirtyState(): Promise<string[]> {
+    const currentDirtyFiles = this.repo.listChangedFiles();
+    const baseline = await loadDirtyBaseline(this.repo.projectRoot());
+    const comparison = compareDirtyFilesAgainstBaseline(currentDirtyFiles, baseline?.files ?? []);
+
+    if (!baseline) {
+      if (!comparison.currentFiles.length) {
+        return ['未找到 dirty baseline；当前工作区无脏业务文件，但无法证明这是干净重启'];
+      }
+      return [
+        `未找到 dirty baseline；无法可靠区分启动前脏文件与中断残留，保守保留当前 ${comparison.currentFiles.length} 个脏文件:`,
+        ...comparison.currentFiles.map(file => `- ${file}`),
+      ];
     }
-    return `恢复工作流: ${newData.name}\n进度: ${doneCount}/${total}\n继续执行`;
+
+    if (!comparison.currentFiles.length) {
+      return ['当前工作区无残留脏业务文件，本次恢复是干净重启'];
+    }
+
+    const lines: string[] = [];
+    if (comparison.preservedBaselineFiles.length) {
+      lines.push(`工作流启动前已有 ${comparison.preservedBaselineFiles.length} 个脏文件仍然保留:`);
+      lines.push(...comparison.preservedBaselineFiles.map(file => `- ${file}`));
+    }
+    if (comparison.newDirtyFiles.length) {
+      lines.push(`已保留 ${comparison.newDirtyFiles.length} 个中断任务残留的脏业务文件:`);
+      lines.push(...comparison.newDirtyFiles.map(file => `- ${file}`));
+    }
+    return lines;
   }
 
   /** add: 追加任务 */

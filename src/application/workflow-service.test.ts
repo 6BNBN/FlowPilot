@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtemp, rm } from 'fs/promises';
+import { execFileSync } from 'child_process';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { WorkflowService } from './workflow-service';
@@ -7,7 +8,6 @@ import { FsWorkflowRepository } from '../infrastructure/fs-repository';
 import { parseTasksMarkdown } from '../infrastructure/markdown-parser';
 import { loadMemory } from '../infrastructure/memory';
 import * as history from '../infrastructure/history';
-import { readFile } from 'fs/promises';
 import type { CommitResult } from '../domain/repository';
 
 let savedApiKey: string | undefined;
@@ -56,6 +56,20 @@ function mockCommitResult(repo: FsWorkflowRepository, result: CommitResult) {
 
 function mockChangedFiles(repo: FsWorkflowRepository, files: string[]) {
   return vi.spyOn(repo, 'listChangedFiles').mockReturnValue(files);
+}
+
+function runGit(args: string[], cwd: string): string {
+  return execFileSync('git', args, { cwd, encoding: 'utf-8' }).trim();
+}
+
+async function initGitRepo(baseDir: string): Promise<void> {
+  runGit(['init'], baseDir);
+  runGit(['config', 'user.name', 'FlowPilot Tests'], baseDir);
+  runGit(['config', 'user.email', 'flowpilot-tests@example.com'], baseDir);
+  await writeFile(join(baseDir, '.gitignore'), 'node_modules\n', 'utf-8');
+  await writeFile(join(baseDir, 'README.md'), '# test repo\n', 'utf-8');
+  runGit(['add', '.'], baseDir);
+  runGit(['commit', '-m', 'init'], baseDir);
 }
 
 beforeEach(async () => {
@@ -115,6 +129,113 @@ describe('WorkflowService 集成测试', () => {
     // 重新next应该还是001
     const r = await svc.next();
     expect(r?.task.id).toBe('001');
+  });
+
+  it('resume会明确报告中断任务保留的脏业务文件', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
+    changedFilesSpy.mockReturnValueOnce([]);
+    changedFilesSpy.mockReturnValueOnce(['src/feature.ts']);
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+
+    await svc.init(TASKS_MD);
+    await svc.next();
+
+    const msg = await svc.resume();
+
+    expect(msg).toContain('中断任务 001 已重置，将重新执行');
+    expect(msg).toContain('已保留 1 个中断任务残留的脏业务文件');
+    expect(msg).toContain('src/feature.ts');
+  });
+
+  it('resume会区分启动前已脏且恢复后仍脏的文件', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
+    changedFilesSpy.mockReturnValueOnce(['README.md']);
+    changedFilesSpy.mockReturnValueOnce(['README.md']);
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+
+    await svc.init(TASKS_MD);
+    await svc.next();
+
+    const msg = await svc.resume();
+
+    expect(msg).toContain('工作流启动前已有 1 个脏文件仍然保留');
+    expect(msg).toContain('README.md');
+    expect(msg).not.toContain('中断任务残留的脏业务文件');
+  });
+
+  it('resume会把无脏文件的恢复表述为干净重启', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
+    changedFilesSpy.mockReturnValueOnce([]);
+    changedFilesSpy.mockReturnValueOnce([]);
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+
+    await svc.init(TASKS_MD);
+    await svc.next();
+
+    const msg = await svc.resume();
+
+    expect(msg).toContain('当前工作区无残留脏业务文件，本次恢复是干净重启');
+  });
+
+  it('resume在旧工作流缺少baseline时给出保守警告而非误报干净', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
+    changedFilesSpy.mockReturnValueOnce([]);
+    changedFilesSpy.mockReturnValueOnce(['src/legacy.ts']);
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+
+    await svc.init(TASKS_MD);
+    await rm(join(dir, '.workflow', 'dirty-baseline.json'), { force: true });
+    await svc.next();
+
+    const msg = await svc.resume();
+
+    expect(msg).toContain('未找到 dirty baseline');
+    expect(msg).toContain('src/legacy.ts');
+    expect(msg).not.toContain('干净重启');
+  });
+
+  it('resume会过滤 FlowPilot 运行时脏文件，不把 .claude/settings.json 误报为业务文件', async () => {
+    await initGitRepo(dir);
+    const repo = new FsWorkflowRepository(dir);
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+
+    await svc.init(TASKS_MD);
+    await svc.next();
+    await mkdir(join(dir, '.claude'), { recursive: true });
+    await writeFile(join(dir, '.claude', 'settings.json'), '{"hooks":[]}', 'utf-8');
+    await writeFile(join(dir, 'src-feature.ts'), 'export const changed = true;\n', 'utf-8');
+
+    const msg = await svc.resume();
+
+    expect(msg).toContain('src-feature.ts');
+    expect(msg).not.toContain('.claude/settings.json');
+    expect(msg).not.toContain('.workflow/');
+    expect(msg).not.toContain('.flowpilot/');
+  });
+
+  it('resume在旧工作流缺少baseline时也会过滤 FlowPilot 运行时脏文件', async () => {
+    await initGitRepo(dir);
+    const repo = new FsWorkflowRepository(dir);
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+
+    await svc.init(TASKS_MD);
+    await rm(join(dir, '.workflow', 'dirty-baseline.json'), { force: true });
+    await svc.next();
+    await mkdir(join(dir, '.claude'), { recursive: true });
+    await writeFile(join(dir, '.claude', 'settings.json'), '{"hooks":[]}', 'utf-8');
+    await writeFile(join(dir, 'src-legacy.ts'), 'export const legacy = true;\n', 'utf-8');
+
+    const msg = await svc.resume();
+
+    expect(msg).toContain('未找到 dirty baseline');
+    expect(msg).toContain('src-legacy.ts');
+    expect(msg).not.toContain('.claude/settings.json');
+    expect(msg).not.toContain('.workflow/');
+    expect(msg).not.toContain('.flowpilot/');
   });
 
   it('失败重试3次后级联跳过', async () => {
@@ -208,13 +329,85 @@ describe('WorkflowService 集成测试', () => {
     expect(activations['002'].pid).toBe(process.pid);
   });
 
-  it('第二个WorkflowService实例能读取同一份激活状态', async () => {
+  it('第二个WorkflowService实例从磁盘读取共享激活状态而非依赖同进程快捷路径', async () => {
+    await svc.init(TASKS_MD);
+    await svc.next();
+
+    const activatedPath = join(dir, '.workflow', 'activated.json');
+    const persisted = JSON.parse(await readFile(activatedPath, 'utf-8'));
+    await expect((svc as any).getActivationAge('001')).resolves.toBe(Infinity);
+
+    persisted['001'] = {
+      ...persisted['001'],
+      time: persisted['001'].time - 4_000,
+      pid: process.pid,
+    };
+    await writeFile(activatedPath, JSON.stringify(persisted), 'utf-8');
+
+    const repo = new FsWorkflowRepository(dir);
+    const secondSvc = new WorkflowService(repo, parseTasksMarkdown);
+    await expect((secondSvc as any).getActivationAge('001')).resolves.toBeGreaterThanOrEqual(4_000);
+  });
+
+  it('checkpoint对快速且有效的摘要按成功处理', async () => {
+    await svc.init(TASKS_MD);
+    await svc.next();
+
+    const msg = await svc.checkpoint('001', '完成 schema 评审并确认索引迁移顺序');
+
+    expect(msg).toContain('任务 001 完成');
+    const status = await svc.status();
+    expect(status?.tasks[0].status).toBe('done');
+  });
+
+  it('checkpoint对显式FAILED负载仍按失败处理', async () => {
+    await svc.init(TASKS_MD);
+    await svc.next();
+
+    const msg = await svc.checkpoint('001', 'FAILED: agent crashed before applying changes');
+
+    expect(msg).toContain('将重试');
+    const status = await svc.status();
+    expect(status?.tasks[0].status).toBe('pending');
+    expect(status?.tasks[0].retries).toBe(1);
+  });
+
+  it('checkpoint对短错误形态负载仍按失败处理', async () => {
+    await svc.init(TASKS_MD);
+    await svc.next();
+
+    const msg = await svc.checkpoint('001', 'timeout while waiting for repo lock');
+
+    expect(msg).toContain('将重试');
+    const status = await svc.status();
+    expect(status?.tasks[0].status).toBe('pending');
+    expect(status?.tasks[0].retries).toBe(1);
+  });
+
+  it('checkpoint对包含失败领域词汇的成功摘要仍按成功处理', async () => {
+    await svc.init(TASKS_MD);
+    await svc.next();
+
+    const msg = await svc.checkpoint('001', '完成 timeout/error handling 修复并补充异常重试说明');
+
+    expect(msg).toContain('任务 001 完成');
+    const status = await svc.status();
+    expect(status?.tasks[0].status).toBe('done');
+    expect(status?.tasks[0].retries).toBe(0);
+  });
+
+  it('跨进程checkpoint不会仅因激活时长过短被判定失败', async () => {
     await svc.init(TASKS_MD);
     await svc.next();
 
     const repo = new FsWorkflowRepository(dir);
     const secondSvc = new WorkflowService(repo, parseTasksMarkdown);
-    await expect((secondSvc as any).getActivationAge('001')).resolves.toBeGreaterThanOrEqual(0);
+    const msg = await secondSvc.checkpoint('001', '完成 schema 评审并补充索引约束说明');
+
+    expect(msg).toContain('任务 001 完成');
+    const status = await secondSvc.status();
+    expect(status?.tasks[0].status).toBe('done');
+    expect(status?.tasks[0].retries).toBe(0);
   });
 
   it('init不允许覆盖running工作流', async () => {

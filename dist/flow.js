@@ -430,6 +430,7 @@ var RUNTIME_DIR = ".workflow";
 var ACTIVATED_FILE = "activated.json";
 var DIRTY_BASELINE_FILE = "dirty-baseline.json";
 var RUNTIME_PATH_PREFIXES = [".flowpilot/", ".workflow/"];
+var RUNTIME_FILES = /* @__PURE__ */ new Set([".claude/settings.json"]);
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -446,7 +447,7 @@ function normalizeRuntimePath(file) {
   return file.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
 }
 function isRuntimeMetadataPath(file) {
-  return RUNTIME_PATH_PREFIXES.some((prefix) => file === prefix.slice(0, -1) || file.startsWith(prefix));
+  return RUNTIME_FILES.has(file) || RUNTIME_PATH_PREFIXES.some((prefix) => file === prefix.slice(0, -1) || file.startsWith(prefix));
 }
 function isActivationMetadata(value) {
   return isRecord(value) && typeof value.time === "number" && Number.isFinite(value.time) && Number.isInteger(value.pid) && value.pid > 0;
@@ -458,6 +459,16 @@ function normalizeDirtyFiles(files) {
     seen.add(file);
   }
   return [...seen].sort();
+}
+function compareDirtyFilesAgainstBaseline(currentFiles, baselineFiles) {
+  const normalizedCurrentFiles = normalizeDirtyFiles(currentFiles);
+  const normalizedBaselineFiles = normalizeDirtyFiles(baselineFiles);
+  const baselineSet = new Set(normalizedBaselineFiles);
+  return {
+    currentFiles: normalizedCurrentFiles,
+    preservedBaselineFiles: normalizedCurrentFiles.filter((file) => baselineSet.has(file)),
+    newDirtyFiles: normalizedCurrentFiles.filter((file) => !baselineSet.has(file))
+  };
 }
 function getRuntimeLocalityToken() {
   try {
@@ -586,11 +597,26 @@ async function recordTaskActivations(basePath2, ids, nowMs = Date.now(), pid = p
   await (0, import_promises.rename)(path + ".tmp", path);
   return next;
 }
-async function getTaskActivationAge(basePath2, id, pid = process.pid, nowMs = Date.now()) {
+async function getTaskActivationAge(basePath2, id, _pid = process.pid, nowMs = Date.now()) {
   const state = await loadActivationState(basePath2);
   const entry = state[id];
-  if (!entry || entry.pid === pid) return Infinity;
+  if (!entry) return Infinity;
   return Math.max(0, nowMs - entry.time);
+}
+async function loadDirtyBaseline(basePath2) {
+  try {
+    const parsed = JSON.parse(await (0, import_promises.readFile)(runtimePath(basePath2, DIRTY_BASELINE_FILE), "utf-8"));
+    if (!isRecord(parsed) || !isValidCreatedAt(parsed.capturedAt) || !Array.isArray(parsed.files)) {
+      return null;
+    }
+    const files = parsed.files.filter((file) => typeof file === "string");
+    return {
+      capturedAt: parsed.capturedAt,
+      files: normalizeDirtyFiles(files)
+    };
+  } catch {
+    return null;
+  }
 }
 async function saveDirtyBaseline(basePath2, files, capturedAt = (/* @__PURE__ */ new Date()).toISOString()) {
   const baseline = {
@@ -2955,6 +2981,15 @@ var import_path9 = require("path");
 var TASK_TIMEOUT_MS = 30 * 60 * 1e3;
 var MEMORY_COMPACT_THRESHOLD = 100;
 var DEFAULT_INTERVAL_MS = 5 * 60 * 1e3;
+function getTimedOutTaskIds(activeIds, activationState, lastCheckpointTimeMs, nowMs = Date.now()) {
+  return activeIds.filter((id) => {
+    const activatedAt = activationState[id]?.time;
+    if (typeof activatedAt === "number" && Number.isFinite(activatedAt)) {
+      return nowMs - activatedAt > TASK_TIMEOUT_MS;
+    }
+    return lastCheckpointTimeMs > 0 && nowMs - lastCheckpointTimeMs > TASK_TIMEOUT_MS;
+  });
+}
 function isWithinActiveHours(cfg) {
   if (!cfg?.activeHoursStart && cfg?.activeHoursStart !== 0) return true;
   const now = cfg.timezone ? new Date((/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: cfg.timezone })) : /* @__PURE__ */ new Date();
@@ -2973,12 +3008,16 @@ async function runHeartbeat(basePath2, config) {
     const raw = await (0, import_promises8.readFile)((0, import_path9.join)(basePath2, ".workflow", "progress.md"), "utf-8");
     const data = parseProgressMarkdown(raw);
     if (data.status === "running") {
-      const active = data.tasks.filter((task) => task.status === "active");
-      if (active.length) {
-        const window = await loadWindow(basePath2);
-        const lastTs = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
-        if (lastTs && Date.now() - lastTs > TASK_TIMEOUT_MS) {
-          warnings.push(`[TIMEOUT] \u4EFB\u52A1 ${active.map((task) => task.id).join(",")} \u8D85\u8FC730\u5206\u949F\u65E0checkpoint`);
+      const activeIds = data.tasks.filter((task) => task.status === "active").map((task) => task.id);
+      if (activeIds.length) {
+        const [window, activationState] = await Promise.all([
+          loadWindow(basePath2),
+          loadActivationState(basePath2)
+        ]);
+        const lastCheckpointTimeMs = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
+        const timedOutIds = getTimedOutTaskIds(activeIds, activationState, lastCheckpointTimeMs);
+        if (timedOutIds.length) {
+          warnings.push(`[TIMEOUT] \u4EFB\u52A1 ${timedOutIds.join(",")} \u8D85\u8FC730\u5206\u949F\u65E0checkpoint`);
         }
       }
     }
@@ -3123,12 +3162,23 @@ async function detect(basePath2, taskId, summary, failed, activeHours) {
 // src/application/workflow-service.ts
 var import_promises10 = require("fs/promises");
 var import_path11 = require("path");
+var CHECKPOINT_FAILURE_PATTERNS = [
+  /^FAILED\b/i,
+  /^(?:fail(?:ed)?|error|crash(?:ed)?|timeout|timed out|rate[- ]?limit(?:ed)?)\b(?:(?:\s*[:\-])|(?:\s+(?:while|when|after|before|during|waiting|connecting|applying|fetching|reading|writing|running|executing|acquiring|get(?:ting)?|to|for))|$)/i,
+  /^(?:失败|异常|超时|崩溃|限流|中断|未完成)(?:(?:[:：，。；、])|(?:导致|发生|退出|终止|中断|等待|卡住)|$)/,
+  /^无法(?:完成|继续|执行|连接|获取|读取|写入|启动|构建|运行|应用)/
+];
+function isExplicitFailureCheckpoint(detail) {
+  const normalized = detail.trim();
+  return CHECKPOINT_FAILURE_PATTERNS.some((pattern) => pattern.test(normalized));
+}
 var WorkflowService = class {
   constructor(repo2, parse) {
     this.repo = repo2;
     this.parse = parse;
   }
   stopHeartbeat = null;
+  locallyActivatedTaskIds = /* @__PURE__ */ new Set();
   loopWarningPath() {
     return (0, import_path11.join)(this.repo.projectRoot(), ".workflow", "loop-warning.txt");
   }
@@ -3146,8 +3196,11 @@ var WorkflowService = class {
       return null;
     }
   }
-  /** 跨进程激活时长(ms)，同进程返回 Infinity（跳过检查） */
+  /** 跨进程激活时长(ms)，仅当前实例刚激活的任务返回 Infinity（跳过检查） */
   async getActivationAge(id) {
+    if (this.locallyActivatedTaskIds.has(id)) {
+      return Infinity;
+    }
     return getTaskActivationAge(this.repo.projectRoot(), id);
   }
   /** init: 解析任务markdown → 生成progress/tasks */
@@ -3181,6 +3234,7 @@ var WorkflowService = class {
       tasks,
       startTime: (/* @__PURE__ */ new Date()).toISOString()
     };
+    this.locallyActivatedTaskIds.clear();
     setWorkflowName(def.name);
     await this.repo.saveProgress(data);
     await this.repo.saveTasks(tasksMd);
@@ -3224,6 +3278,7 @@ ${def.description}
       log.debug(`next: \u6FC0\u6D3B\u4EFB\u52A1 ${task.id} (deps: ${task.deps.join(",") || "\u65E0"})`);
       const activated = cascaded.map((t) => t.id === task.id ? { ...t, status: "active" } : t);
       await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
+      this.locallyActivatedTaskIds.add(task.id);
       await recordTaskActivations(this.repo.projectRoot(), [task.id]);
       await runLifecycleHook("onTaskStart", this.repo.projectRoot(), { TASK_ID: task.id, TASK_TITLE: task.title });
       const parts = [];
@@ -3282,6 +3337,9 @@ ${loopWarning}`);
       const activeIds = new Set(tasks.map((t) => t.id));
       const activated = cascaded.map((t) => activeIds.has(t.id) ? { ...t, status: "active" } : t);
       await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
+      for (const task of tasks) {
+        this.locallyActivatedTaskIds.add(task.id);
+      }
       await recordTaskActivations(this.repo.projectRoot(), tasks.map((t) => t.id));
       for (const t of tasks) {
         await runLifecycleHook("onTaskStart", this.repo.projectRoot(), { TASK_ID: t.id, TASK_TITLE: t.title });
@@ -3328,11 +3386,10 @@ ${loopWarning}`);
       if (task.status !== "active") {
         throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u53EA\u6709 active \u72B6\u6001\u53EF\u4EE5 checkpoint`);
       }
-      const MIN_WORK_TIME = 3e4;
-      const age = await this.getActivationAge(id);
       const existingMems = (await loadMemory(this.repo.projectRoot())).filter((m) => !m.archived).map((m) => m.content);
-      const isFailed = detail.startsWith("FAILED") || detail.length < 200 && /\b(fail|error|crash|timeout|rate.?limit)\b/i.test(detail) || detail.length < 200 && /限流|崩溃|超时|失败|异常|中断|未完成|无法/.test(detail) || age < MIN_WORK_TIME;
+      const isFailed = isExplicitFailureCheckpoint(detail);
       if (isFailed) {
+        this.locallyActivatedTaskIds.delete(id);
         await this.appendFailureContext(id, task, detail);
         const patternWarn = await this.detectFailurePattern(id, task);
         const loopResult2 = await detect(this.repo.projectRoot(), id, detail, true);
@@ -3361,6 +3418,7 @@ ${warns.join("\n")}` : msg2;
       const maxChars = computeMaxChars(128e3, detail);
       const truncated = detail.length > maxChars ? truncateHeadTail(detail, maxChars) : detail;
       const summaryLine = truncated.split("\n")[0].slice(0, 80);
+      this.locallyActivatedTaskIds.delete(id);
       const newData = completeTask(data, id, summaryLine);
       log.debug(`checkpoint ${id}: \u5B8C\u6210, summary="${summaryLine}"`);
       await this.repo.saveProgress(newData);
@@ -3402,6 +3460,7 @@ ${detail}
     if (data.status === "finishing") return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${data.name}
 \u6B63\u5728\u6536\u5C3E\u9636\u6BB5\uFF0C\u8BF7\u6267\u884C node flow.js finish`;
     const { data: newData, resetId } = resumeProgress(data);
+    this.locallyActivatedTaskIds.clear();
     await this.repo.saveProgress(newData);
     if (resetId) {
       log.debug(`resume: \u91CD\u7F6E\u4EFB\u52A1 ${resetId}`);
@@ -3409,16 +3468,44 @@ ${detail}
     }
     const doneCount = newData.tasks.filter((t) => t.status === "done").length;
     const total = newData.tasks.length;
+    const dirtySummaryLines = await this.describeResumeDirtyState();
     this.stopHeartbeat?.();
     this.stopHeartbeat = startHeartbeat(this.repo.projectRoot());
-    if (resetId) {
-      return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${newData.name}
-\u8FDB\u5EA6: ${doneCount}/${total}
-\u4E2D\u65AD\u4EFB\u52A1 ${resetId} \u5DF2\u91CD\u7F6E\uFF0C\u5C06\u91CD\u65B0\u6267\u884C`;
+    const lines = [
+      `\u6062\u590D\u5DE5\u4F5C\u6D41: ${newData.name}`,
+      `\u8FDB\u5EA6: ${doneCount}/${total}`,
+      resetId ? `\u4E2D\u65AD\u4EFB\u52A1 ${resetId} \u5DF2\u91CD\u7F6E\uFF0C\u5C06\u91CD\u65B0\u6267\u884C` : "\u7EE7\u7EED\u6267\u884C",
+      ...dirtySummaryLines
+    ];
+    return lines.join("\n");
+  }
+  /** 生成 resume 的 dirty worktree 提示，区分启动前基线与中断残留 */
+  async describeResumeDirtyState() {
+    const currentDirtyFiles = this.repo.listChangedFiles();
+    const baseline = await loadDirtyBaseline(this.repo.projectRoot());
+    const comparison = compareDirtyFilesAgainstBaseline(currentDirtyFiles, baseline?.files ?? []);
+    if (!baseline) {
+      if (!comparison.currentFiles.length) {
+        return ["\u672A\u627E\u5230 dirty baseline\uFF1B\u5F53\u524D\u5DE5\u4F5C\u533A\u65E0\u810F\u4E1A\u52A1\u6587\u4EF6\uFF0C\u4F46\u65E0\u6CD5\u8BC1\u660E\u8FD9\u662F\u5E72\u51C0\u91CD\u542F"];
+      }
+      return [
+        `\u672A\u627E\u5230 dirty baseline\uFF1B\u65E0\u6CD5\u53EF\u9760\u533A\u5206\u542F\u52A8\u524D\u810F\u6587\u4EF6\u4E0E\u4E2D\u65AD\u6B8B\u7559\uFF0C\u4FDD\u5B88\u4FDD\u7559\u5F53\u524D ${comparison.currentFiles.length} \u4E2A\u810F\u6587\u4EF6:`,
+        ...comparison.currentFiles.map((file) => `- ${file}`)
+      ];
     }
-    return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${newData.name}
-\u8FDB\u5EA6: ${doneCount}/${total}
-\u7EE7\u7EED\u6267\u884C`;
+    if (!comparison.currentFiles.length) {
+      return ["\u5F53\u524D\u5DE5\u4F5C\u533A\u65E0\u6B8B\u7559\u810F\u4E1A\u52A1\u6587\u4EF6\uFF0C\u672C\u6B21\u6062\u590D\u662F\u5E72\u51C0\u91CD\u542F"];
+    }
+    const lines = [];
+    if (comparison.preservedBaselineFiles.length) {
+      lines.push(`\u5DE5\u4F5C\u6D41\u542F\u52A8\u524D\u5DF2\u6709 ${comparison.preservedBaselineFiles.length} \u4E2A\u810F\u6587\u4EF6\u4ECD\u7136\u4FDD\u7559:`);
+      lines.push(...comparison.preservedBaselineFiles.map((file) => `- ${file}`));
+    }
+    if (comparison.newDirtyFiles.length) {
+      lines.push(`\u5DF2\u4FDD\u7559 ${comparison.newDirtyFiles.length} \u4E2A\u4E2D\u65AD\u4EFB\u52A1\u6B8B\u7559\u7684\u810F\u4E1A\u52A1\u6587\u4EF6:`);
+      lines.push(...comparison.newDirtyFiles.map((file) => `- ${file}`));
+    }
+    return lines;
   }
   /** add: 追加任务 */
   async add(title, type) {
