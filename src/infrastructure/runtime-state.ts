@@ -4,10 +4,16 @@
  */
 
 import { readFileSync } from 'fs';
+import { mkdir, readFile, rename, writeFile } from 'fs/promises';
 import { hostname as getHostname } from 'os';
+import { join } from 'path';
 
 const DEFAULT_INVALID_LOCK_STALE_AFTER_MS = 30_000;
 const LINUX_BOOT_ID_PATH = '/proc/sys/kernel/random/boot_id';
+const RUNTIME_DIR = '.workflow';
+const ACTIVATED_FILE = 'activated.json';
+const DIRTY_BASELINE_FILE = 'dirty-baseline.json';
+const RUNTIME_PATH_PREFIXES = ['.flowpilot/', '.workflow/'];
 
 /** 运行时锁元数据 */
 export interface RuntimeLockMetadata {
@@ -15,6 +21,18 @@ export interface RuntimeLockMetadata {
   hostname: string;
   createdAt: string;
   localityToken?: string;
+}
+
+/** 任务激活元数据 */
+export interface TaskActivationMetadata {
+  time: number;
+  pid: number;
+}
+
+/** 工作流 dirty baseline */
+export interface DirtyBaseline {
+  capturedAt: string;
+  files: string[];
 }
 
 /** 运行时锁解析结果 */
@@ -47,6 +65,44 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isValidCreatedAt(value: unknown): value is string {
   return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
+function runtimeDir(basePath: string): string {
+  return join(basePath, RUNTIME_DIR);
+}
+
+function runtimePath(basePath: string, fileName: string): string {
+  return join(runtimeDir(basePath), fileName);
+}
+
+function normalizeRuntimePath(file: string): string {
+  return file.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
+}
+
+function isRuntimeMetadataPath(file: string): boolean {
+  return RUNTIME_PATH_PREFIXES.some(prefix => file === prefix.slice(0, -1) || file.startsWith(prefix));
+}
+
+function isActivationMetadata(value: unknown): value is TaskActivationMetadata {
+  return isRecord(value)
+    && typeof value.time === 'number'
+    && Number.isFinite(value.time)
+    && Number.isInteger(value.pid)
+    && value.pid > 0;
+}
+
+function normalizeDirtyFiles(files: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized = files
+    .map(normalizeRuntimePath)
+    .filter(file => file.length > 0)
+    .filter(file => !isRuntimeMetadataPath(file));
+
+  for (const file of normalized) {
+    seen.add(file);
+  }
+
+  return [...seen].sort();
 }
 
 /** 读取当前机器可证明的本地性令牌 */
@@ -186,6 +242,87 @@ export function isRuntimeLockStale(input: RuntimeLockStaleCheckInput): RuntimeLo
     owner: input.parsed.metadata,
     ageMs,
   };
+}
+
+/** 读取任务激活状态 */
+export async function loadActivationState(basePath: string): Promise<Record<string, TaskActivationMetadata>> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(runtimePath(basePath, ACTIVATED_FILE), 'utf-8'));
+    if (!isRecord(parsed)) return {};
+
+    const entries = Object.entries(parsed)
+      .filter((entry): entry is [string, TaskActivationMetadata] => isActivationMetadata(entry[1]));
+    return Object.fromEntries(entries);
+  } catch {
+    return {};
+  }
+}
+
+/** 持久化任务激活状态 */
+export async function recordTaskActivations(
+  basePath: string,
+  ids: string[],
+  nowMs = Date.now(),
+  pid = process.pid,
+): Promise<Record<string, TaskActivationMetadata>> {
+  const current = await loadActivationState(basePath);
+  const next = ids.reduce<Record<string, TaskActivationMetadata>>(
+    (state, id) => ({ ...state, [id]: { time: nowMs, pid } }),
+    current,
+  );
+  await mkdir(runtimeDir(basePath), { recursive: true });
+  const path = runtimePath(basePath, ACTIVATED_FILE);
+  await writeFile(path + '.tmp', JSON.stringify(next), 'utf-8');
+  await rename(path + '.tmp', path);
+  return next;
+}
+
+/** 读取指定任务的跨进程激活时长(ms)，同进程返回 Infinity */
+export async function getTaskActivationAge(
+  basePath: string,
+  id: string,
+  pid = process.pid,
+  nowMs = Date.now(),
+): Promise<number> {
+  const state = await loadActivationState(basePath);
+  const entry = state[id];
+  if (!entry || entry.pid === pid) return Infinity;
+  return Math.max(0, nowMs - entry.time);
+}
+
+/** 读取 dirty baseline，旧工作流缺失时返回 null */
+export async function loadDirtyBaseline(basePath: string): Promise<DirtyBaseline | null> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(runtimePath(basePath, DIRTY_BASELINE_FILE), 'utf-8'));
+    if (!isRecord(parsed) || !isValidCreatedAt(parsed.capturedAt) || !Array.isArray(parsed.files)) {
+      return null;
+    }
+
+    const files = parsed.files.filter((file): file is string => typeof file === 'string');
+    return {
+      capturedAt: parsed.capturedAt,
+      files: normalizeDirtyFiles(files),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** 保存 dirty baseline */
+export async function saveDirtyBaseline(
+  basePath: string,
+  files: string[],
+  capturedAt = new Date().toISOString(),
+): Promise<DirtyBaseline> {
+  const baseline: DirtyBaseline = {
+    capturedAt,
+    files: normalizeDirtyFiles(files),
+  };
+  await mkdir(runtimeDir(basePath), { recursive: true });
+  const path = runtimePath(basePath, DIRTY_BASELINE_FILE);
+  await writeFile(path + '.tmp', JSON.stringify(baseline), 'utf-8');
+  await rename(path + '.tmp', path);
+  return baseline;
 }
 
 /** 无效锁文件的默认陈旧回收阈值 */

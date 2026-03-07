@@ -2,8 +2,8 @@
 "use strict";
 
 // src/infrastructure/fs-repository.ts
-var import_promises = require("fs/promises");
-var import_path = require("path");
+var import_promises2 = require("fs/promises");
+var import_path2 = require("path");
 var import_fs2 = require("fs");
 var import_os2 = require("os");
 
@@ -421,14 +421,43 @@ echo '\u6458\u8981 [REMEMBER] \u5173\u952E\u53D1\u73B0 [DECISION] \u6280\u672F\u
 
 // src/infrastructure/runtime-state.ts
 var import_fs = require("fs");
+var import_promises = require("fs/promises");
 var import_os = require("os");
+var import_path = require("path");
 var DEFAULT_INVALID_LOCK_STALE_AFTER_MS = 3e4;
 var LINUX_BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id";
+var RUNTIME_DIR = ".workflow";
+var ACTIVATED_FILE = "activated.json";
+var DIRTY_BASELINE_FILE = "dirty-baseline.json";
+var RUNTIME_PATH_PREFIXES = [".flowpilot/", ".workflow/"];
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isValidCreatedAt(value) {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+function runtimeDir(basePath2) {
+  return (0, import_path.join)(basePath2, RUNTIME_DIR);
+}
+function runtimePath(basePath2, fileName) {
+  return (0, import_path.join)(runtimeDir(basePath2), fileName);
+}
+function normalizeRuntimePath(file) {
+  return file.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
+}
+function isRuntimeMetadataPath(file) {
+  return RUNTIME_PATH_PREFIXES.some((prefix) => file === prefix.slice(0, -1) || file.startsWith(prefix));
+}
+function isActivationMetadata(value) {
+  return isRecord(value) && typeof value.time === "number" && Number.isFinite(value.time) && Number.isInteger(value.pid) && value.pid > 0;
+}
+function normalizeDirtyFiles(files) {
+  const seen = /* @__PURE__ */ new Set();
+  const normalized = files.map(normalizeRuntimePath).filter((file) => file.length > 0).filter((file) => !isRuntimeMetadataPath(file));
+  for (const file of normalized) {
+    seen.add(file);
+  }
+  return [...seen].sort();
 }
 function getRuntimeLocalityToken() {
   try {
@@ -535,6 +564,45 @@ function isRuntimeLockStale(input) {
     ageMs
   };
 }
+async function loadActivationState(basePath2) {
+  try {
+    const parsed = JSON.parse(await (0, import_promises.readFile)(runtimePath(basePath2, ACTIVATED_FILE), "utf-8"));
+    if (!isRecord(parsed)) return {};
+    const entries = Object.entries(parsed).filter((entry) => isActivationMetadata(entry[1]));
+    return Object.fromEntries(entries);
+  } catch {
+    return {};
+  }
+}
+async function recordTaskActivations(basePath2, ids, nowMs = Date.now(), pid = process.pid) {
+  const current = await loadActivationState(basePath2);
+  const next = ids.reduce(
+    (state, id) => ({ ...state, [id]: { time: nowMs, pid } }),
+    current
+  );
+  await (0, import_promises.mkdir)(runtimeDir(basePath2), { recursive: true });
+  const path = runtimePath(basePath2, ACTIVATED_FILE);
+  await (0, import_promises.writeFile)(path + ".tmp", JSON.stringify(next), "utf-8");
+  await (0, import_promises.rename)(path + ".tmp", path);
+  return next;
+}
+async function getTaskActivationAge(basePath2, id, pid = process.pid, nowMs = Date.now()) {
+  const state = await loadActivationState(basePath2);
+  const entry = state[id];
+  if (!entry || entry.pid === pid) return Infinity;
+  return Math.max(0, nowMs - entry.time);
+}
+async function saveDirtyBaseline(basePath2, files, capturedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+  const baseline = {
+    capturedAt,
+    files: normalizeDirtyFiles(files)
+  };
+  await (0, import_promises.mkdir)(runtimeDir(basePath2), { recursive: true });
+  const path = runtimePath(basePath2, DIRTY_BASELINE_FILE);
+  await (0, import_promises.writeFile)(path + ".tmp", JSON.stringify(baseline), "utf-8");
+  await (0, import_promises.rename)(path + ".tmp", path);
+  return baseline;
+}
 function defaultInvalidLockStaleAfterMs() {
   return DEFAULT_INVALID_LOCK_STALE_AFTER_MS;
 }
@@ -579,7 +647,7 @@ function parseProgressMarkdown(raw) {
 }
 async function readConfigFile(path) {
   try {
-    const parsed = JSON.parse(await (0, import_promises.readFile)(path, "utf-8"));
+    const parsed = JSON.parse(await (0, import_promises2.readFile)(path, "utf-8"));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     return parsed;
   } catch {
@@ -587,16 +655,16 @@ async function readConfigFile(path) {
   }
 }
 async function readPersistedConfig(basePath2) {
-  const currentConfig = await readConfigFile((0, import_path.join)(basePath2, PERSISTENT_DIR, CONFIG_FILE));
+  const currentConfig = await readConfigFile((0, import_path2.join)(basePath2, PERSISTENT_DIR, CONFIG_FILE));
   if (currentConfig) return currentConfig;
-  return readConfigFile((0, import_path.join)(basePath2, LEGACY_RUNTIME_DIR, CONFIG_FILE));
+  return readConfigFile((0, import_path2.join)(basePath2, LEGACY_RUNTIME_DIR, CONFIG_FILE));
 }
 async function loadProtocolTemplate(basePath2) {
   const config = await readPersistedConfig(basePath2);
   const protocolTemplate = config?.protocolTemplate;
   if (typeof protocolTemplate === "string" && protocolTemplate.length > 0) {
     try {
-      return await (0, import_promises.readFile)((0, import_path.join)(basePath2, protocolTemplate), "utf-8");
+      return await (0, import_promises2.readFile)((0, import_path2.join)(basePath2, protocolTemplate), "utf-8");
     } catch {
     }
   }
@@ -611,17 +679,17 @@ var FsWorkflowRepository = class {
   base;
   constructor(basePath2) {
     this.base = basePath2;
-    this.root = (0, import_path.join)(basePath2, LEGACY_RUNTIME_DIR);
-    this.ctxDir = (0, import_path.join)(this.root, "context");
-    this.configDir = (0, import_path.join)(basePath2, PERSISTENT_DIR);
-    this.historyDir = (0, import_path.join)(basePath2, PERSISTENT_DIR, "history");
-    this.evolutionDir = (0, import_path.join)(basePath2, PERSISTENT_DIR, "evolution");
+    this.root = (0, import_path2.join)(basePath2, LEGACY_RUNTIME_DIR);
+    this.ctxDir = (0, import_path2.join)(this.root, "context");
+    this.configDir = (0, import_path2.join)(basePath2, PERSISTENT_DIR);
+    this.historyDir = (0, import_path2.join)(basePath2, PERSISTENT_DIR, "history");
+    this.evolutionDir = (0, import_path2.join)(basePath2, PERSISTENT_DIR, "evolution");
   }
   projectRoot() {
     return this.base;
   }
   async ensure(dir) {
-    await (0, import_promises.mkdir)(dir, { recursive: true });
+    await (0, import_promises2.mkdir)(dir, { recursive: true });
   }
   isProcessAlive(pid) {
     try {
@@ -635,8 +703,8 @@ var FsWorkflowRepository = class {
   async reclaimStaleLock(lockPath) {
     try {
       const [raw, fileStat] = await Promise.all([
-        (0, import_promises.readFile)(lockPath, "utf-8"),
-        (0, import_promises.stat)(lockPath)
+        (0, import_promises2.readFile)(lockPath, "utf-8"),
+        (0, import_promises2.stat)(lockPath)
       ]);
       const parsed = parseRuntimeLock(raw);
       const decision = isRuntimeLockStale({
@@ -648,7 +716,7 @@ var FsWorkflowRepository = class {
         currentLocalityToken: getRuntimeLocalityToken()
       });
       if (!decision.stale) return false;
-      await (0, import_promises.unlink)(lockPath);
+      await (0, import_promises2.unlink)(lockPath);
       return true;
     } catch (error) {
       if (error?.code === "ENOENT") return true;
@@ -657,7 +725,7 @@ var FsWorkflowRepository = class {
   }
   async describeLockFailure(lockPath) {
     try {
-      const raw = await (0, import_promises.readFile)(lockPath, "utf-8");
+      const raw = await (0, import_promises2.readFile)(lockPath, "utf-8");
       const parsed = parseRuntimeLock(raw);
       if (!parsed.valid) return "\u65E0\u6CD5\u83B7\u53D6\u6587\u4EF6\u9501\uFF1A\u73B0\u6709\u9501\u5143\u6570\u636E\u65E0\u6548\u4E14\u672A\u8FBE\u5230\u5B89\u5168\u56DE\u6536\u6761\u4EF6";
       const ageMs = Math.max(0, Date.now() - Date.parse(parsed.metadata.createdAt));
@@ -672,7 +740,7 @@ var FsWorkflowRepository = class {
   /** 文件锁：用 O_EXCL 创建 lockfile，防止并发读写 */
   async lock(maxWait = 5e3) {
     await this.ensure(this.root);
-    const lockPath = (0, import_path.join)(this.root, ".lock");
+    const lockPath = (0, import_path2.join)(this.root, ".lock");
     const start = Date.now();
     const tryAcquire = async () => {
       let fd;
@@ -691,7 +759,7 @@ var FsWorkflowRepository = class {
         } catch {
         }
         try {
-          await (0, import_promises.unlink)(lockPath);
+          await (0, import_promises2.unlink)(lockPath);
         } catch {
         }
         throw error;
@@ -701,7 +769,7 @@ var FsWorkflowRepository = class {
         return true;
       } catch (error) {
         try {
-          await (0, import_promises.unlink)(lockPath);
+          await (0, import_promises2.unlink)(lockPath);
         } catch {
         }
         throw error;
@@ -716,12 +784,12 @@ var FsWorkflowRepository = class {
     throw new Error(await this.describeLockFailure(lockPath));
   }
   async unlock() {
-    const lockPath = (0, import_path.join)(this.root, ".lock");
+    const lockPath = (0, import_path2.join)(this.root, ".lock");
     try {
-      const raw = await (0, import_promises.readFile)(lockPath, "utf-8");
+      const raw = await (0, import_promises2.readFile)(lockPath, "utf-8");
       const parsed = parseRuntimeLock(raw);
       if (!isRuntimeLockOwnedByProcess(parsed)) return;
-      await (0, import_promises.unlink)(lockPath);
+      await (0, import_promises2.unlink)(lockPath);
     } catch {
     }
   }
@@ -743,13 +811,13 @@ var FsWorkflowRepository = class {
       const esc = (s) => (s || "-").replace(/\|/g, "\u2223").replace(/\n/g, " ");
       lines.push(`| ${t.id} | ${esc(t.title)} | ${t.type} | ${deps} | ${t.status} | ${t.retries} | ${esc(t.summary)} | ${esc(t.description)} |`);
     }
-    const p = (0, import_path.join)(this.root, "progress.md");
-    await (0, import_promises.writeFile)(p + ".tmp", lines.join("\n") + "\n", "utf-8");
-    await (0, import_promises.rename)(p + ".tmp", p);
+    const p = (0, import_path2.join)(this.root, "progress.md");
+    await (0, import_promises2.writeFile)(p + ".tmp", lines.join("\n") + "\n", "utf-8");
+    await (0, import_promises2.rename)(p + ".tmp", p);
   }
   async loadProgress() {
     try {
-      const raw = await (0, import_promises.readFile)((0, import_path.join)(this.root, "progress.md"), "utf-8");
+      const raw = await (0, import_promises2.readFile)((0, import_path2.join)(this.root, "progress.md"), "utf-8");
       return parseProgressMarkdown(raw);
     } catch {
       return null;
@@ -757,20 +825,20 @@ var FsWorkflowRepository = class {
   }
   // --- context/ 任务详细产出 ---
   async clearContext() {
-    await (0, import_promises.rm)(this.ctxDir, { recursive: true, force: true });
+    await (0, import_promises2.rm)(this.ctxDir, { recursive: true, force: true });
   }
   async clearAll() {
-    await (0, import_promises.rm)(this.root, { recursive: true, force: true });
+    await (0, import_promises2.rm)(this.root, { recursive: true, force: true });
   }
   async saveTaskContext(taskId, content) {
     await this.ensure(this.ctxDir);
-    const p = (0, import_path.join)(this.ctxDir, `task-${taskId}.md`);
-    await (0, import_promises.writeFile)(p + ".tmp", content, "utf-8");
-    await (0, import_promises.rename)(p + ".tmp", p);
+    const p = (0, import_path2.join)(this.ctxDir, `task-${taskId}.md`);
+    await (0, import_promises2.writeFile)(p + ".tmp", content, "utf-8");
+    await (0, import_promises2.rename)(p + ".tmp", p);
   }
   async loadTaskContext(taskId) {
     try {
-      return await (0, import_promises.readFile)((0, import_path.join)(this.ctxDir, `task-${taskId}.md`), "utf-8");
+      return await (0, import_promises2.readFile)((0, import_path2.join)(this.ctxDir, `task-${taskId}.md`), "utf-8");
     } catch {
       return null;
     }
@@ -778,13 +846,13 @@ var FsWorkflowRepository = class {
   // --- summary.md ---
   async saveSummary(content) {
     await this.ensure(this.ctxDir);
-    const p = (0, import_path.join)(this.ctxDir, "summary.md");
-    await (0, import_promises.writeFile)(p + ".tmp", content, "utf-8");
-    await (0, import_promises.rename)(p + ".tmp", p);
+    const p = (0, import_path2.join)(this.ctxDir, "summary.md");
+    await (0, import_promises2.writeFile)(p + ".tmp", content, "utf-8");
+    await (0, import_promises2.rename)(p + ".tmp", p);
   }
   async loadSummary() {
     try {
-      return await (0, import_promises.readFile)((0, import_path.join)(this.ctxDir, "summary.md"), "utf-8");
+      return await (0, import_promises2.readFile)((0, import_path2.join)(this.ctxDir, "summary.md"), "utf-8");
     } catch {
       return "";
     }
@@ -792,35 +860,35 @@ var FsWorkflowRepository = class {
   // --- tasks.md ---
   async saveTasks(content) {
     await this.ensure(this.root);
-    await (0, import_promises.writeFile)((0, import_path.join)(this.root, "tasks.md"), content, "utf-8");
+    await (0, import_promises2.writeFile)((0, import_path2.join)(this.root, "tasks.md"), content, "utf-8");
   }
   async loadTasks() {
     try {
-      return await (0, import_promises.readFile)((0, import_path.join)(this.root, "tasks.md"), "utf-8");
+      return await (0, import_promises2.readFile)((0, import_path2.join)(this.root, "tasks.md"), "utf-8");
     } catch {
       return null;
     }
   }
   async ensureClaudeMd() {
-    const base = (0, import_path.join)(this.root, "..");
-    const path = (0, import_path.join)(base, "CLAUDE.md");
+    const base = (0, import_path2.join)(this.root, "..");
+    const path = (0, import_path2.join)(base, "CLAUDE.md");
     const marker = "<!-- flowpilot:start -->";
     const block = (await loadProtocolTemplate(this.base)).trim();
     try {
-      const content = await (0, import_promises.readFile)(path, "utf-8");
+      const content = await (0, import_promises2.readFile)(path, "utf-8");
       if (content.includes(marker)) return false;
-      await (0, import_promises.writeFile)(path, content.trimEnd() + "\n\n" + block + "\n", "utf-8");
+      await (0, import_promises2.writeFile)(path, content.trimEnd() + "\n\n" + block + "\n", "utf-8");
     } catch {
-      await (0, import_promises.writeFile)(path, "# Project\n\n" + block + "\n", "utf-8");
+      await (0, import_promises2.writeFile)(path, "# Project\n\n" + block + "\n", "utf-8");
     }
     return true;
   }
   async ensureHooks() {
-    const dir = (0, import_path.join)(this.base, ".claude");
-    const path = (0, import_path.join)(dir, "settings.json");
+    const dir = (0, import_path2.join)(this.base, ".claude");
+    const path = (0, import_path2.join)(dir, "settings.json");
     let settings = {};
     try {
-      const parsed = JSON.parse(await (0, import_promises.readFile)(path, "utf-8"));
+      const parsed = JSON.parse(await (0, import_promises2.readFile)(path, "utf-8"));
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && !Object.prototype.hasOwnProperty.call(parsed, "__proto__") && !Object.prototype.hasOwnProperty.call(parsed, "constructor")) {
         settings = parsed;
       }
@@ -846,24 +914,24 @@ var FsWorkflowRepository = class {
       }
     };
     await this.ensure(dir);
-    await (0, import_promises.writeFile)(path, JSON.stringify(nextSettings, null, 2) + "\n", "utf-8");
+    await (0, import_promises2.writeFile)(path, JSON.stringify(nextSettings, null, 2) + "\n", "utf-8");
     return true;
   }
   async ensureClaudeWorktreesIgnored() {
-    const path = (0, import_path.join)(this.base, ".gitignore");
+    const path = (0, import_path2.join)(this.base, ".gitignore");
     const rule = ".claude/worktrees/";
     try {
-      const content = await (0, import_promises.readFile)(path, "utf-8");
+      const content = await (0, import_promises2.readFile)(path, "utf-8");
       const hasRule = content.split(/\r?\n/).some((line) => line.trimEnd() === rule);
       if (hasRule) return false;
       const nextContent = content.length === 0 ? `${rule}
 ` : `${content}${content.endsWith("\n") ? "" : "\n"}${rule}
 `;
-      await (0, import_promises.writeFile)(path, nextContent, "utf-8");
+      await (0, import_promises2.writeFile)(path, nextContent, "utf-8");
       return true;
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
-      await (0, import_promises.writeFile)(path, `${rule}
+      await (0, import_promises2.writeFile)(path, `${rule}
 `, "utf-8");
       return true;
     }
@@ -884,16 +952,16 @@ var FsWorkflowRepository = class {
   async saveHistory(stats) {
     await this.ensure(this.historyDir);
     const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-    const p = (0, import_path.join)(this.historyDir, `${ts}.json`);
-    await (0, import_promises.writeFile)(p, JSON.stringify(stats, null, 2), "utf-8");
+    const p = (0, import_path2.join)(this.historyDir, `${ts}.json`);
+    await (0, import_promises2.writeFile)(p, JSON.stringify(stats, null, 2), "utf-8");
   }
   async loadHistory() {
     try {
-      const files = (await (0, import_promises.readdir)(this.historyDir)).filter((f) => f.endsWith(".json")).sort();
+      const files = (await (0, import_promises2.readdir)(this.historyDir)).filter((f) => f.endsWith(".json")).sort();
       const results = [];
       for (const f of files) {
         try {
-          results.push(JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(this.historyDir, f), "utf-8")));
+          results.push(JSON.parse(await (0, import_promises2.readFile)((0, import_path2.join)(this.historyDir, f), "utf-8")));
         } catch {
         }
       }
@@ -904,26 +972,26 @@ var FsWorkflowRepository = class {
   }
   // --- .flowpilot/config.json（兼容读取旧的 .workflow/config.json） ---
   async loadConfig() {
-    const currentConfig = await readConfigFile((0, import_path.join)(this.configDir, CONFIG_FILE));
+    const currentConfig = await readConfigFile((0, import_path2.join)(this.configDir, CONFIG_FILE));
     if (currentConfig) return currentConfig;
-    const legacyConfig = await readConfigFile((0, import_path.join)(this.root, CONFIG_FILE));
+    const legacyConfig = await readConfigFile((0, import_path2.join)(this.root, CONFIG_FILE));
     if (!legacyConfig) return {};
     await this.saveConfig(legacyConfig);
     return legacyConfig;
   }
   async saveConfig(config) {
     await this.ensure(this.configDir);
-    const path = (0, import_path.join)(this.configDir, CONFIG_FILE);
-    await (0, import_promises.writeFile)(path + ".tmp", JSON.stringify(config, null, 2) + "\n", "utf-8");
-    await (0, import_promises.rename)(path + ".tmp", path);
+    const path = (0, import_path2.join)(this.configDir, CONFIG_FILE);
+    await (0, import_promises2.writeFile)(path + ".tmp", JSON.stringify(config, null, 2) + "\n", "utf-8");
+    await (0, import_promises2.rename)(path + ".tmp", path);
   }
   /** 清理注入的 CLAUDE.md 协议块；运行期不回写 .claude/* */
   async cleanupInjections() {
-    const mdPath = (0, import_path.join)(this.base, "CLAUDE.md");
+    const mdPath = (0, import_path2.join)(this.base, "CLAUDE.md");
     try {
-      const content = await (0, import_promises.readFile)(mdPath, "utf-8");
+      const content = await (0, import_promises2.readFile)(mdPath, "utf-8");
       const cleaned = content.replace(/\n*<!-- flowpilot:start -->[\s\S]*?<!-- flowpilot:end -->\n*/g, "\n");
-      if (cleaned !== content) await (0, import_promises.writeFile)(mdPath, cleaned.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n", "utf-8");
+      if (cleaned !== content) await (0, import_promises2.writeFile)(mdPath, cleaned.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n", "utf-8");
     } catch {
     }
   }
@@ -940,15 +1008,15 @@ var FsWorkflowRepository = class {
   async saveEvolution(entry) {
     await this.ensure(this.evolutionDir);
     const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-    await (0, import_promises.writeFile)((0, import_path.join)(this.evolutionDir, `${ts}.json`), JSON.stringify(entry, null, 2), "utf-8");
+    await (0, import_promises2.writeFile)((0, import_path2.join)(this.evolutionDir, `${ts}.json`), JSON.stringify(entry, null, 2), "utf-8");
   }
   async loadEvolutions() {
     try {
-      const files = (await (0, import_promises.readdir)(this.evolutionDir)).filter((f) => f.endsWith(".json")).sort();
+      const files = (await (0, import_promises2.readdir)(this.evolutionDir)).filter((f) => f.endsWith(".json")).sort();
       const results = [];
       for (const f of files) {
         try {
-          results.push(JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(this.evolutionDir, f), "utf-8")));
+          results.push(JSON.parse(await (0, import_promises2.readFile)((0, import_path2.join)(this.evolutionDir, f), "utf-8")));
         } catch {
         }
       }
@@ -1210,13 +1278,13 @@ function parseFlowPilotMarkdown(markdown) {
 }
 
 // src/infrastructure/hooks.ts
-var import_promises2 = require("fs/promises");
+var import_promises3 = require("fs/promises");
 var import_child_process = require("child_process");
-var import_path3 = require("path");
+var import_path4 = require("path");
 
 // src/infrastructure/logger.ts
 var import_fs3 = require("fs");
-var import_path2 = require("path");
+var import_path3 = require("path");
 var verbose = process.env.FLOWPILOT_VERBOSE === "1";
 var basePath = null;
 var workflowName = null;
@@ -1232,13 +1300,13 @@ function setWorkflowName(name) {
 }
 function logFilePath() {
   if (!basePath || !workflowName) return null;
-  return (0, import_path2.join)(basePath, ".flowpilot", "logs", `${workflowName}.jsonl`);
+  return (0, import_path3.join)(basePath, ".flowpilot", "logs", `${workflowName}.jsonl`);
 }
 function persist(entry) {
   const p = logFilePath();
   if (!p) return;
   try {
-    (0, import_fs3.mkdirSync)((0, import_path2.dirname)(p), { recursive: true });
+    (0, import_fs3.mkdirSync)((0, import_path3.dirname)(p), { recursive: true });
     (0, import_fs3.appendFileSync)(p, JSON.stringify(entry) + "\n", "utf-8");
   } catch {
   }
@@ -1278,11 +1346,11 @@ var log = {
 // src/infrastructure/hooks.ts
 async function loadHooksConfig(basePath2) {
   for (const configPath of [
-    (0, import_path3.join)(basePath2, ".flowpilot", "config.json"),
-    (0, import_path3.join)(basePath2, ".workflow", "config.json")
+    (0, import_path4.join)(basePath2, ".flowpilot", "config.json"),
+    (0, import_path4.join)(basePath2, ".workflow", "config.json")
   ]) {
     try {
-      return JSON.parse(await (0, import_promises2.readFile)(configPath, "utf-8"));
+      return JSON.parse(await (0, import_promises3.readFile)(configPath, "utf-8"));
     } catch {
     }
   }
@@ -1517,8 +1585,8 @@ async function extractAll(text, source, existingMemories) {
 }
 
 // src/infrastructure/history.ts
-var import_promises3 = require("fs/promises");
-var import_path4 = require("path");
+var import_promises4 = require("fs/promises");
+var import_path5 = require("path");
 var PERSISTENT_CONFIG_PATH = [".flowpilot", "config.json"];
 var LEGACY_SNAPSHOT_CONFIG_KEY = "config.json";
 var SNAPSHOT_CONFIG_KEY = ".flowpilot/config.json";
@@ -1745,20 +1813,20 @@ async function reflect(stats, basePath2) {
   const llmReport = await llmReflect(stats);
   const report = llmReport ?? ruleReflect(stats);
   const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-  const p = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", `reflect-${ts}.json`);
-  await (0, import_promises3.mkdir)((0, import_path4.dirname)(p), { recursive: true });
-  await (0, import_promises3.writeFile)(p, JSON.stringify(report, null, 2), "utf-8");
+  const p = (0, import_path5.join)(basePath2, ".flowpilot", "evolution", `reflect-${ts}.json`);
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
+  await (0, import_promises4.writeFile)(p, JSON.stringify(report, null, 2), "utf-8");
   return report;
 }
 async function safeRead(p, fallback) {
   try {
-    return await (0, import_promises3.readFile)(p, "utf-8");
+    return await (0, import_promises4.readFile)(p, "utf-8");
   } catch {
     return fallback;
   }
 }
 function resolvePersistentConfigPath(basePath2) {
-  return (0, import_path4.join)(basePath2, ...PERSISTENT_CONFIG_PATH);
+  return (0, import_path5.join)(basePath2, ...PERSISTENT_CONFIG_PATH);
 }
 function readSnapshotConfig(snapshot) {
   return snapshot.files[SNAPSHOT_CONFIG_KEY] ?? snapshot.files[LEGACY_SNAPSHOT_CONFIG_KEY] ?? null;
@@ -1787,18 +1855,18 @@ function parseConfigAction(action) {
 }
 async function saveSnapshot(basePath2, files) {
   const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-  const p = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", `snapshot-${ts}.json`);
+  const p = (0, import_path5.join)(basePath2, ".flowpilot", "evolution", `snapshot-${ts}.json`);
   const snapshot = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), files };
-  await (0, import_promises3.mkdir)((0, import_path4.dirname)(p), { recursive: true });
-  await (0, import_promises3.writeFile)(p, JSON.stringify(snapshot, null, 2), "utf-8");
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
+  await (0, import_promises4.writeFile)(p, JSON.stringify(snapshot, null, 2), "utf-8");
   return p;
 }
 async function loadLatestSnapshot(basePath2) {
-  const dir = (0, import_path4.join)(basePath2, ".flowpilot", "evolution");
+  const dir = (0, import_path5.join)(basePath2, ".flowpilot", "evolution");
   try {
-    const files = (await (0, import_promises3.readdir)(dir)).filter((f) => f.startsWith("snapshot-") && f.endsWith(".json")).sort();
+    const files = (await (0, import_promises4.readdir)(dir)).filter((f) => f.startsWith("snapshot-") && f.endsWith(".json")).sort();
     if (!files.length) return null;
-    return JSON.parse(await (0, import_promises3.readFile)((0, import_path4.join)(dir, files[files.length - 1]), "utf-8"));
+    return JSON.parse(await (0, import_promises4.readFile)((0, import_path5.join)(dir, files[files.length - 1]), "utf-8"));
   } catch {
     return null;
   }
@@ -1811,7 +1879,7 @@ function findLatestExperimentSnapshotLog(logs) {
   return null;
 }
 async function appendExperimentsMd(basePath2, expLog, report) {
-  const mdPath = (0, import_path4.join)(basePath2, ".flowpilot", "EXPERIMENTS.md");
+  const mdPath = (0, import_path5.join)(basePath2, ".flowpilot", "EXPERIMENTS.md");
   const existing = await safeRead(mdPath, "# Evolution Experiments\n");
   const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
   const applied = expLog.experiments.filter((e) => e.applied);
@@ -1825,8 +1893,8 @@ async function appendExperimentsMd(basePath2, expLog, report) {
 **\u72B6\u6001**: ${expLog.status}
 `
   ).join("\n");
-  await (0, import_promises3.mkdir)((0, import_path4.dirname)(mdPath), { recursive: true });
-  await (0, import_promises3.writeFile)(mdPath, existing.trimEnd() + "\n\n" + entries, "utf-8");
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(mdPath), { recursive: true });
+  await (0, import_promises4.writeFile)(mdPath, existing.trimEnd() + "\n\n" + entries, "utf-8");
 }
 async function experiment(report, basePath2) {
   const log2 = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), experiments: [], status: "completed" };
@@ -1860,21 +1928,21 @@ async function experiment(report, basePath2) {
       log2.experiments.push(applied);
     }
     if (log2.experiments.some((e) => e.applied)) {
-      await (0, import_promises3.mkdir)((0, import_path4.dirname)(configPath), { recursive: true });
-      await (0, import_promises3.writeFile)(configPath, JSON.stringify(configObj, null, 2), "utf-8");
+      await (0, import_promises4.mkdir)((0, import_path5.dirname)(configPath), { recursive: true });
+      await (0, import_promises4.writeFile)(configPath, JSON.stringify(configObj, null, 2), "utf-8");
     }
   } catch {
     log2.status = "failed";
   }
-  const logPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
-  await (0, import_promises3.mkdir)((0, import_path4.dirname)(logPath), { recursive: true });
+  const logPath = (0, import_path5.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(logPath), { recursive: true });
   let existing = [];
   try {
-    existing = JSON.parse(await (0, import_promises3.readFile)(logPath, "utf-8"));
+    existing = JSON.parse(await (0, import_promises4.readFile)(logPath, "utf-8"));
   } catch {
   }
   existing.push(log2);
-  await (0, import_promises3.writeFile)(logPath, JSON.stringify(existing, null, 2), "utf-8");
+  await (0, import_promises4.writeFile)(logPath, JSON.stringify(existing, null, 2), "utf-8");
   await appendExperimentsMd(basePath2, log2, report);
   return log2;
 }
@@ -1882,16 +1950,16 @@ async function review(basePath2) {
   const checks = [];
   let rolledBack = false;
   let rollbackReason;
-  const historyDir = (0, import_path4.join)(basePath2, ".flowpilot", "history");
+  const historyDir = (0, import_path5.join)(basePath2, ".flowpilot", "history");
   const configPath = resolvePersistentConfigPath(basePath2);
-  const expPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
+  const expPath = (0, import_path5.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
   let history = [];
   try {
-    const files = (await (0, import_promises3.readdir)(historyDir)).filter((f) => f.endsWith(".json")).sort();
+    const files = (await (0, import_promises4.readdir)(historyDir)).filter((f) => f.endsWith(".json")).sort();
     const recent = files.slice(-2);
     for (const f of recent) {
       try {
-        history.push(JSON.parse(await (0, import_promises3.readFile)((0, import_path4.join)(historyDir, f), "utf-8")));
+        history.push(JSON.parse(await (0, import_promises4.readFile)((0, import_path5.join)(historyDir, f), "utf-8")));
       } catch {
       }
     }
@@ -1946,24 +2014,24 @@ async function review(basePath2) {
   }
   if (rolledBack) {
     try {
-      const logs = JSON.parse(await (0, import_promises3.readFile)(expPath, "utf-8"));
+      const logs = JSON.parse(await (0, import_promises4.readFile)(expPath, "utf-8"));
       const latestSnapshotLog = findLatestExperimentSnapshotLog(logs);
       let snapshot = null;
       if (latestSnapshotLog?.snapshotFile) {
         try {
-          snapshot = JSON.parse(await (0, import_promises3.readFile)(latestSnapshotLog.snapshotFile, "utf-8"));
+          snapshot = JSON.parse(await (0, import_promises4.readFile)(latestSnapshotLog.snapshotFile, "utf-8"));
         } catch {
         }
       }
       if (!snapshot) snapshot = await loadLatestSnapshot(basePath2);
       const snapshotConfig = snapshot ? readSnapshotConfig(snapshot) : null;
       if (snapshotConfig !== null) {
-        await (0, import_promises3.mkdir)((0, import_path4.dirname)(configPath), { recursive: true });
-        await (0, import_promises3.writeFile)(configPath, snapshotConfig, "utf-8");
+        await (0, import_promises4.mkdir)((0, import_path5.dirname)(configPath), { recursive: true });
+        await (0, import_promises4.writeFile)(configPath, snapshotConfig, "utf-8");
       }
       if (logs.length) {
         logs[logs.length - 1].status = "skipped";
-        await (0, import_promises3.writeFile)(expPath, JSON.stringify(logs, null, 2), "utf-8");
+        await (0, import_promises4.writeFile)(expPath, JSON.stringify(logs, null, 2), "utf-8");
       }
     } catch (e) {
       log.warn(`[review] rollback failed: ${e}`);
@@ -1976,15 +2044,15 @@ async function review(basePath2) {
     ...rollbackReason ? { rollbackReason } : {}
   };
   const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-  const outPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", `review-${ts}.json`);
-  await (0, import_promises3.mkdir)((0, import_path4.dirname)(outPath), { recursive: true });
-  await (0, import_promises3.writeFile)(outPath, JSON.stringify(result, null, 2), "utf-8");
+  const outPath = (0, import_path5.join)(basePath2, ".flowpilot", "evolution", `review-${ts}.json`);
+  await (0, import_promises4.mkdir)((0, import_path5.dirname)(outPath), { recursive: true });
+  await (0, import_promises4.writeFile)(outPath, JSON.stringify(result, null, 2), "utf-8");
   return result;
 }
 
 // src/infrastructure/memory.ts
-var import_promises6 = require("fs/promises");
-var import_path7 = require("path");
+var import_promises7 = require("fs/promises");
+var import_path8 = require("path");
 var import_crypto2 = require("crypto");
 
 // src/infrastructure/lang-analyzers.ts
@@ -2099,8 +2167,8 @@ function analyze(tokens, lang) {
 // src/infrastructure/embedding.ts
 var import_https2 = require("https");
 var import_crypto = require("crypto");
-var import_promises4 = require("fs/promises");
-var import_path5 = require("path");
+var import_promises5 = require("fs/promises");
+var import_path6 = require("path");
 var TIMEOUT_MS = 15e3;
 var CACHE_FILE = "embedding-cache.json";
 var memCache = null;
@@ -2108,12 +2176,12 @@ function sha256(text) {
   return (0, import_crypto.createHash)("sha256").update(text).digest("hex");
 }
 function cachePath(basePath2) {
-  return (0, import_path5.join)(basePath2, ".flowpilot", CACHE_FILE);
+  return (0, import_path6.join)(basePath2, ".flowpilot", CACHE_FILE);
 }
 async function loadEmbeddingCache(basePath2) {
   if (memCache) return memCache;
   try {
-    memCache = JSON.parse(await (0, import_promises4.readFile)(cachePath(basePath2), "utf-8"));
+    memCache = JSON.parse(await (0, import_promises5.readFile)(cachePath(basePath2), "utf-8"));
     return memCache;
   } catch {
     memCache = /* @__PURE__ */ Object.create(null);
@@ -2122,8 +2190,8 @@ async function loadEmbeddingCache(basePath2) {
 }
 async function saveEmbeddingCache(basePath2, cache) {
   const p = cachePath(basePath2);
-  await (0, import_promises4.mkdir)((0, import_path5.dirname)(p), { recursive: true });
-  await (0, import_promises4.writeFile)(p, JSON.stringify(cache), "utf-8");
+  await (0, import_promises5.mkdir)((0, import_path6.dirname)(p), { recursive: true });
+  await (0, import_promises5.writeFile)(p, JSON.stringify(cache), "utf-8");
 }
 function getConfig() {
   const apiKey = process.env.EMBEDDING_API_KEY;
@@ -2248,23 +2316,23 @@ async function describeImage(imageUrl) {
 }
 
 // src/infrastructure/vector-store.ts
-var import_promises5 = require("fs/promises");
-var import_path6 = require("path");
+var import_promises6 = require("fs/promises");
+var import_path7 = require("path");
 var DENSE_VECTOR_FILE = "dense-vectors.json";
 function denseVectorPath(dir) {
-  return (0, import_path6.join)(dir, ".flowpilot", DENSE_VECTOR_FILE);
+  return (0, import_path7.join)(dir, ".flowpilot", DENSE_VECTOR_FILE);
 }
 async function loadDenseVectors(dir) {
   try {
-    return JSON.parse(await (0, import_promises5.readFile)(denseVectorPath(dir), "utf-8"));
+    return JSON.parse(await (0, import_promises6.readFile)(denseVectorPath(dir), "utf-8"));
   } catch {
     return [];
   }
 }
 async function saveDenseVectors(dir, entries) {
   const p = denseVectorPath(dir);
-  await (0, import_promises5.mkdir)((0, import_path6.dirname)(p), { recursive: true });
-  await (0, import_promises5.writeFile)(p, JSON.stringify(entries), "utf-8");
+  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
+  await (0, import_promises6.writeFile)(p, JSON.stringify(entries), "utf-8");
 }
 function denseCosineSim(a, b) {
   if (a.length !== b.length || !a.length) return 0;
@@ -2307,11 +2375,11 @@ function sha2562(text) {
   return (0, import_crypto2.createHash)("sha256").update(text).digest("hex");
 }
 function cachePath2(basePath2) {
-  return (0, import_path7.join)(basePath2, ".flowpilot", CACHE_FILE2);
+  return (0, import_path8.join)(basePath2, ".flowpilot", CACHE_FILE2);
 }
 async function loadCache(basePath2) {
   try {
-    const cache = JSON.parse(await (0, import_promises6.readFile)(cachePath2(basePath2), "utf-8"));
+    const cache = JSON.parse(await (0, import_promises7.readFile)(cachePath2(basePath2), "utf-8"));
     const now = Date.now();
     for (const k of Object.keys(cache.entries)) {
       if (now - (cache.entries[k].createdAt ?? 0) > CACHE_TTL_MS) delete cache.entries[k];
@@ -2323,7 +2391,7 @@ async function loadCache(basePath2) {
 }
 async function saveCache(basePath2, cache) {
   const p = cachePath2(basePath2);
-  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
+  await (0, import_promises7.mkdir)((0, import_path8.dirname)(p), { recursive: true });
   const now = Date.now();
   for (const k of Object.keys(cache.entries)) {
     if (now - (cache.entries[k].createdAt ?? 0) > CACHE_TTL_MS) delete cache.entries[k];
@@ -2336,11 +2404,11 @@ async function saveCache(basePath2, cache) {
     const pruneCount = Math.ceil(keys.length * 0.25);
     for (const k of sorted.slice(0, pruneCount)) delete cache.entries[k];
   }
-  await (0, import_promises6.writeFile)(p, JSON.stringify(cache), "utf-8");
+  await (0, import_promises7.writeFile)(p, JSON.stringify(cache), "utf-8");
 }
 async function clearCache(basePath2) {
   try {
-    await (0, import_promises6.unlink)(cachePath2(basePath2));
+    await (0, import_promises7.unlink)(cachePath2(basePath2));
   } catch {
   }
 }
@@ -2350,28 +2418,28 @@ function temporalDecayScore(entry, halfLifeDays = 30) {
   return Math.exp(-Math.LN2 / halfLifeDays * ageDays);
 }
 function memoryPath(basePath2) {
-  return (0, import_path7.join)(basePath2, ".flowpilot", MEMORY_FILE);
+  return (0, import_path8.join)(basePath2, ".flowpilot", MEMORY_FILE);
 }
 function dfPath(basePath2) {
-  return (0, import_path7.join)(basePath2, ".flowpilot", DF_FILE);
+  return (0, import_path8.join)(basePath2, ".flowpilot", DF_FILE);
 }
 function snapshotPath(basePath2) {
-  return (0, import_path7.join)(basePath2, ".flowpilot", SNAPSHOT_FILE);
+  return (0, import_path8.join)(basePath2, ".flowpilot", SNAPSHOT_FILE);
 }
 function vectorFilePath(basePath2) {
-  return (0, import_path7.join)(basePath2, ".flowpilot", VECTOR_FILE);
+  return (0, import_path8.join)(basePath2, ".flowpilot", VECTOR_FILE);
 }
 async function loadVectors(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises6.readFile)(vectorFilePath(basePath2), "utf-8"));
+    return JSON.parse(await (0, import_promises7.readFile)(vectorFilePath(basePath2), "utf-8"));
   } catch {
     return [];
   }
 }
 async function saveVectors(basePath2, vectors) {
   const p = vectorFilePath(basePath2);
-  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
-  await (0, import_promises6.writeFile)(p, JSON.stringify(vectors), "utf-8");
+  await (0, import_promises7.mkdir)((0, import_path8.dirname)(p), { recursive: true });
+  await (0, import_promises7.writeFile)(p, JSON.stringify(vectors), "utf-8");
 }
 function vectorSearch(queryVec, vectors, entries, k) {
   const contentMap = new Map(entries.map((e) => [e.content, e]));
@@ -2541,7 +2609,7 @@ function termFrequency(tokens) {
 }
 async function loadDf(basePath2) {
   try {
-    const stats = JSON.parse(await (0, import_promises6.readFile)(dfPath(basePath2), "utf-8"));
+    const stats = JSON.parse(await (0, import_promises7.readFile)(dfPath(basePath2), "utf-8"));
     const cleaned = {};
     for (const [k, v] of Object.entries(stats.df)) {
       if (k.includes(":")) cleaned[k] = v;
@@ -2554,8 +2622,8 @@ async function loadDf(basePath2) {
 }
 async function saveDf(basePath2, stats) {
   const p = dfPath(basePath2);
-  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
-  await (0, import_promises6.writeFile)(p, JSON.stringify(stats), "utf-8");
+  await (0, import_promises7.mkdir)((0, import_path8.dirname)(p), { recursive: true });
+  await (0, import_promises7.writeFile)(p, JSON.stringify(stats), "utf-8");
   dfDirty = false;
 }
 var _lastDfStats = null;
@@ -2618,15 +2686,15 @@ function cosineSimilarity(a, b) {
 }
 async function loadMemory(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises6.readFile)(memoryPath(basePath2), "utf-8"));
+    return JSON.parse(await (0, import_promises7.readFile)(memoryPath(basePath2), "utf-8"));
   } catch {
     return [];
   }
 }
 async function saveMemory(basePath2, entries) {
   const p = memoryPath(basePath2);
-  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
-  await (0, import_promises6.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
+  await (0, import_promises7.mkdir)((0, import_path8.dirname)(p), { recursive: true });
+  await (0, import_promises7.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
 }
 async function resolveSearchableText(entry) {
   const ct = entry.contentType ?? "text";
@@ -2804,8 +2872,8 @@ async function decayMemory(basePath2) {
 }
 async function saveSnapshot2(basePath2, entries) {
   const p = snapshotPath(basePath2);
-  await (0, import_promises6.mkdir)((0, import_path7.dirname)(p), { recursive: true });
-  await (0, import_promises6.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
+  await (0, import_promises7.mkdir)((0, import_path8.dirname)(p), { recursive: true });
+  await (0, import_promises7.writeFile)(p, JSON.stringify(entries, null, 2), "utf-8");
 }
 async function compactMemory(basePath2, targetCount) {
   const entries = await loadMemory(basePath2);
@@ -2878,12 +2946,12 @@ function computeMaxChars(contextWindow = 128e3, sample) {
 }
 
 // src/infrastructure/loop-detector.ts
-var import_promises8 = require("fs/promises");
-var import_path9 = require("path");
+var import_promises9 = require("fs/promises");
+var import_path10 = require("path");
 
 // src/infrastructure/heartbeat.ts
-var import_promises7 = require("fs/promises");
-var import_path8 = require("path");
+var import_promises8 = require("fs/promises");
+var import_path9 = require("path");
 var TASK_TIMEOUT_MS = 30 * 60 * 1e3;
 var MEMORY_COMPACT_THRESHOLD = 100;
 var DEFAULT_INTERVAL_MS = 5 * 60 * 1e3;
@@ -2902,7 +2970,7 @@ async function runHeartbeat(basePath2, config) {
   const warnings = [];
   const actions = [];
   try {
-    const raw = await (0, import_promises7.readFile)((0, import_path8.join)(basePath2, ".workflow", "progress.md"), "utf-8");
+    const raw = await (0, import_promises8.readFile)((0, import_path9.join)(basePath2, ".workflow", "progress.md"), "utf-8");
     const data = parseProgressMarkdown(raw);
     if (data.status === "running") {
       const active = data.tasks.filter((task) => task.status === "active");
@@ -2982,19 +3050,19 @@ function similarity(a, b) {
   return inter / (sa.size + sb.size - inter);
 }
 function statePath(basePath2) {
-  return (0, import_path9.join)(basePath2, ".workflow", STATE_FILE);
+  return (0, import_path10.join)(basePath2, ".workflow", STATE_FILE);
 }
 async function loadWindow(basePath2) {
   try {
-    return JSON.parse(await (0, import_promises8.readFile)(statePath(basePath2), "utf-8"));
+    return JSON.parse(await (0, import_promises9.readFile)(statePath(basePath2), "utf-8"));
   } catch {
     return [];
   }
 }
 async function saveWindow(basePath2, window) {
   const p = statePath(basePath2);
-  await (0, import_promises8.mkdir)((0, import_path9.dirname)(p), { recursive: true });
-  await (0, import_promises8.writeFile)(p, JSON.stringify(window), "utf-8");
+  await (0, import_promises9.mkdir)((0, import_path10.dirname)(p), { recursive: true });
+  await (0, import_promises9.writeFile)(p, JSON.stringify(window), "utf-8");
 }
 function repeatedNoProgress(window) {
   if (window.length < 3) return null;
@@ -3053,8 +3121,8 @@ async function detect(basePath2, taskId, summary, failed, activeHours) {
 }
 
 // src/application/workflow-service.ts
-var import_promises9 = require("fs/promises");
-var import_path10 = require("path");
+var import_promises10 = require("fs/promises");
+var import_path11 = require("path");
 var WorkflowService = class {
   constructor(repo2, parse) {
     this.repo = repo2;
@@ -3062,45 +3130,25 @@ var WorkflowService = class {
   }
   stopHeartbeat = null;
   loopWarningPath() {
-    return (0, import_path10.join)(this.repo.projectRoot(), ".workflow", "loop-warning.txt");
+    return (0, import_path11.join)(this.repo.projectRoot(), ".workflow", "loop-warning.txt");
   }
   async saveLoopWarning(msg) {
     const p = this.loopWarningPath();
-    await (0, import_promises9.mkdir)((0, import_path10.join)(this.repo.projectRoot(), ".workflow"), { recursive: true });
-    await (0, import_promises9.writeFile)(p, msg, "utf-8");
+    await (0, import_promises10.mkdir)((0, import_path11.join)(this.repo.projectRoot(), ".workflow"), { recursive: true });
+    await (0, import_promises10.writeFile)(p, msg, "utf-8");
   }
   async loadAndClearLoopWarning() {
     try {
-      const msg = await (0, import_promises9.readFile)(this.loopWarningPath(), "utf-8");
-      await (0, import_promises9.unlink)(this.loopWarningPath());
+      const msg = await (0, import_promises10.readFile)(this.loopWarningPath(), "utf-8");
+      await (0, import_promises10.unlink)(this.loopWarningPath());
       return msg || null;
     } catch {
       return null;
     }
   }
-  activatedPath() {
-    return (0, import_path10.join)(this.repo.projectRoot(), ".workflow", "activated.json");
-  }
-  async recordActivation(ids) {
-    let map = {};
-    try {
-      map = JSON.parse(await (0, import_promises9.readFile)(this.activatedPath(), "utf-8"));
-    } catch {
-    }
-    const now = Date.now();
-    for (const id of ids) map[id] = { time: now, pid: process.pid };
-    await (0, import_promises9.writeFile)(this.activatedPath(), JSON.stringify(map), "utf-8");
-  }
   /** 跨进程激活时长(ms)，同进程返回 Infinity（跳过检查） */
   async getActivationAge(id) {
-    try {
-      const map = JSON.parse(await (0, import_promises9.readFile)(this.activatedPath(), "utf-8"));
-      const entry = map[id];
-      if (!entry || entry.pid === process.pid) return Infinity;
-      return Date.now() - entry.time;
-    } catch {
-      return Infinity;
-    }
+    return getTaskActivationAge(this.repo.projectRoot(), id);
   }
   /** init: 解析任务markdown → 生成progress/tasks */
   async init(tasksMd, force = false) {
@@ -3140,6 +3188,7 @@ var WorkflowService = class {
 
 ${def.description}
 `);
+    await saveDirtyBaseline(this.repo.projectRoot(), this.repo.listChangedFiles(), data.startTime);
     await this.repo.ensureClaudeMd();
     await this.repo.ensureHooks();
     await this.repo.ensureClaudeWorktreesIgnored();
@@ -3175,7 +3224,7 @@ ${def.description}
       log.debug(`next: \u6FC0\u6D3B\u4EFB\u52A1 ${task.id} (deps: ${task.deps.join(",") || "\u65E0"})`);
       const activated = cascaded.map((t) => t.id === task.id ? { ...t, status: "active" } : t);
       await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
-      await this.recordActivation([task.id]);
+      await recordTaskActivations(this.repo.projectRoot(), [task.id]);
       await runLifecycleHook("onTaskStart", this.repo.projectRoot(), { TASK_ID: task.id, TASK_TITLE: task.title });
       const parts = [];
       const summary = await this.repo.loadSummary();
@@ -3233,7 +3282,7 @@ ${loopWarning}`);
       const activeIds = new Set(tasks.map((t) => t.id));
       const activated = cascaded.map((t) => activeIds.has(t.id) ? { ...t, status: "active" } : t);
       await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
-      await this.recordActivation(tasks.map((t) => t.id));
+      await recordTaskActivations(this.repo.projectRoot(), tasks.map((t) => t.id));
       for (const t of tasks) {
         await runLifecycleHook("onTaskStart", this.repo.projectRoot(), { TASK_ID: t.id, TASK_TITLE: t.title });
       }
@@ -3462,7 +3511,8 @@ ${detail}
     }
     const verifySummary = this.formatVerifySummary(result);
     if (data.status !== "finishing") {
-      return `${verifySummary}
+      return `\u9A8C\u8BC1\u901A\u8FC7
+${verifySummary}
 \u8BF7\u6D3E\u5B50Agent\u6267\u884C code-review\uFF0C\u5B8C\u6210\u540E\u6267\u884C node flow.js review\uFF0C\u518D\u6267\u884C node flow.js finish`;
     }
     const done = data.tasks.filter((t) => t.status === "done");
@@ -3805,7 +3855,7 @@ ${entry}`;
 
 // src/interfaces/cli.ts
 var import_fs4 = require("fs");
-var import_path11 = require("path");
+var import_path12 = require("path");
 
 // src/interfaces/formatter.ts
 var ICON = {
@@ -3938,8 +3988,8 @@ var CLI = class {
           }
         }
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
-          const filePath = (0, import_path11.resolve)(rest[fileIdx + 1]);
-          if ((0, import_path11.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
+          const filePath = (0, import_path12.resolve)(rest[fileIdx + 1]);
+          if ((0, import_path12.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
           detail = (0, import_fs4.readFileSync)(filePath, "utf-8");
         } else if (rest.length > 1 && fileIdx < 0 && filesIdx < 0) {
           detail = rest.slice(1).join(" ");

@@ -159,6 +159,64 @@ describe('WorkflowService 集成测试', () => {
     expect(batch.map(b => b.task.id)).toEqual(['001', '002']);
   });
 
+  it('init在setup前记录工作流初始dirty baseline', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    const events: string[] = [];
+    vi.spyOn(repo, 'listChangedFiles').mockImplementation(() => {
+      events.push('listChangedFiles');
+      return ['README.md'];
+    });
+    vi.spyOn(repo, 'ensureClaudeMd').mockImplementation(async () => {
+      events.push('ensureClaudeMd');
+      return true;
+    });
+    vi.spyOn(repo, 'ensureHooks').mockImplementation(async () => {
+      events.push('ensureHooks');
+      return true;
+    });
+    vi.spyOn(repo, 'ensureClaudeWorktreesIgnored').mockImplementation(async () => {
+      events.push('ensureClaudeWorktreesIgnored');
+      return true;
+    });
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+
+    await svc.init(TASKS_MD);
+
+    const baseline = JSON.parse(await readFile(join(dir, '.workflow', 'dirty-baseline.json'), 'utf-8'));
+    expect(baseline.files).toEqual(['README.md']);
+    expect(events.slice(0, 2)).toEqual(['listChangedFiles', 'ensureClaudeMd']);
+  });
+
+  it('next记录单个任务的激活元数据', async () => {
+    await svc.init(TASKS_MD);
+    await svc.next();
+
+    const activations = JSON.parse(await readFile(join(dir, '.workflow', 'activated.json'), 'utf-8'));
+    expect(Object.keys(activations)).toEqual(['001']);
+    expect(activations['001'].pid).toBe(process.pid);
+    expect(typeof activations['001'].time).toBe('number');
+  });
+
+  it('nextBatch记录多个任务的激活元数据', async () => {
+    const md = '# 并行测试\n\n1. [backend] A\n2. [frontend] B\n3. [general] C (deps: 1,2)';
+    await svc.init(md);
+    await svc.nextBatch();
+
+    const activations = JSON.parse(await readFile(join(dir, '.workflow', 'activated.json'), 'utf-8'));
+    expect(Object.keys(activations).sort()).toEqual(['001', '002']);
+    expect(activations['001'].pid).toBe(process.pid);
+    expect(activations['002'].pid).toBe(process.pid);
+  });
+
+  it('第二个WorkflowService实例能读取同一份激活状态', async () => {
+    await svc.init(TASKS_MD);
+    await svc.next();
+
+    const repo = new FsWorkflowRepository(dir);
+    const secondSvc = new WorkflowService(repo, parseTasksMarkdown);
+    await expect((secondSvc as any).getActivationAge('001')).resolves.toBeGreaterThanOrEqual(0);
+  });
+
   it('init不允许覆盖running工作流', async () => {
     await svc.init(TASKS_MD);
     await expect(svc.init(TASKS_MD)).rejects.toThrow('已有进行中');

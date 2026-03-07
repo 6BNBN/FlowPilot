@@ -15,6 +15,7 @@ import { extractAll } from '../infrastructure/extractor';
 import { truncateHeadTail, computeMaxChars } from '../infrastructure/truncation';
 import { detect as detectLoop, type LoopDetection } from '../infrastructure/loop-detector';
 import { startHeartbeat, runHeartbeat } from '../infrastructure/heartbeat';
+import { getTaskActivationAge, recordTaskActivations, saveDirtyBaseline } from '../infrastructure/runtime-state';
 import { writeFile, readFile, unlink, mkdir } from 'fs/promises';
 import { join } from 'path';
 
@@ -44,24 +45,9 @@ export class WorkflowService {
     } catch { return null; }
   }
 
-  private activatedPath(): string { return join(this.repo.projectRoot(), '.workflow', 'activated.json'); }
-
-  private async recordActivation(ids: string[]): Promise<void> {
-    let map: Record<string, { time: number; pid: number }> = {};
-    try { map = JSON.parse(await readFile(this.activatedPath(), 'utf-8')); } catch {}
-    const now = Date.now();
-    for (const id of ids) map[id] = { time: now, pid: process.pid };
-    await writeFile(this.activatedPath(), JSON.stringify(map), 'utf-8');
-  }
-
   /** 跨进程激活时长(ms)，同进程返回 Infinity（跳过检查） */
   private async getActivationAge(id: string): Promise<number> {
-    try {
-      const map = JSON.parse(await readFile(this.activatedPath(), 'utf-8'));
-      const entry = map[id];
-      if (!entry || entry.pid === process.pid) return Infinity;
-      return Date.now() - entry.time;
-    } catch { return Infinity; }
+    return getTaskActivationAge(this.repo.projectRoot(), id);
   }
 
   /** init: 解析任务markdown → 生成progress/tasks */
@@ -101,6 +87,7 @@ export class WorkflowService {
     await this.repo.saveProgress(data);
     await this.repo.saveTasks(tasksMd);
     await this.repo.saveSummary(`# ${def.name}\n\n${def.description}\n`);
+    await saveDirtyBaseline(this.repo.projectRoot(), this.repo.listChangedFiles(), data.startTime);
     await this.repo.ensureClaudeMd();
     await this.repo.ensureHooks();
     await this.repo.ensureClaudeWorktreesIgnored();
@@ -150,7 +137,7 @@ export class WorkflowService {
       log.debug(`next: 激活任务 ${task.id} (deps: ${task.deps.join(',') || '无'})`);
       const activated = cascaded.map(t => t.id === task.id ? { ...t, status: 'active' as const } : t);
       await this.repo.saveProgress({ ...data, current: task.id, tasks: activated });
-      await this.recordActivation([task.id]);
+      await recordTaskActivations(this.repo.projectRoot(), [task.id]);
       await runLifecycleHook('onTaskStart', this.repo.projectRoot(), { TASK_ID: task.id, TASK_TITLE: task.title });
 
       // 拼装上下文：summary + 依赖任务产出
@@ -224,7 +211,7 @@ export class WorkflowService {
       const activeIds = new Set(tasks.map(t => t.id));
       const activated = cascaded.map(t => activeIds.has(t.id) ? { ...t, status: 'active' as const } : t);
       await this.repo.saveProgress({ ...data, current: tasks[0].id, tasks: activated });
-      await this.recordActivation(tasks.map(t => t.id));
+      await recordTaskActivations(this.repo.projectRoot(), tasks.map(t => t.id));
       for (const t of tasks) {
         await runLifecycleHook('onTaskStart', this.repo.projectRoot(), { TASK_ID: t.id, TASK_TITLE: t.title });
       }
@@ -487,7 +474,7 @@ export class WorkflowService {
 
     // 2. 验证通过，检查review是否已完成
     if (data.status !== 'finishing') {
-      return `${verifySummary}\n请派子Agent执行 code-review，完成后执行 node flow.js review，再执行 node flow.js finish`;
+      return `验证通过\n${verifySummary}\n请派子Agent执行 code-review，完成后执行 node flow.js review，再执行 node flow.js finish`;
     }
 
     // 3. verify + review 都通过 → 最终提交
@@ -616,9 +603,11 @@ export class WorkflowService {
       const err = this.repo.rollback(id);
       if (err) return `回滚失败: ${err}`;
 
-      // 将回滚目标及其传递下游终态任务重置为 pending
+      // 将回滚目标及其传递下游任务重置为 pending，并重建滚动摘要
       const newTasks = reopenRollbackBranch(data.tasks, id);
-      await this.repo.saveProgress({ ...data, current: null, tasks: newTasks });
+      const newData = { ...data, status: 'running' as const, current: null, tasks: newTasks };
+      await this.repo.saveProgress(newData);
+      await this.updateSummary(newData);
       const resetCount = newTasks.filter((taskEntry, index) =>
         taskEntry.status === 'pending' && data.tasks[index].status !== 'pending'
       ).length;
