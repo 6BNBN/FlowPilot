@@ -35,7 +35,8 @@ node flow.js init
 
 这会自动生成：
 - `CLAUDE.md` — 嵌入调度协议（`<!-- flowpilot:start/end -->` 标记包裹）
-- `.workflow/` 目录 — 任务状态持久化
+- `.workflow/` 目录 — 本地临时运行态
+- `.gitignore` 本地状态忽略规则（若缺失）— 默认忽略 `.workflow/`、`.flowpilot/`、`.claude/settings.json`、`.claude/worktrees/`
 
 ### 第三步：描述需求
 
@@ -74,8 +75,13 @@ node flow.js init    # 接管项目
 ```
 # 新开一个CC窗口
 你：继续任务
-CC：恢复工作流: 博客系统 | 进度: 7/12 | 继续执行
+CC：恢复工作流: 博客系统 | 进度: 7/12 | 中断任务 008 已重置，将重新执行
 ```
+
+如果工作区仍然有脏文件，`resume` 会继续补充真实边界信息，而不是笼统地说“已恢复”：
+- 启动前就存在、现在仍保留的 baseline 脏文件
+- 中断任务残留并被保守保留的新增脏业务文件
+- dirty baseline 缺失时的保守警告（会明确说无法证明这是干净重启）
 
 ## 命令参考
 
@@ -90,7 +96,7 @@ CC：恢复工作流: 博客系统 | 进度: 7/12 | 继续执行
 | `node flow.js skip <id>` | 跳过某个任务 |
 | `node flow.js resume` | 中断恢复（重置active→pending） |
 | `node flow.js review` | 标记code-review已完成（finish前必须执行） |
-| `node flow.js finish` | 智能收尾（验证+汇报跳过失败项+提交，需先review） |
+| `node flow.js finish` | 智能收尾（验证+汇报通过/跳过项+必要时拒绝最终提交，需先review） |
 | `node flow.js add <描述> [--type T]` | 追加新任务（参数顺序任意） |
 | `node flow.js recall <关键词>` | 检索历史记忆（BM25 + MMR + 时间衰减） |
 | `node flow.js evolve` | 接收 AI 反思结果并执行进化（stdin 传入） |
@@ -272,6 +278,14 @@ flow next --batch → 重新并行派发这3个任务
 
 `flow resume` 会把**所有** active 任务重置为 pending，不管有几个。这意味着并行中断后恢复时，那一批任务会被完整重做。已经 checkpoint 的任务不受影响。
 
+同时，resume 会如实说明 dirty worktree 的状态：
+- `当前工作区无残留脏业务文件，本次恢复是干净重启`
+- `工作流启动前已有 N 个脏文件仍然保留`
+- `已保留 N 个中断任务残留的脏业务文件`
+- `未找到 dirty baseline；无法可靠区分启动前脏文件与中断残留`
+
+这段提示是边界说明，不是报错；它的目的就是防止把脏工作区误说成“完全干净”。
+
 ### 并行开发注意事项
 
 1. **文件冲突**：并行的子Agent可能修改同一个文件。设计任务时尽量让并行任务操作不同的文件
@@ -284,7 +298,7 @@ flow next --batch → 重新并行派发这3个任务
 
 | 项目类型 | 检测文件 | 执行命令 |
 |---------|---------|---------|
-| Node.js | package.json | npm run build/test/lint |
+| Node.js | package.json | 存在哪些 script 就按顺序执行哪些；例如本仓库会执行 `npm run build`、`npm run test` |
 | Rust | Cargo.toml | cargo build/test |
 | Go | go.mod | go build/test |
 | Python | pyproject.toml | pytest/ruff/mypy |
@@ -292,6 +306,13 @@ flow next --batch → 重新并行派发这3个任务
 | Java (Gradle) | build.gradle | gradle build |
 | C/C++ | CMakeLists.txt | cmake --build/ctest |
 | 通用 | Makefile | make build/test/lint |
+
+验证语义是“逐步可解释”的：
+- **通过（passed）**：命令成功执行，例如 `- 通过: npm run build`
+- **跳过（skipped）**：命令执行后确认没有可跑内容，例如 Vitest 的 `No test files found` 会显示为 `- 跳过: ...（未找到测试文件）`
+- **未发现命令（not-found）**：仓库里根本没有可执行的验证脚本，finish 会显示 `验证结果: 未发现可执行的验证命令`
+
+也就是说，finish 不会把“没找到命令”和“命令失败”混为一谈。
 
 ## 长期记忆系统
 
@@ -386,10 +407,10 @@ finish(verify) → review(code-review) → evolve → finish(再次verify)
 ```
 
 具体流程：
-1. `flow finish` — 运行 build/test/lint 验证
+1. `flow finish` — 运行验证，并用 `验证结果:` 列出每个命令的通过/跳过情况
 2. 验证通过后提示执行 code-review → `flow review` 标记完成
-3. `flow finish` 再次执行 → 触发 reflect + experiment（自动进化）
-4. 如果验证失败 → 修复后重新 finish，循环直到两个门（verify + review）都通过
+3. `flow finish` 再次执行 → 先做 cleanup，再检查 dirty baseline / owned files 边界，边界安全时才触发 reflect + experiment + 最终提交
+4. 如果验证失败，或存在未归属脏文件 / setup-owned 文件残留用户改动，则 finish 会拒绝最终提交；修复后重新 finish，循环直到 verify + review + ownership boundary 都通过
 
 ### 进化结果消费
 
@@ -487,8 +508,23 @@ CC 自动 compact 后，说"继续任务"即可恢复。所有状态都在文件
 **Q: 不想用某个插件怎么办？**
 插件是可选的。没有 frontend-design 插件时，前端任务会以 general 模式执行。
 
-**Q: .workflow 目录要提交到 git 吗？**
-开发过程中建议提交，方便团队成员查看任务进度和历史决策。注意 `flow finish` 收尾成功后会自动清除 `.workflow/` 目录。
+**Q: `flow finish` 为什么会拒绝最终提交？**
+最常见原因有三类：
+1. 有新增脏文件没有被任何 checkpoint 的 `--files` 声明归属
+2. `CLAUDE.md`、`.claude/settings.json`、`.gitignore` 在 cleanup 后仍残留用户改动
+3. 缺少 dirty baseline，无法证明工作流边界安全
+
+这时 FlowPilot 会停在 `finishing` 状态，并把可疑文件列出来，让你先处理，而不是替你误提交。
+
+**Q: `.workflow` 目录要提交到 git 吗？**
+通常不需要，也不建议提交。`.workflow/` 是本地临时运行态，`flow finish` 收尾成功后会自动清除；默认 `.gitignore` 也会忽略它。
+
+**Q: `CLAUDE.md`、`.claude/settings.json`、`.gitignore` 收尾时会怎么处理？**
+它们遵循“谁创建/注入，谁负责 cleanup”的对称规则：
+- 如果是 FlowPilot 在 setup/init 阶段创建、且内容仍与注入内容完全一致，finish 会自动删除或精确回退
+- 如果这些文件原本就存在，finish 只会移除 FlowPilot 注入的那部分，保留你原来的内容
+- `.gitignore` 中由 FlowPilot 注入的本地状态规则默认包括 `.workflow/`、`.flowpilot/`、`.claude/settings.json`、`.claude/worktrees/`，但不会忽略整个 `.claude/` 目录
+- 如果 cleanup 之后仍有用户残留改动，finish 会拒绝最终提交并把文件列出来
 
 **Q: 任务很多时摘要会不会太长？**
 不会。超过 10 个已完成任务后，摘要会自动按类型压缩，只保留每组最近 3 个任务名。

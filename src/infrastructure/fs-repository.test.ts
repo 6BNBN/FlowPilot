@@ -40,6 +40,8 @@ function makeData(): ProgressData {
 }
 
 describe('FsWorkflowRepository', () => {
+  const LOCAL_STATE_GITIGNORE = '.workflow/\n.flowpilot/\n.claude/settings.json\n.claude/worktrees/\n';
+
   it('progress.md 往返一致', async () => {
     const data = makeData();
     await repo.saveProgress(data);
@@ -67,38 +69,38 @@ describe('FsWorkflowRepository', () => {
     expect(await repo.loadSummary()).toBe('# 摘要');
   });
 
-  it('ensureClaudeWorktreesIgnored 创建缺失的 .gitignore', async () => {
-    const changed = await repo.ensureClaudeWorktreesIgnored();
+  it('ensureLocalStateIgnored 创建缺失的 .gitignore', async () => {
+    const changed = await repo.ensureLocalStateIgnored();
 
     expect(changed).toBe(true);
-    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe('.claude/worktrees/\n');
+    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe(LOCAL_STATE_GITIGNORE);
   });
 
-  it('ensureClaudeWorktreesIgnored 追加规则且不覆盖原内容', async () => {
+  it('ensureLocalStateIgnored 追加规则且不覆盖原内容', async () => {
     await writeFile(join(dir, '.gitignore'), 'node_modules/\n', 'utf-8');
 
-    const changed = await repo.ensureClaudeWorktreesIgnored();
+    const changed = await repo.ensureLocalStateIgnored();
 
     expect(changed).toBe(true);
-    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe('node_modules/\n.claude/worktrees/\n');
+    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe(`node_modules/\n${LOCAL_STATE_GITIGNORE}`);
   });
 
-  it('ensureClaudeWorktreesIgnored 在无尾换行时正确追加', async () => {
+  it('ensureLocalStateIgnored 在无尾换行时正确追加', async () => {
     await writeFile(join(dir, '.gitignore'), 'node_modules/', 'utf-8');
 
-    const changed = await repo.ensureClaudeWorktreesIgnored();
+    const changed = await repo.ensureLocalStateIgnored();
 
     expect(changed).toBe(true);
-    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe('node_modules/\n.claude/worktrees/\n');
+    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe(`node_modules/\n${LOCAL_STATE_GITIGNORE}`);
   });
 
-  it('ensureClaudeWorktreesIgnored 幂等且不重复追加规则', async () => {
-    await writeFile(join(dir, '.gitignore'), 'node_modules/\n.claude/worktrees/\n', 'utf-8');
+  it('ensureLocalStateIgnored 幂等且不重复追加规则', async () => {
+    await writeFile(join(dir, '.gitignore'), `node_modules/\n${LOCAL_STATE_GITIGNORE}`, 'utf-8');
 
-    const changed = await repo.ensureClaudeWorktreesIgnored();
+    const changed = await repo.ensureLocalStateIgnored();
 
     expect(changed).toBe(false);
-    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe('node_modules/\n.claude/worktrees/\n');
+    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe(`node_modules/\n${LOCAL_STATE_GITIGNORE}`);
   });
 
   it('ensureClaudeMd 首次创建', async () => {
@@ -243,14 +245,14 @@ describe('FsWorkflowRepository', () => {
   it('cleanupInjections 删除由 FlowPilot 创建且无用户内容的文件', async () => {
     await repo.ensureClaudeMd();
     await repo.ensureHooks();
-    await repo.ensureClaudeWorktreesIgnored();
+    await repo.ensureLocalStateIgnored();
 
     await repo.cleanupInjections();
 
     expect(existsSync(join(dir, 'CLAUDE.md'))).toBe(false);
     expect(existsSync(join(dir, '.claude', 'settings.json'))).toBe(false);
     expect(existsSync(join(dir, '.claude'))).toBe(false);
-    expect(existsSync(join(dir, '.gitignore'))).toBe(false);
+    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe(LOCAL_STATE_GITIGNORE);
   });
 
   it('cleanupInjections 仅移除预存文件中的 FlowPilot 注入内容', async () => {
@@ -268,7 +270,7 @@ describe('FsWorkflowRepository', () => {
 
     await repo.ensureClaudeMd();
     await repo.ensureHooks();
-    await repo.ensureClaudeWorktreesIgnored();
+    await repo.ensureLocalStateIgnored();
     await repo.cleanupInjections();
 
     expect(await readFile(join(dir, 'CLAUDE.md'), 'utf-8')).toBe('# Custom\n\nKeep me.\n');
@@ -286,7 +288,7 @@ describe('FsWorkflowRepository', () => {
   it('cleanupInjections 仅在无用户内容时删除 FlowPilot 创建的文件', async () => {
     await repo.ensureClaudeMd();
     await repo.ensureHooks();
-    await repo.ensureClaudeWorktreesIgnored();
+    await repo.ensureLocalStateIgnored();
 
     await writeFile(join(dir, 'CLAUDE.md'), `${await readFile(join(dir, 'CLAUDE.md'), 'utf-8')}User note\n`, 'utf-8');
     const settingsPath = join(dir, '.claude', 'settings.json');

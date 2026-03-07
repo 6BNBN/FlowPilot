@@ -25,7 +25,11 @@
    ```bash
    cd FlowPilot-directory
    npm install && npm run build
+   npm run test:smoke
    ```
+6. Handy automation scripts:
+   - `npm run test:run`: run the full Vitest suite once in CI-friendly mode
+   - `npm run test:smoke`: run only workflow-boundary smoke tests for doc/script changes and pre-release checks
 
 ## Start a New Project
 
@@ -36,6 +40,7 @@ cp FlowPilot-directory/dist/flow.js  your-project/
 # 2. Enter project and initialize
 cd your-project
 node flow.js init
+# Ensures .workflow/, .flowpilot/, .claude/settings.json, and .claude/worktrees/ are added to .gitignore when missing
 
 # 3. Launch Claude Code in fully automated mode, describe your requirements
 claude --dangerously-skip-permissions
@@ -81,6 +86,11 @@ claude --dangerously-skip-permissions --continue
 
 Once inside, say "continue task" and it will automatically resume from the breakpoint. Nothing is lost.
 
+If the worktree is still dirty, `resume` now tells the truth about what survived:
+- baseline dirty files that already existed before the workflow started and are still present
+- newly dirty business files left behind by interrupted tasks and intentionally preserved
+- when the dirty baseline is missing, an explicit warning that FlowPilot cannot prove this is a clean restart
+
 To pick from conversation history:
 ```bash
 claude --dangerously-skip-permissions --resume
@@ -122,6 +132,17 @@ node flow.js status
 ```
 
 Or just ask CC: "How's the progress?"
+
+## When finish refuses the final commit
+
+`node flow.js finish` only creates the final commit after verification passes, `node flow.js review` has been completed, and the worktree boundary is still provably safe.
+
+Finish will explicitly refuse the final commit instead of guessing when it sees:
+- newly dirty files that were never owned by a workflow checkpoint
+- leftover user changes in `CLAUDE.md`, `.claude/settings.json`, or `.gitignore` after cleanup runs
+- a missing dirty baseline, so FlowPilot can no longer prove which dirty files predated the workflow
+
+In short: FlowPilot only final-commits business files that this workflow explicitly owned. Everything else must be resolved first.
 
 ## That's It
 

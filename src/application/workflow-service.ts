@@ -110,7 +110,7 @@ export class WorkflowService {
     const setupOwnedFiles: string[] = [];
     if (await this.repo.ensureClaudeMd()) setupOwnedFiles.push('CLAUDE.md');
     if (await this.repo.ensureHooks()) setupOwnedFiles.push('.claude/settings.json');
-    if (await this.repo.ensureClaudeWorktreesIgnored()) setupOwnedFiles.push('.gitignore');
+    if (await this.repo.ensureLocalStateIgnored()) setupOwnedFiles.push('.gitignore');
     await saveSetupOwnedFiles(this.repo.projectRoot(), setupOwnedFiles);
 
     // 历史经验分析：读取历史统计，输出建议，自动调整参数
@@ -457,6 +457,16 @@ export class WorkflowService {
         ].join('\n'),
       };
     }
+    const gitignorePolicyMatches = await this.repo.doesGitignoreResidueMatchPolicy();
+    if (!gitignorePolicyMatches) {
+      return {
+        ok: false,
+        message: [
+          '拒绝最终提交：setup-owned 文件在精确 cleanup 后仍有用户残留改动。',
+          '- .gitignore',
+        ].join('\n'),
+      };
+    }
 
     const currentDirtyFiles = this.repo.listChangedFiles();
     const comparison = compareDirtyFilesAgainstBaseline(currentDirtyFiles, baseline?.files ?? []);
@@ -484,7 +494,7 @@ export class WorkflowService {
       };
     }
 
-    const leftoverSetupOwnedFiles = comparison.newDirtyFiles.filter(file => setupOwnedSet.has(file));
+    const leftoverSetupOwnedFiles = comparison.newDirtyFiles.filter(file => setupOwnedSet.has(file) && !(file === '.gitignore' && gitignorePolicyMatches));
     if (leftoverSetupOwnedFiles.length > 0) {
       return {
         ok: false,
@@ -542,7 +552,7 @@ export class WorkflowService {
     const existing = await this.repo.loadProgress();
     const wrote = await this.repo.ensureClaudeMd();
     await this.repo.ensureHooks();
-    await this.repo.ensureClaudeWorktreesIgnored();
+    await this.repo.ensureLocalStateIgnored();
     const lines: string[] = [];
 
     if (existing && (existing.status === 'running' || existing.status === 'finishing')) {

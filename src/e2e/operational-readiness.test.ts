@@ -79,13 +79,14 @@ describe('operational readiness smoke tests', () => {
     expect(finishOutput).toContain('等待下一个需求');
 
     await expect(access(join(repoDir, '.workflow'))).rejects.toThrow();
-    await expect(access(join(repoDir, '.gitignore'))).rejects.toThrow();
     await expect(access(join(repoDir, '.claude'))).rejects.toThrow();
     await expect(access(join(repoDir, '.claude', 'settings.json'))).rejects.toThrow();
     await expect(access(join(repoDir, 'CLAUDE.md'))).rejects.toThrow();
 
+    expect(await readFile(join(repoDir, '.gitignore'), 'utf-8')).toBe('.workflow/\n.flowpilot/\n.claude/settings.json\n.claude/worktrees/\n');
+
     const status = runGit(repoDir, ['status', '--short']).split('\n').filter(Boolean);
-    expect(status).toEqual(['?? .flowpilot/']);
+    expect(status).toEqual(['?? .gitignore']);
 
     const flowpilotEntries = (await readdir(join(repoDir, '.flowpilot'))).sort();
     expect(flowpilotEntries).toContain('history');

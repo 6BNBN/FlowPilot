@@ -97,7 +97,11 @@ describe('runtime-state shared metadata', () => {
       },
       gitignore: {
         created: false,
-        rule: '.claude/worktrees/',
+        rules: ['.claude/settings.json', '.claude/worktrees/', '.flowpilot/', '.workflow/'],
+        baseline: {
+          exists: true,
+          rawContent: 'node_modules/\n',
+        },
       },
     });
 
@@ -132,7 +136,11 @@ describe('runtime-state shared metadata', () => {
       },
       gitignore: {
         created: false,
-        rule: '.claude/worktrees/',
+        rules: ['.claude/settings.json', '.claude/worktrees/', '.flowpilot/', '.workflow/'],
+        baseline: {
+          exists: true,
+          rawContent: 'node_modules/\n',
+        },
       },
     });
     expect(second).toEqual({
@@ -155,7 +163,11 @@ describe('runtime-state shared metadata', () => {
       },
       gitignore: {
         created: false,
-        rule: '.claude/worktrees/',
+        rules: ['.claude/settings.json', '.claude/worktrees/', '.flowpilot/', '.workflow/'],
+        baseline: {
+          exists: true,
+          rawContent: 'node_modules/\n',
+        },
       },
     });
     await expect(loadSetupInjectionManifest(dir)).resolves.toEqual(second);

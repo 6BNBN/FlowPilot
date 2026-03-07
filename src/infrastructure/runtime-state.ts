@@ -78,7 +78,8 @@ export interface HooksInjectionState {
 /** .gitignore 注入清理信息 */
 export interface GitignoreInjectionState {
   created: boolean;
-  rule: string;
+  rules: string[];
+  baseline?: ExactFileSnapshot;
 }
 
 /** setup/init 阶段的精确注入 manifest */
@@ -206,7 +207,9 @@ function isHooksInjectionState(value: unknown): value is HooksInjectionState {
 function isGitignoreInjectionState(value: unknown): value is GitignoreInjectionState {
   return isRecord(value)
     && typeof value.created === 'boolean'
-    && typeof value.rule === 'string';
+    && Array.isArray(value.rules)
+    && value.rules.every(rule => typeof rule === 'string')
+    && (value.baseline === undefined || isExactFileSnapshot(value.baseline));
 }
 
 function isSetupInjectionManifest(value: unknown): value is SetupInjectionManifest {
@@ -274,7 +277,17 @@ function normalizeSetupInjectionManifest(manifest: SetupInjectionManifest): Setu
   if (manifest.gitignore) {
     normalized.gitignore = {
       created: manifest.gitignore.created,
-      rule: manifest.gitignore.rule,
+      rules: [...new Set(manifest.gitignore.rules)],
+      ...(manifest.gitignore.baseline
+        ? {
+          baseline: {
+            exists: manifest.gitignore.baseline.exists,
+            ...(manifest.gitignore.baseline.rawContent !== undefined
+              ? { rawContent: manifest.gitignore.baseline.rawContent }
+              : {}),
+          },
+        }
+        : {}),
     };
   }
 

@@ -235,11 +235,12 @@ function cleanupGitignoreContent(content: string, manifest: SetupInjectionManife
   const gitignore = manifest.gitignore;
   if (!gitignore) return { effect: 'noop' };
 
+  const ownedRules = new Set(gitignore.rules.map(rule => rule.trimEnd()));
   let removed = false;
   const remainingLines = content
     .split(/\r?\n/)
     .filter((line) => {
-      if (!removed && line.trimEnd() === gitignore.rule) {
+      if (ownedRules.has(line.trimEnd())) {
         removed = true;
         return false;
       }
@@ -254,13 +255,9 @@ function cleanupGitignoreContent(content: string, manifest: SetupInjectionManife
     remainingLines.pop();
   }
 
-  if (gitignore.created && remainingLines.length === 0) {
-    return { effect: 'delete' };
-  }
-
   const normalized = remainingLines.length > 0 ? `${remainingLines.join('\n')}\n` : '';
   if (normalized.length === 0) {
-    return { effect: 'delete' };
+    return { effect: 'noop' };
   }
   return normalized === content ? { effect: 'noop' } : { effect: 'write', content: normalized };
 }
@@ -588,35 +585,40 @@ export class FsWorkflowRepository implements WorkflowRepository {
     return true;
   }
 
-  async ensureClaudeWorktreesIgnored(): Promise<boolean> {
+  async ensureLocalStateIgnored(): Promise<boolean> {
     const path = join(this.base, '.gitignore');
-    const rule = '.claude/worktrees/';
+    const rules = ['.workflow/', '.flowpilot/', '.claude/settings.json', '.claude/worktrees/'];
+    const baseline = await this.snapshotExactFile(path);
     let created = false;
 
     try {
       const content = await readFile(path, 'utf-8');
-      const hasRule = content.split(/\r?\n/).some(line => line.trimEnd() === rule);
-      if (hasRule) return false;
+      const lines = content.split(/\r?\n/);
+      const existingRules = new Set(lines.map(line => line.trimEnd()));
+      const missingRules = rules.filter(rule => !existingRules.has(rule));
+      if (missingRules.length === 0) return false;
 
       const nextContent = content.length === 0
-        ? `${rule}\n`
-        : `${content}${content.endsWith('\n') ? '' : '\n'}${rule}\n`;
+        ? `${missingRules.join('\n')}\n`
+        : `${content}${content.endsWith('\n') ? '' : '\n'}${missingRules.join('\n')}\n`;
       await writeFile(path, nextContent, 'utf-8');
       await mergeSetupInjectionManifest(this.base, {
         gitignore: {
           created: false,
-          rule,
+          rules: missingRules,
+          baseline,
         },
       });
       return true;
     } catch (error: any) {
       if (error?.code !== 'ENOENT') throw error;
       created = true;
-      await writeFile(path, `${rule}\n`, 'utf-8');
+      await writeFile(path, `${rules.join('\n')}\n`, 'utf-8');
       await mergeSetupInjectionManifest(this.base, {
         gitignore: {
           created,
-          rule,
+          rules,
+          baseline,
         },
       });
       return true;
@@ -737,6 +739,22 @@ export class FsWorkflowRepository implements WorkflowRepository {
 
     const current = await this.snapshotExactFile(join(this.base, '.claude', 'settings.json'));
     return isExactFileSnapshotEqual(baseline, current);
+  }
+
+  async doesGitignoreResidueMatchPolicy(): Promise<boolean> {
+    const manifest = await loadSetupInjectionManifest(this.base);
+    const gitignoreManifest = manifest.gitignore;
+    if (!gitignoreManifest) return true;
+
+    const current = await this.snapshotExactFile(join(this.base, '.gitignore'));
+    const baseline = gitignoreManifest.baseline;
+    if (baseline?.exists) {
+      return isExactFileSnapshotEqual(baseline, current);
+    }
+    if (!current.exists) return false;
+
+    const expected = `${gitignoreManifest.rules.join('\n')}\n`;
+    return current.rawContent === expected;
   }
 
   tag(taskId: string): string | null { return tagTask(taskId, this.base); }

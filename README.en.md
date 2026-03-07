@@ -182,7 +182,7 @@ Evolution results directly affect workflow behavior:
 
 - Single file `dist/flow.js`, 99KB
 - Zero runtime dependencies, only needs Node.js
-- Auto-detects 8 project types, runs corresponding build/test/lint at finalization
+- Auto-detects 8 project types, runs corresponding verification commands at finalization, and reports passed / skipped / not-found states explicitly
 
 ## Documentation
 
@@ -209,11 +209,19 @@ Also enable **Agent Teams** by adding to `~/.claude/settings.json`:
 
 `node flow.js init` auto-generates the protocol and Hooks, and warns about missing plugins in the output.
 
+Setup/init changes to `CLAUDE.md`, `.claude/settings.json`, and `.gitignore` follow ownership-based cleanup: FlowPilot only removes what it created or injected, and `flow finish` refuses the final commit if user residue still remains afterward.
+
+By default, FlowPilot also ensures these local-only paths are ignored in the repo `.gitignore`: `.workflow/` (local transient runtime state), `.flowpilot/` (local persistent product state), `.claude/settings.json` (local integration state), and `.claude/worktrees/` (local worktree directory). It does not ignore the entire `.claude/` directory.
+
 ## Quick Start
 
 ```bash
 # Build single file
 cd FlowPilot && npm install && npm run build
+
+# Automation-friendly validation scripts
+npm run test:smoke
+npm run test:run
 
 # Copy to any project
 cp dist/flow.js /your/project/
@@ -234,6 +242,8 @@ claude --dangerously-skip-permissions --continue   # Resume most recent conversa
 claude --dangerously-skip-permissions --resume     # Pick from conversation history
 ```
 
+If the worktree is still dirty when resuming, `resume` explicitly tells you which dirty files predate the workflow, which ones were left behind by interrupted tasks, and whether the dirty baseline is missing.
+
 ## Architecture Overview
 
 ```
@@ -248,7 +258,7 @@ Main Agent (dispatcher, < 100 lines context)
   │
   ├─ node flow.js checkpoint ──→ Record output + knowledge extraction + git commit
   │
-  ├─ .workflow/ (workflow persistence layer)
+  ├─ .workflow/ (local transient runtime state)
   │   ├─ progress.md        # Task status table (main agent reads)
   │   ├─ tasks.md           # Complete task definitions
   │   ├─ config.json        # Runtime file (legacy-compatible, migration recommended)
@@ -256,7 +266,7 @@ Main Agent (dispatcher, < 100 lines context)
   │       ├─ summary.md     # Rolling summary
   │       └─ task-xxx.md    # Detailed output per task
   │
-  └─ .flowpilot/ (cross-workflow persistence layer)
+  └─ .flowpilot/ (local persistent product state)
       ├─ config.json        # Persistent config (maxRetries/parallelLimit/hints/verify/hooks)
       ├─ memory.json        # Long-term memory store (knowledge entries + tags + timestamps)
       └─ evolution/         # Evolution history (reflect/experiment/review records)
@@ -326,13 +336,17 @@ node flow.js next [--batch]       # Get next/all parallelizable tasks
 node flow.js checkpoint <id>      # Record task completion (stdin/--file/inline) [--files f1 f2 ...]
 node flow.js skip <id>            # Manually skip a task
 node flow.js review               # Mark code-review as done + evolution self-healing check
-node flow.js finish               # Smart finalization (verify+summarize+commit, requires review first)
+node flow.js finish               # Smart finalization (verify+summarize+final commit only when boundary is safe)
 node flow.js status               # View global progress
 node flow.js resume               # Interruption recovery
 node flow.js add <desc> [--type]  # Add task (frontend/backend/general)
 node flow.js recall <keywords>    # Retrieve historical memories (BM25 + Dense dual-path)
 node flow.js evolve               # Accept CC sub-agent reflection results and apply evolution
 ```
+
+Companion npm scripts:
+- `npm run test:run`: execute the full Vitest suite once
+- `npm run test:smoke`: execute workflow-boundary smoke tests for quick command/doc validation
 
 ## Execution Flow (Fully Automated)
 
@@ -364,8 +378,9 @@ node flow.js init
 
 - **Task failure** — Auto-retry 3 times, still failing after 3 → mark `failed` and skip
 - **Cascade skip** — Downstream tasks depending on failed tasks auto-marked `skipped`
-- **Interruption recovery** — `active` tasks reset to `pending`, redo from scratch
+- **Interruption recovery** — `active` tasks reset to `pending`, redo from scratch; if the worktree is still dirty, `resume` explicitly separates baseline dirt, interrupted-task residue, and missing-baseline warnings
 - **Verification failure** — `flow finish` reports error, dispatch sub-agent to fix, retry finish
+- **Final commit refusal** — after verify/review, `flow finish` also checks the dirty baseline, checkpoint-owned files, and cleanup results for `CLAUDE.md` / `.claude/settings.json` / `.gitignore`; any unsafe boundary causes an explicit refusal with the file list
 - **Loop detection** — Three-strategy defense (repeated failures/ping-pong/global circuit breaker), auto-injects warnings into next task
 - **Health check** — Active task timeout (>30min) alerts, memory bloat (>100 entries) auto-compaction
 - **Evolution rollback** — If experiments degrade metrics, `review` auto-rolls back to pre-experiment snapshot

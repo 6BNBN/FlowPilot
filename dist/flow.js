@@ -493,7 +493,7 @@ function isHooksInjectionState(value) {
   return isRecord(value) && typeof value.created === "boolean" && Array.isArray(value.preToolUse) && value.preToolUse.every(isHookEntry) && (value.settingsBaseline === void 0 || isExactFileSnapshot(value.settingsBaseline));
 }
 function isGitignoreInjectionState(value) {
-  return isRecord(value) && typeof value.created === "boolean" && typeof value.rule === "string";
+  return isRecord(value) && typeof value.created === "boolean" && Array.isArray(value.rules) && value.rules.every((rule) => typeof rule === "string") && (value.baseline === void 0 || isExactFileSnapshot(value.baseline));
 }
 function isSetupInjectionManifest(value) {
   return isRecord(value) && (value.claudeMd === void 0 || isClaudeMdInjectionState(value.claudeMd)) && (value.hooks === void 0 || isHooksInjectionState(value.hooks)) && (value.gitignore === void 0 || isGitignoreInjectionState(value.gitignore));
@@ -544,7 +544,13 @@ function normalizeSetupInjectionManifest(manifest) {
   if (manifest.gitignore) {
     normalized.gitignore = {
       created: manifest.gitignore.created,
-      rule: manifest.gitignore.rule
+      rules: [...new Set(manifest.gitignore.rules)],
+      ...manifest.gitignore.baseline ? {
+        baseline: {
+          exists: manifest.gitignore.baseline.exists,
+          ...manifest.gitignore.baseline.rawContent !== void 0 ? { rawContent: manifest.gitignore.baseline.rawContent } : {}
+        }
+      } : {}
     };
   }
   return normalized;
@@ -973,9 +979,10 @@ function isExactFileSnapshotEqual(snapshot, current) {
 function cleanupGitignoreContent(content, manifest) {
   const gitignore = manifest.gitignore;
   if (!gitignore) return { effect: "noop" };
+  const ownedRules = new Set(gitignore.rules.map((rule) => rule.trimEnd()));
   let removed = false;
   const remainingLines = content.split(/\r?\n/).filter((line) => {
-    if (!removed && line.trimEnd() === gitignore.rule) {
+    if (ownedRules.has(line.trimEnd())) {
       removed = true;
       return false;
     }
@@ -987,13 +994,10 @@ function cleanupGitignoreContent(content, manifest) {
   while (remainingLines.length > 0 && remainingLines[remainingLines.length - 1] === "") {
     remainingLines.pop();
   }
-  if (gitignore.created && remainingLines.length === 0) {
-    return { effect: "delete" };
-  }
   const normalized = remainingLines.length > 0 ? `${remainingLines.join("\n")}
 ` : "";
   if (normalized.length === 0) {
-    return { effect: "delete" };
+    return { effect: "noop" };
   }
   return normalized === content ? { effect: "noop" } : { effect: "write", content: normalized };
 }
@@ -1280,34 +1284,39 @@ var FsWorkflowRepository = class {
     }
     return true;
   }
-  async ensureClaudeWorktreesIgnored() {
+  async ensureLocalStateIgnored() {
     const path = (0, import_path2.join)(this.base, ".gitignore");
-    const rule = ".claude/worktrees/";
+    const rules = [".workflow/", ".flowpilot/", ".claude/settings.json", ".claude/worktrees/"];
+    const baseline = await this.snapshotExactFile(path);
     let created = false;
     try {
       const content = await (0, import_promises2.readFile)(path, "utf-8");
-      const hasRule = content.split(/\r?\n/).some((line) => line.trimEnd() === rule);
-      if (hasRule) return false;
-      const nextContent = content.length === 0 ? `${rule}
-` : `${content}${content.endsWith("\n") ? "" : "\n"}${rule}
+      const lines = content.split(/\r?\n/);
+      const existingRules = new Set(lines.map((line) => line.trimEnd()));
+      const missingRules = rules.filter((rule) => !existingRules.has(rule));
+      if (missingRules.length === 0) return false;
+      const nextContent = content.length === 0 ? `${missingRules.join("\n")}
+` : `${content}${content.endsWith("\n") ? "" : "\n"}${missingRules.join("\n")}
 `;
       await (0, import_promises2.writeFile)(path, nextContent, "utf-8");
       await mergeSetupInjectionManifest(this.base, {
         gitignore: {
           created: false,
-          rule
+          rules: missingRules,
+          baseline
         }
       });
       return true;
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
       created = true;
-      await (0, import_promises2.writeFile)(path, `${rule}
+      await (0, import_promises2.writeFile)(path, `${rules.join("\n")}
 `, "utf-8");
       await mergeSetupInjectionManifest(this.base, {
         gitignore: {
           created,
-          rule
+          rules,
+          baseline
         }
       });
       return true;
@@ -1414,6 +1423,20 @@ var FsWorkflowRepository = class {
     if (!baseline) return false;
     const current = await this.snapshotExactFile((0, import_path2.join)(this.base, ".claude", "settings.json"));
     return isExactFileSnapshotEqual(baseline, current);
+  }
+  async doesGitignoreResidueMatchPolicy() {
+    const manifest = await loadSetupInjectionManifest(this.base);
+    const gitignoreManifest = manifest.gitignore;
+    if (!gitignoreManifest) return true;
+    const current = await this.snapshotExactFile((0, import_path2.join)(this.base, ".gitignore"));
+    const baseline = gitignoreManifest.baseline;
+    if (baseline?.exists) {
+      return isExactFileSnapshotEqual(baseline, current);
+    }
+    if (!current.exists) return false;
+    const expected = `${gitignoreManifest.rules.join("\n")}
+`;
+    return current.rawContent === expected;
   }
   tag(taskId) {
     return tagTask(taskId, this.base);
@@ -3641,7 +3664,7 @@ ${def.description}
     const setupOwnedFiles = [];
     if (await this.repo.ensureClaudeMd()) setupOwnedFiles.push("CLAUDE.md");
     if (await this.repo.ensureHooks()) setupOwnedFiles.push(".claude/settings.json");
-    if (await this.repo.ensureClaudeWorktreesIgnored()) setupOwnedFiles.push(".gitignore");
+    if (await this.repo.ensureLocalStateIgnored()) setupOwnedFiles.push(".gitignore");
     await saveSetupOwnedFiles(this.repo.projectRoot(), setupOwnedFiles);
     await this.applyHistoryInsights();
     await decayMemory(this.repo.projectRoot());
@@ -3923,6 +3946,16 @@ ${detail}
         ].join("\n")
       };
     }
+    const gitignorePolicyMatches = await this.repo.doesGitignoreResidueMatchPolicy();
+    if (!gitignorePolicyMatches) {
+      return {
+        ok: false,
+        message: [
+          "\u62D2\u7EDD\u6700\u7EC8\u63D0\u4EA4\uFF1Asetup-owned \u6587\u4EF6\u5728\u7CBE\u786E cleanup \u540E\u4ECD\u6709\u7528\u6237\u6B8B\u7559\u6539\u52A8\u3002",
+          "- .gitignore"
+        ].join("\n")
+      };
+    }
     const currentDirtyFiles = this.repo.listChangedFiles();
     const comparison = compareDirtyFilesAgainstBaseline(currentDirtyFiles, baseline?.files ?? []);
     const explainableOwnedSet = /* @__PURE__ */ new Set([...setupOwnedFiles, ...checkpointOwnedFiles]);
@@ -3945,7 +3978,7 @@ ${detail}
         ].join("\n")
       };
     }
-    const leftoverSetupOwnedFiles = comparison.newDirtyFiles.filter((file) => setupOwnedSet.has(file));
+    const leftoverSetupOwnedFiles = comparison.newDirtyFiles.filter((file) => setupOwnedSet.has(file) && !(file === ".gitignore" && gitignorePolicyMatches));
     if (leftoverSetupOwnedFiles.length > 0) {
       return {
         ok: false,
@@ -4005,7 +4038,7 @@ ${detail}
     const existing = await this.repo.loadProgress();
     const wrote = await this.repo.ensureClaudeMd();
     await this.repo.ensureHooks();
-    await this.repo.ensureClaudeWorktreesIgnored();
+    await this.repo.ensureLocalStateIgnored();
     const lines = [];
     if (existing && (existing.status === "running" || existing.status === "finishing")) {
       const done = existing.tasks.filter((t) => t.status === "done").length;

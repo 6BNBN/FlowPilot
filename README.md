@@ -182,7 +182,7 @@ Finalization 阶段（可选）：
 
 - 单文件 `dist/flow.js`，99KB
 - 零运行时依赖，只需 Node.js
-- 自动识别 8 种项目类型，收尾时自动跑对应的 build/test/lint
+- 自动识别 8 种项目类型，收尾时自动跑对应的验证命令，并区分通过 / 跳过 / 未发现命令
 
 ## 文档
 
@@ -209,11 +209,19 @@ Finalization 阶段（可选）：
 
 `node flow.js init` 会自动生成协议和 Hooks，缺失插件会在输出中提醒。
 
+setup/init 写入的 `CLAUDE.md`、`.claude/settings.json`、`.gitignore` 遵循 ownership-based cleanup：FlowPilot 只清理自己创建或注入的部分，cleanup 后若仍有用户残留改动，`flow finish` 会拒绝最终提交。
+
+默认情况下，FlowPilot 还会在项目 `.gitignore` 中确保以下本地状态被忽略：`.workflow/`（本地临时运行态）、`.flowpilot/`（本地持久化产品状态）、`.claude/settings.json`（本地集成配置）、`.claude/worktrees/`（本地工作树目录）。不会忽略整个 `.claude/` 目录。
+
 ## 快速开始
 
 ```bash
 # 构建单文件
 cd FlowPilot && npm install && npm run build
+
+# 自动化验证脚本
+npm run test:smoke
+npm run test:run
 
 # 复制到任意项目
 cp dist/flow.js /your/project/
@@ -234,6 +242,8 @@ claude --dangerously-skip-permissions --continue   # 接续最近一次对话
 claude --dangerously-skip-permissions --resume     # 从历史对话列表选择
 ```
 
+如果恢复时工作区仍然有脏业务文件，`resume` 会明确告诉你哪些是启动前就存在的 baseline 脏文件，哪些是中断任务残留的新脏文件；如果 dirty baseline 缺失，也会直接说明“无法证明这是干净重启”。
+
 ## 架构概览
 
 ```
@@ -248,7 +258,7 @@ claude --dangerously-skip-permissions --resume     # 从历史对话列表选择
   │
   ├─ node flow.js checkpoint ──→ 记录产出 + 知识提取 + git commit
   │
-  ├─ .workflow/（工作流持久化层）
+  ├─ .workflow/（本地临时运行态）
   │   ├─ progress.md        # 任务状态表（主Agent读）
   │   ├─ tasks.md           # 完整任务定义
   │   ├─ config.json        # 运行态文件（兼容旧路径，推荐迁移）
@@ -256,7 +266,7 @@ claude --dangerously-skip-permissions --resume     # 从历史对话列表选择
   │       ├─ summary.md     # 滚动摘要
   │       └─ task-xxx.md    # 各任务详细产出
   │
-  └─ .flowpilot/（跨工作流持久化层）
+  └─ .flowpilot/（本地持久化产品状态）
       ├─ config.json        # 持久配置（maxRetries/parallelLimit/hints/verify/hooks）
       ├─ memory.json        # 长期记忆库（知识条目 + 标签 + 时间戳）
       └─ evolution/         # 进化历史（reflect/experiment/review 记录）
@@ -326,13 +336,17 @@ node flow.js next [--batch]       # 获取下一个/所有可并行任务
 node flow.js checkpoint <id>      # 记录任务完成（stdin/--file/内联）[--files f1 f2 ...]
 node flow.js skip <id>            # 手动跳过任务
 node flow.js review               # 标记code-review已完成 + 进化自愈检查
-node flow.js finish               # 智能收尾（验证+总结+提交，需先review）
+node flow.js finish               # 智能收尾（验证+总结+边界安全时才最终提交，需先review）
 node flow.js status               # 查看全局进度
 node flow.js resume               # 中断恢复
 node flow.js add <描述> [--type]  # 追加任务（frontend/backend/general）
 node flow.js recall <关键词>      # 检索历史记忆（BM25 + Dense 双路）
 node flow.js evolve               # 接收 CC sub-agent 反思结果并应用进化
 ```
+
+配套 npm 脚本：
+- `npm run test:run`：一次性执行完整 Vitest 测试集
+- `npm run test:smoke`：执行工作流边界相关冒烟测试，适合改命令/文档后快速验证
 
 ## 执行流程（全自动）
 
@@ -364,8 +378,9 @@ node flow.js init
 
 - **任务失败** — 自动重试 3 次，3 次仍失败则标记 `failed` 并跳过
 - **级联跳过** — 依赖了失败任务的后续任务自动标记 `skipped`
-- **中断恢复** — `active` 状态的任务重置为 `pending`，从头重做
+- **中断恢复** — `active` 状态的任务重置为 `pending`，从头重做；若工作区仍脏，`resume` 会明确区分 baseline 脏文件、任务残留脏文件、以及缺失 baseline 的保守警告
 - **验证失败** — `flow finish` 报错后可派子Agent修复，再次 finish
+- **最终提交拒绝** — `flow finish` 在 verify/review 之后还会检查 dirty baseline、checkpoint owned files、以及 `CLAUDE.md` / `.claude/settings.json` / `.gitignore` 的 cleanup 结果；只要边界不安全，就拒绝最终提交并列出文件
 - **循环检测** — 三策略防护（重复失败/乒乓/全局熔断），自动注入警告到下一任务
 - **心跳自检** — 活跃任务超时（>30分钟）告警，记忆膨胀（>100条）自动压缩
 - **进化回滚** — 实验导致指标恶化时，`review` 自动回滚到实验前快照

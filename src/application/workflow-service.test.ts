@@ -40,6 +40,7 @@ const TASKS_MD = `# 集成测试
 3. [general] 写文档 (deps: 1,2)
   API文档
 `;
+const LOCAL_STATE_GITIGNORE = '.workflow/\n.flowpilot/\n.claude/settings.json\n.claude/worktrees/\n';
 
 async function completeWorkflow(service: WorkflowService): Promise<void> {
   await service.init(TASKS_MD);
@@ -296,8 +297,8 @@ describe('WorkflowService 集成测试', () => {
       events.push('ensureHooks');
       return true;
     });
-    vi.spyOn(repo, 'ensureClaudeWorktreesIgnored').mockImplementation(async () => {
-      events.push('ensureClaudeWorktreesIgnored');
+    vi.spyOn(repo, 'ensureLocalStateIgnored').mockImplementation(async () => {
+      events.push('ensureLocalStateIgnored');
       return true;
     });
     svc = new WorkflowService(repo, parseTasksMarkdown);
@@ -424,11 +425,11 @@ describe('WorkflowService 集成测试', () => {
 
   it('仅在 init 和 setup 接入 .gitignore helper', async () => {
     const repo = new FsWorkflowRepository(dir);
-    const helperSpy = vi.spyOn(repo, 'ensureClaudeWorktreesIgnored');
+    const helperSpy = vi.spyOn(repo, 'ensureLocalStateIgnored');
     svc = new WorkflowService(repo, parseTasksMarkdown);
 
     await svc.init(TASKS_MD);
-    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe('.claude/worktrees/\n');
+    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe(LOCAL_STATE_GITIGNORE);
 
     await svc.setup();
     expect(helperSpy).toHaveBeenCalledTimes(2);
@@ -440,7 +441,7 @@ describe('WorkflowService 集成测试', () => {
     await svc.nextBatch();
 
     expect(helperSpy).not.toHaveBeenCalled();
-    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe('.claude/worktrees/\n');
+    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe(LOCAL_STATE_GITIGNORE);
   });
 
   it('checkpoint提取[REMEMBER]标记写入永久记忆', async () => {
@@ -634,7 +635,7 @@ describe('WorkflowService 集成测试', () => {
 
   it('finish在仓库已预先setup时仍只提交业务文件，即使 checkpoint 声明了 CLAUDE.md 和 .gitignore', async () => {
     await writeFile(join(dir, 'CLAUDE.md'), '# Project\n\n<!-- flowpilot:start -->\nexisting\n', 'utf-8');
-    await writeFile(join(dir, '.gitignore'), '.claude/worktrees/\n', 'utf-8');
+    await writeFile(join(dir, '.gitignore'), LOCAL_STATE_GITIGNORE, 'utf-8');
 
     const repo = new FsWorkflowRepository(dir);
     const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
@@ -896,7 +897,7 @@ describe('WorkflowService 集成测试', () => {
     expect(await repo.loadProgress()).toBeNull();
     await expect(readFile(join(dir, 'CLAUDE.md'), 'utf-8')).rejects.toThrow();
     await expect(readFile(join(dir, '.claude', 'settings.json'), 'utf-8')).rejects.toThrow();
-    await expect(readFile(join(dir, '.gitignore'), 'utf-8')).rejects.toThrow();
+    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe(LOCAL_STATE_GITIGNORE);
   });
 
   it('abort仅移除预存文件中的 FlowPilot 注入内容', async () => {

@@ -57,7 +57,7 @@ export interface WorkflowRepository {
   ensureClaudeMd(): Promise<boolean>;
   /** 确保.claude/settings.json包含hooks，并记录首次注入前的精确基线 */
   ensureHooks(): Promise<boolean>;
-  ensureClaudeWorktreesIgnored(): Promise<boolean>;
+  ensureLocalStateIgnored(): Promise<boolean>;
   /** 清理 context/ 目录（finish后释放上下文） */
   clearContext(): Promise<void>;
   /** 清理整个 .workflow/ 目录 */
@@ -79,6 +79,8 @@ export interface WorkflowRepository {
   cleanupInjections(): Promise<void>;
   /** cleanup 后的 settings.json 是否与注入前精确基线一致 */
   doesSettingsResidueMatchBaseline(): Promise<boolean>;
+  /** cleanup 后保留的 .gitignore 是否仍只包含 FlowPilot 管理的本地状态策略 */
+  doesGitignoreResidueMatchPolicy(): Promise<boolean>;
   /** 保存工作流历史统计到 .flowpilot/history/ */
   saveHistory(stats: WorkflowStats): Promise<void>;
   /** 加载所有历史统计 */
