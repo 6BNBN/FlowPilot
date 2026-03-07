@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -7,6 +7,7 @@ import { FsWorkflowRepository } from '../infrastructure/fs-repository';
 import { parseTasksMarkdown } from '../infrastructure/markdown-parser';
 import { loadMemory } from '../infrastructure/memory';
 import { readFile } from 'fs/promises';
+import type { CommitResult } from '../domain/repository';
 
 let savedApiKey: string | undefined;
 let savedAuthToken: string | undefined;
@@ -37,6 +38,24 @@ const TASKS_MD = `# 集成测试
 3. [general] 写文档 (deps: 1,2)
   API文档
 `;
+
+async function completeWorkflow(service: WorkflowService): Promise<void> {
+  await service.init(TASKS_MD);
+  await service.next();
+  await service.checkpoint('001', '表结构设计完成');
+  await service.next();
+  await service.checkpoint('002', '页面完成');
+  await service.next();
+  await service.checkpoint('003', '文档完成');
+}
+
+function mockCommitResult(repo: FsWorkflowRepository, result: CommitResult) {
+  return vi.spyOn(repo, 'commit').mockReturnValue(result);
+}
+
+function mockChangedFiles(repo: FsWorkflowRepository, files: string[]) {
+  return vi.spyOn(repo, 'listChangedFiles').mockReturnValue(files);
+}
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'flow-int-'));
@@ -150,6 +169,27 @@ describe('WorkflowService 集成测试', () => {
     expect(data.status).toBe('running');
   });
 
+  it('仅在 init 和 setup 接入 .gitignore helper', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    const helperSpy = vi.spyOn(repo, 'ensureClaudeWorktreesIgnored');
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+
+    await svc.init(TASKS_MD);
+    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe('.claude/worktrees/\n');
+
+    await svc.setup();
+    expect(helperSpy).toHaveBeenCalledTimes(2);
+
+    helperSpy.mockClear();
+    await svc.next();
+    await svc.status();
+    await svc.resume();
+    await svc.nextBatch();
+
+    expect(helperSpy).not.toHaveBeenCalled();
+    expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe('.claude/worktrees/\n');
+  });
+
   it('checkpoint提取[REMEMBER]标记写入永久记忆', async () => {
     await svc.init(TASKS_MD);
     await svc.next();
@@ -179,6 +219,98 @@ describe('WorkflowService 集成测试', () => {
     await svc.checkpoint('002', '前端页面开发完成，实现了用户登录和注册功能，使用React组件化架构');
     const batch2 = await svc.nextBatch();
     expect(batch2[0]?.context).toContain('相关记忆');
+  });
+
+  it('checkpoint仅在真实提交时显示已自动提交', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    mockCommitResult(repo, { status: 'committed' });
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+    await svc.init(TASKS_MD);
+    await svc.next();
+
+    const msg = await svc.checkpoint('001', '表结构设计完成', ['src/main.ts']);
+    expect(msg).toContain('[已自动提交]');
+  });
+
+  it('checkpoint在无变更时明确提示未自动提交原因', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    mockCommitResult(repo, { status: 'skipped', reason: 'no-staged-changes' });
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+    await svc.init(TASKS_MD);
+    await svc.next();
+
+    const msg = await svc.checkpoint('001', '表结构设计完成', ['src/main.ts']);
+    expect(msg).toContain('[未自动提交]');
+    expect(msg).toContain('指定文件无可提交变更');
+    expect(msg).not.toContain('[已自动提交]');
+  });
+
+  it('checkpoint在未提供文件时明确提示未自动提交原因', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    mockCommitResult(repo, { status: 'skipped', reason: 'no-files' });
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+    await svc.init(TASKS_MD);
+    await svc.next();
+
+    const msg = await svc.checkpoint('001', '表结构设计完成');
+    expect(msg).toContain('[未自动提交]');
+    expect(msg).toContain('未提供 --files，未自动提交');
+    expect(msg).not.toContain('[已自动提交]');
+  });
+
+  it('finish在存在业务改动时会提交最终commit', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    mockChangedFiles(repo, ['src/main.ts']);
+    const commitSpy = vi.spyOn(repo, 'commit').mockImplementation((taskId, title, summary, files) => {
+      if (taskId !== 'finish') {
+        return { status: 'skipped', reason: 'no-files' };
+      }
+      expect(files).toEqual(['src/main.ts']);
+      return { status: 'committed' };
+    });
+    vi.spyOn(repo, 'verify').mockReturnValue({ passed: true, scripts: ['npm test -- --run'] });
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+    await completeWorkflow(svc);
+    await svc.review();
+
+    const msg = await svc.finish();
+    expect(msg).toContain('验证通过: npm test -- --run');
+    expect(msg).toContain('已提交最终commit');
+    expect(msg).not.toContain('未提交最终commit');
+    expect(commitSpy).toHaveBeenCalledTimes(4);
+    expect(commitSpy.mock.calls.at(-1)?.[0]).toBe('finish');
+    expect(await svc.status()).toBeNull();
+  });
+
+  it('finish在未提供文件时说明未提交最终commit但仍正常收尾', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    mockChangedFiles(repo, []);
+    mockCommitResult(repo, { status: 'skipped', reason: 'no-files' });
+    vi.spyOn(repo, 'verify').mockReturnValue({ passed: true, scripts: ['npm test'] });
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+    await completeWorkflow(svc);
+    await svc.review();
+
+    const msg = await svc.finish();
+    expect(msg).toContain('验证通过: npm test');
+    expect(msg).toContain('未提交最终commit：未提供 --files，未自动提交');
+    expect(msg).toContain('工作流回到待命状态');
+    expect(msg).not.toContain('已提交最终commit');
+    expect(await svc.status()).toBeNull();
+  });
+
+  it('finish在git失败时保留工作流并提示手动提交', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    mockCommitResult(repo, { status: 'failed', error: 'git hooks failed' });
+    vi.spyOn(repo, 'verify').mockReturnValue({ passed: true, scripts: [] });
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+    await completeWorkflow(svc);
+    await svc.review();
+
+    const msg = await svc.finish();
+    expect(msg).toContain('[git提交失败] git hooks failed');
+    expect(msg).toContain('请根据错误修复后手动检查并提交需要的文件');
+    expect(await svc.status()).not.toBeNull();
   });
 
   it('rollbackEvolution恢复历史config', async () => {

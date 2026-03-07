@@ -5,7 +5,7 @@
 
 import type { ProgressData, TaskEntry, WorkflowStats } from '../domain/types';
 import type { WorkflowDefinition } from '../domain/workflow';
-import type { WorkflowRepository } from '../domain/repository';
+import type { CommitResult, WorkflowRepository } from '../domain/repository';
 import { makeTaskId, cascadeSkip, findNextTask, findParallelTasks, completeTask, failTask, resumeProgress, isAllDone } from '../domain/task-store';
 import { runLifecycleHook } from '../infrastructure/hooks';
 import { log, setWorkflowName } from '../infrastructure/logger';
@@ -103,6 +103,7 @@ export class WorkflowService {
     await this.repo.saveSummary(`# ${def.name}\n\n${def.description}\n`);
     await this.repo.ensureClaudeMd();
     await this.repo.ensureHooks();
+    await this.repo.ensureClaudeWorktreesIgnored();
 
     // 历史经验分析：读取历史统计，输出建议，自动调整参数
     await this.applyHistoryInsights();
@@ -348,17 +349,13 @@ export class WorkflowService {
       }
 
       await this.updateSummary(newData);
-      const commitErr = this.repo.commit(id, task.title, summaryLine, files);
-      if (!commitErr) this.repo.tag(id);
+      const commitResult = this.repo.commit(id, task.title, summaryLine, files);
+      if (commitResult.status === 'committed') this.repo.tag(id);
       await runLifecycleHook('onTaskComplete', this.repo.projectRoot(), { TASK_ID: id, TASK_TITLE: task.title });
 
       const doneCount = newData.tasks.filter(t => t.status === 'done').length;
       let msg = `任务 ${id} 完成 (${doneCount}/${newData.tasks.length})`;
-      if (commitErr) {
-        msg += `\n[git提交失败] ${commitErr}\n请根据错误修复后手动执行 git add -A && git commit`;
-      } else {
-        msg += ' [已自动提交]';
-      }
+      msg += this.formatCommitMessage(commitResult, 'task');
       return isAllDone(newData.tasks) ? msg + '\n全部任务已完成，请执行 node flow.js finish 进行收尾' : msg;
     } finally {
       await this.repo.unlock();
@@ -437,6 +434,7 @@ export class WorkflowService {
     const existing = await this.repo.loadProgress();
     const wrote = await this.repo.ensureClaudeMd();
     await this.repo.ensureHooks();
+    await this.repo.ensureClaudeWorktreesIgnored();
     const lines: string[] = [];
 
     if (existing && (existing.status === 'running' || existing.status === 'finishing')) {
@@ -525,16 +523,33 @@ export class WorkflowService {
 
     await this.repo.cleanupInjections();
     this.repo.cleanTags();
-    const commitErr = this.repo.commit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`);
-    if (!commitErr) {
+    const changedFiles = this.repo.listChangedFiles();
+    const commitResult = this.repo.commit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`, changedFiles);
+    if (commitResult.status !== 'failed') {
       await this.repo.clearAll();
     }
 
     const scripts = result.scripts.length ? result.scripts.join(', ') : '无验证脚本';
-    if (commitErr) {
-      return `验证通过: ${scripts}\n${stats}\n[git提交失败] ${commitErr}\n请根据错误修复后手动执行 git add -A && git commit`;
+    return `验证通过: ${scripts}\n${stats}${this.formatCommitMessage(commitResult, 'finish')}\n工作流回到待命状态\n等待下一个需求...`;
+  }
+
+  /** 将 git 提交结果映射为面向用户的真实提示语 */
+  private formatCommitMessage(result: CommitResult, stage: 'task' | 'finish'): string {
+    if (result.status === 'committed') {
+      return stage === 'task' ? ' [已自动提交]' : '\n已提交最终commit';
     }
-    return `验证通过: ${scripts}\n${stats}\n已提交最终commit，工作流回到待命状态\n等待下一个需求...`;
+
+    if (result.status === 'failed') {
+      return `\n[git提交失败] ${result.error}\n请根据错误修复后手动检查并提交需要的文件`;
+    }
+
+    const reasonMap: Record<NonNullable<CommitResult['reason']>, string> = {
+      'no-files': '未提供 --files，未自动提交',
+      'runtime-only': '仅检测到 FlowPilot 运行时文件，未自动提交',
+      'no-staged-changes': '指定文件无可提交变更，未自动提交',
+    };
+    const reason = result.reason ? reasonMap[result.reason] : '未自动提交';
+    return stage === 'task' ? `\n[未自动提交] ${reason}` : `\n未提交最终commit：${reason}`;
   }
 
   /** rollback: 回滚到指定任务的快照 */
