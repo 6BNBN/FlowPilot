@@ -275,7 +275,8 @@ describe('WorkflowService 集成测试', () => {
     await svc.review();
 
     const msg = await svc.finish();
-    expect(msg).toContain('验证通过: npm test -- --run');
+    expect(msg).toContain('验证结果:');
+    expect(msg).toContain('- 通过: npm test -- --run');
     expect(msg).toContain('已提交最终commit');
     expect(msg).not.toContain('未提交最终commit');
     expect(commitSpy).toHaveBeenCalledTimes(4);
@@ -293,7 +294,8 @@ describe('WorkflowService 集成测试', () => {
     await svc.review();
 
     const msg = await svc.finish();
-    expect(msg).toContain('验证通过: npm test');
+    expect(msg).toContain('验证结果:');
+    expect(msg).toContain('- 通过: npm test');
     expect(msg).toContain('未提交最终commit：未提供 --files，未自动提交');
     expect(msg).toContain('工作流回到待命状态');
     expect(msg).not.toContain('已提交最终commit');

@@ -7,9 +7,20 @@ import { execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+export type VerifyStepStatus = 'passed' | 'skipped' | 'failed';
+export type VerifyStatus = 'passed' | 'failed' | 'not-found';
+
+export interface VerifyStepResult {
+  command: string;
+  status: VerifyStepStatus;
+  reason?: string;
+}
+
 export interface VerifyResult {
   passed: boolean;
+  status: VerifyStatus;
   scripts: string[];
+  steps: VerifyStepResult[];
   error?: string;
 }
 
@@ -35,21 +46,35 @@ export function runVerify(cwd: string): VerifyResult {
   const config = loadConfig(cwd);
   const cmds = normalizeCommands(cwd, config.commands?.length ? config.commands : detectCommands(cwd));
   const timeout = (config.timeout ?? 300) * 1_000;
-  if (!cmds.length) return { passed: true, scripts: [] };
+  if (!cmds.length) return { passed: true, status: 'not-found', scripts: [], steps: [] };
+
+  const steps: VerifyStepResult[] = [];
 
   for (const cmd of cmds) {
     try {
       execSync(cmd, { cwd, stdio: 'pipe', timeout });
+      steps.push({ command: cmd, status: 'passed' });
     } catch (e: any) {
       const stderr = e.stderr?.length ? e.stderr.toString() : '';
       const stdout = e.stdout?.length ? e.stdout.toString() : '';
       const out = stderr || stdout || '';
-      if (out.includes('No test files found')) continue;
-      if (out.includes('no test files')) continue;
-      return { passed: false, scripts: cmds, error: `${cmd} 失败:\n${out.slice(0, 500)}` };
+      const noTestsReason = detectNoTestsReason(out);
+      if (noTestsReason) {
+        steps.push({ command: cmd, status: 'skipped', reason: noTestsReason });
+        continue;
+      }
+      const reason = out.slice(0, 500) || '命令执行失败';
+      steps.push({ command: cmd, status: 'failed', reason });
+      return { passed: false, status: 'failed', scripts: cmds, steps, error: `${cmd} 失败:\n${reason}` };
     }
   }
-  return { passed: true, scripts: cmds };
+  return { passed: true, status: 'passed', scripts: cmds, steps };
+}
+
+function detectNoTestsReason(output: string): string | null {
+  if (output.includes('No test files found')) return '未找到测试文件';
+  if (output.includes('no test files')) return '未找到测试文件';
+  return null;
 }
 
 function normalizeCommands(cwd: string, commands: string[]): string[] {

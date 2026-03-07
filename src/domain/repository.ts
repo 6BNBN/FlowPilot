@@ -5,10 +5,25 @@
 
 import type { ProgressData, WorkflowStats, EvolutionEntry } from './types';
 
+/** 单个验证步骤状态 */
+export type VerifyStepStatus = 'passed' | 'skipped' | 'failed';
+
+/** 验证整体状态 */
+export type VerifyStatus = 'passed' | 'failed' | 'not-found';
+
+/** 单个验证步骤结果 */
+export interface VerifyStepResult {
+  command: string;
+  status: VerifyStepStatus;
+  reason?: string;
+}
+
 /** 验证结果 */
 export interface VerifyResult {
   passed: boolean;
+  status?: VerifyStatus;
   scripts: string[];
+  steps?: VerifyStepResult[];
   error?: string;
 }
 

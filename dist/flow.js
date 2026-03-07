@@ -223,21 +223,33 @@ function runVerify(cwd) {
   const config = loadConfig(cwd);
   const cmds = normalizeCommands(cwd, config.commands?.length ? config.commands : detectCommands(cwd));
   const timeout = (config.timeout ?? 300) * 1e3;
-  if (!cmds.length) return { passed: true, scripts: [] };
+  if (!cmds.length) return { passed: true, status: "not-found", scripts: [], steps: [] };
+  const steps = [];
   for (const cmd of cmds) {
     try {
       (0, import_node_child_process2.execSync)(cmd, { cwd, stdio: "pipe", timeout });
+      steps.push({ command: cmd, status: "passed" });
     } catch (e) {
       const stderr = e.stderr?.length ? e.stderr.toString() : "";
       const stdout = e.stdout?.length ? e.stdout.toString() : "";
       const out = stderr || stdout || "";
-      if (out.includes("No test files found")) continue;
-      if (out.includes("no test files")) continue;
-      return { passed: false, scripts: cmds, error: `${cmd} \u5931\u8D25:
-${out.slice(0, 500)}` };
+      const noTestsReason = detectNoTestsReason(out);
+      if (noTestsReason) {
+        steps.push({ command: cmd, status: "skipped", reason: noTestsReason });
+        continue;
+      }
+      const reason = out.slice(0, 500) || "\u547D\u4EE4\u6267\u884C\u5931\u8D25";
+      steps.push({ command: cmd, status: "failed", reason });
+      return { passed: false, status: "failed", scripts: cmds, steps, error: `${cmd} \u5931\u8D25:
+${reason}` };
     }
   }
-  return { passed: true, scripts: cmds };
+  return { passed: true, status: "passed", scripts: cmds, steps };
+}
+function detectNoTestsReason(output) {
+  if (output.includes("No test files found")) return "\u672A\u627E\u5230\u6D4B\u8BD5\u6587\u4EF6";
+  if (output.includes("no test files")) return "\u672A\u627E\u5230\u6D4B\u8BD5\u6587\u4EF6";
+  return null;
 }
 function normalizeCommands(cwd, commands) {
   const testScript = loadPackageScripts(cwd).test;
@@ -3384,8 +3396,10 @@ ${detail}
       return `\u9A8C\u8BC1\u5931\u8D25: ${result.error}
 \u8BF7\u4FEE\u590D\u540E\u91CD\u65B0\u6267\u884C node flow.js finish`;
     }
+    const verifySummary = this.formatVerifySummary(result);
     if (data.status !== "finishing") {
-      return "\u9A8C\u8BC1\u901A\u8FC7\uFF0C\u8BF7\u6D3E\u5B50Agent\u6267\u884C code-review\uFF0C\u5B8C\u6210\u540E\u6267\u884C node flow.js review\uFF0C\u518D\u6267\u884C node flow.js finish";
+      return `${verifySummary}
+\u8BF7\u6D3E\u5B50Agent\u6267\u884C code-review\uFF0C\u5B8C\u6210\u540E\u6267\u884C node flow.js review\uFF0C\u518D\u6267\u884C node flow.js finish`;
     }
     const done = data.tasks.filter((t) => t.status === "done");
     const skipped2 = data.tasks.filter((t) => t.status === "skipped");
@@ -3426,8 +3440,7 @@ ${titles}`, changedFiles);
     if (commitResult.status !== "failed") {
       await this.repo.clearAll();
     }
-    const scripts = result.scripts.length ? result.scripts.join(", ") : "\u65E0\u9A8C\u8BC1\u811A\u672C";
-    return `\u9A8C\u8BC1\u901A\u8FC7: ${scripts}
+    return `${verifySummary}
 ${stats}
 ${evolutionSummary}${this.formatCommitMessage(commitResult, "finish")}
 \u5DE5\u4F5C\u6D41\u56DE\u5230\u5F85\u547D\u72B6\u6001
@@ -3448,6 +3461,24 @@ ${evolutionSummary}${this.formatCommitMessage(commitResult, "finish")}
       `- config\u53D8\u66F4: ${summary.changedConfigKeys.length > 0 ? "\u662F" : "\u5426"}`,
       `- \u53D8\u66F4\u952E: ${changedKeysText}`
     ].join("\n");
+  }
+  /** 格式化验证结果，让 passed/skipped/not-found 对用户可见 */
+  formatVerifySummary(result) {
+    if (result.status === "not-found") {
+      return "\u9A8C\u8BC1\u7ED3\u679C: \u672A\u53D1\u73B0\u53EF\u6267\u884C\u7684\u9A8C\u8BC1\u547D\u4EE4";
+    }
+    const steps = result.steps ?? result.scripts.map((command) => ({ command, status: "passed" }));
+    const lines = ["\u9A8C\u8BC1\u7ED3\u679C:"];
+    for (const step of steps) {
+      if (step.status === "passed") {
+        lines.push(`- \u901A\u8FC7: ${step.command}`);
+        continue;
+      }
+      if (step.status === "skipped") {
+        lines.push(`- \u8DF3\u8FC7: ${step.command}${step.reason ? `\uFF08${step.reason}\uFF09` : ""}`);
+      }
+    }
+    return lines.join("\n");
   }
   /** 将 git 提交结果映射为面向用户的真实提示语 */
   formatCommitMessage(result, stage) {

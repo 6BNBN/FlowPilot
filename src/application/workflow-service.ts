@@ -565,6 +565,26 @@ export class WorkflowService {
     ].join('\n');
   }
 
+  /** 格式化验证结果，让 passed/skipped/not-found 对用户可见 */
+  private formatVerifySummary(result: { status?: string; steps?: Array<{ command: string; status: string; reason?: string }>; scripts: string[] }): string {
+    if (result.status === 'not-found') {
+      return '验证结果: 未发现可执行的验证命令';
+    }
+
+    const steps = result.steps ?? result.scripts.map(command => ({ command, status: 'passed' }));
+    const lines = ['验证结果:'];
+    for (const step of steps) {
+      if (step.status === 'passed') {
+        lines.push(`- 通过: ${step.command}`);
+        continue;
+      }
+      if (step.status === 'skipped') {
+        lines.push(`- 跳过: ${step.command}${step.reason ? `（${step.reason}）` : ''}`);
+      }
+    }
+    return lines.join('\n');
+  }
+
   /** 将 git 提交结果映射为面向用户的真实提示语 */
   private formatCommitMessage(result: CommitResult, stage: 'task' | 'finish'): string {
     if (result.status === 'committed') {
