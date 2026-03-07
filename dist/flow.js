@@ -205,13 +205,18 @@ var import_node_child_process2 = require("child_process");
 var import_node_fs2 = require("fs");
 var import_node_path2 = require("path");
 function loadConfig(cwd) {
-  try {
-    const raw = (0, import_node_fs2.readFileSync)((0, import_node_path2.join)(cwd, ".workflow", "config.json"), "utf-8");
-    const cfg = JSON.parse(raw);
-    return cfg?.verify ?? {};
-  } catch {
-    return {};
+  for (const configPath of [
+    (0, import_node_path2.join)(cwd, ".flowpilot", "config.json"),
+    (0, import_node_path2.join)(cwd, ".workflow", "config.json")
+  ]) {
+    try {
+      const raw = (0, import_node_fs2.readFileSync)(configPath, "utf-8");
+      const cfg = JSON.parse(raw);
+      return cfg?.verify ?? {};
+    } catch {
+    }
   }
+  return {};
 }
 function runVerify(cwd) {
   const config = loadConfig(cwd);
@@ -402,13 +407,65 @@ echo '\u6458\u8981 [REMEMBER] \u5173\u952E\u53D1\u73B0 [DECISION] \u6280\u672F\u
 <!-- flowpilot:end -->`;
 
 // src/infrastructure/fs-repository.ts
-async function loadProtocolTemplate(basePath2) {
-  try {
-    const config = JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(basePath2, ".workflow", "config.json"), "utf-8"));
-    if (config.protocolTemplate) {
-      return await (0, import_promises.readFile)((0, import_path.join)(basePath2, config.protocolTemplate), "utf-8");
+var PERSISTENT_DIR = ".flowpilot";
+var LEGACY_RUNTIME_DIR = ".workflow";
+var CONFIG_FILE = "config.json";
+var VALID_WORKFLOW_STATUS = /* @__PURE__ */ new Set(["idle", "running", "finishing", "completed", "aborted"]);
+var VALID_TASK_STATUS = /* @__PURE__ */ new Set(["pending", "active", "done", "skipped", "failed"]);
+function parseProgressMarkdown(raw) {
+  const lines = raw.split("\n");
+  const name = (lines[0] ?? "").replace(/^#\s*/, "").trim();
+  let status = "idle";
+  let current = null;
+  let startTime;
+  const tasks = [];
+  for (const line of lines) {
+    if (line.startsWith("\u72B6\u6001: ")) {
+      const parsedStatus = line.slice(4).trim();
+      status = VALID_WORKFLOW_STATUS.has(parsedStatus) ? parsedStatus : "idle";
     }
+    if (line.startsWith("\u5F53\u524D: ")) current = line.slice(4).trim();
+    if (current === "\u65E0") current = null;
+    if (line.startsWith("\u5F00\u59CB: ")) startTime = line.slice(4).trim();
+    const matchedTask = line.match(/^\|\s*(\d{3,})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
+    if (matchedTask) {
+      const depsRaw = matchedTask[4].trim();
+      tasks.push({
+        id: matchedTask[1],
+        title: matchedTask[2],
+        type: matchedTask[3],
+        deps: depsRaw === "-" ? [] : depsRaw.split(",").map((dep) => dep.trim()),
+        status: VALID_TASK_STATUS.has(matchedTask[5]) ? matchedTask[5] : "pending",
+        retries: parseInt(matchedTask[6], 10),
+        summary: matchedTask[7] === "-" ? "" : matchedTask[7],
+        description: matchedTask[8] === "-" ? "" : matchedTask[8]
+      });
+    }
+  }
+  return { name, status, current, tasks, ...startTime ? { startTime } : {} };
+}
+async function readConfigFile(path) {
+  try {
+    const parsed = JSON.parse(await (0, import_promises.readFile)(path, "utf-8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed;
   } catch {
+    return null;
+  }
+}
+async function readPersistedConfig(basePath2) {
+  const currentConfig = await readConfigFile((0, import_path.join)(basePath2, PERSISTENT_DIR, CONFIG_FILE));
+  if (currentConfig) return currentConfig;
+  return readConfigFile((0, import_path.join)(basePath2, LEGACY_RUNTIME_DIR, CONFIG_FILE));
+}
+async function loadProtocolTemplate(basePath2) {
+  const config = await readPersistedConfig(basePath2);
+  const protocolTemplate = config?.protocolTemplate;
+  if (typeof protocolTemplate === "string" && protocolTemplate.length > 0) {
+    try {
+      return await (0, import_promises.readFile)((0, import_path.join)(basePath2, protocolTemplate), "utf-8");
+    } catch {
+    }
   }
   return PROTOCOL_TEMPLATE;
 }
@@ -417,13 +474,15 @@ var FsWorkflowRepository = class {
   ctxDir;
   historyDir;
   evolutionDir;
+  configDir;
   base;
   constructor(basePath2) {
     this.base = basePath2;
-    this.root = (0, import_path.join)(basePath2, ".workflow");
+    this.root = (0, import_path.join)(basePath2, LEGACY_RUNTIME_DIR);
     this.ctxDir = (0, import_path.join)(this.root, "context");
-    this.historyDir = (0, import_path.join)(basePath2, ".flowpilot", "history");
-    this.evolutionDir = (0, import_path.join)(basePath2, ".flowpilot", "evolution");
+    this.configDir = (0, import_path.join)(basePath2, PERSISTENT_DIR);
+    this.historyDir = (0, import_path.join)(basePath2, PERSISTENT_DIR, "history");
+    this.evolutionDir = (0, import_path.join)(basePath2, PERSISTENT_DIR, "evolution");
   }
   projectRoot() {
     return this.base;
@@ -488,44 +547,10 @@ var FsWorkflowRepository = class {
   async loadProgress() {
     try {
       const raw = await (0, import_promises.readFile)((0, import_path.join)(this.root, "progress.md"), "utf-8");
-      return this.parseProgress(raw);
+      return parseProgressMarkdown(raw);
     } catch {
       return null;
     }
-  }
-  parseProgress(raw) {
-    const validWfStatus = /* @__PURE__ */ new Set(["idle", "running", "finishing", "completed", "aborted"]);
-    const validTaskStatus = /* @__PURE__ */ new Set(["pending", "active", "done", "skipped", "failed"]);
-    const lines = raw.split("\n");
-    const name = (lines[0] ?? "").replace(/^#\s*/, "").trim();
-    let status = "idle";
-    let current = null;
-    let startTime;
-    const tasks = [];
-    for (const line of lines) {
-      if (line.startsWith("\u72B6\u6001: ")) {
-        const s = line.slice(4).trim();
-        status = validWfStatus.has(s) ? s : "idle";
-      }
-      if (line.startsWith("\u5F53\u524D: ")) current = line.slice(4).trim();
-      if (current === "\u65E0") current = null;
-      if (line.startsWith("\u5F00\u59CB: ")) startTime = line.slice(4).trim();
-      const m = line.match(/^\|\s*(\d{3,})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
-      if (m) {
-        const depsRaw = m[4].trim();
-        tasks.push({
-          id: m[1],
-          title: m[2],
-          type: m[3],
-          deps: depsRaw === "-" ? [] : depsRaw.split(",").map((d) => d.trim()),
-          status: validTaskStatus.has(m[5]) ? m[5] : "pending",
-          retries: parseInt(m[6], 10),
-          summary: m[7] === "-" ? "" : m[7],
-          description: m[8] === "-" ? "" : m[8]
-        });
-      }
-    }
-    return { name, status, current, tasks, ...startTime ? { startTime } : {} };
   }
   // --- context/ 任务详细产出 ---
   async clearContext() {
@@ -621,6 +646,25 @@ var FsWorkflowRepository = class {
     await (0, import_promises.writeFile)(path, JSON.stringify(nextSettings, null, 2) + "\n", "utf-8");
     return true;
   }
+  async ensureClaudeWorktreesIgnored() {
+    const path = (0, import_path.join)(this.base, ".gitignore");
+    const rule = ".claude/worktrees/";
+    try {
+      const content = await (0, import_promises.readFile)(path, "utf-8");
+      const hasRule = content.split(/\r?\n/).some((line) => line.trimEnd() === rule);
+      if (hasRule) return false;
+      const nextContent = content.length === 0 ? `${rule}
+` : `${content}${content.endsWith("\n") ? "" : "\n"}${rule}
+`;
+      await (0, import_promises.writeFile)(path, nextContent, "utf-8");
+      return true;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      await (0, import_promises.writeFile)(path, `${rule}
+`, "utf-8");
+      return true;
+    }
+  }
   listChangedFiles() {
     return listChangedFiles(this.base);
   }
@@ -655,17 +699,20 @@ var FsWorkflowRepository = class {
       return [];
     }
   }
-  // --- .workflow/config.json ---
+  // --- .flowpilot/config.json（兼容读取旧的 .workflow/config.json） ---
   async loadConfig() {
-    try {
-      return JSON.parse(await (0, import_promises.readFile)((0, import_path.join)(this.root, "config.json"), "utf-8"));
-    } catch {
-      return {};
-    }
+    const currentConfig = await readConfigFile((0, import_path.join)(this.configDir, CONFIG_FILE));
+    if (currentConfig) return currentConfig;
+    const legacyConfig = await readConfigFile((0, import_path.join)(this.root, CONFIG_FILE));
+    if (!legacyConfig) return {};
+    await this.saveConfig(legacyConfig);
+    return legacyConfig;
   }
   async saveConfig(config) {
-    await this.ensure(this.root);
-    await (0, import_promises.writeFile)((0, import_path.join)(this.root, "config.json"), JSON.stringify(config, null, 2) + "\n", "utf-8");
+    await this.ensure(this.configDir);
+    const path = (0, import_path.join)(this.configDir, CONFIG_FILE);
+    await (0, import_promises.writeFile)(path + ".tmp", JSON.stringify(config, null, 2) + "\n", "utf-8");
+    await (0, import_promises.rename)(path + ".tmp", path);
   }
   /** 清理注入的 CLAUDE.md 协议块；运行期不回写 .claude/* */
   async cleanupInjections() {
@@ -1001,12 +1048,21 @@ var log = {
 };
 
 // src/infrastructure/hooks.ts
+async function loadHooksConfig(basePath2) {
+  for (const configPath of [
+    (0, import_path3.join)(basePath2, ".flowpilot", "config.json"),
+    (0, import_path3.join)(basePath2, ".workflow", "config.json")
+  ]) {
+    try {
+      return JSON.parse(await (0, import_promises2.readFile)(configPath, "utf-8"));
+    } catch {
+    }
+  }
+  return null;
+}
 async function runLifecycleHook(hookName, basePath2, env) {
-  const configPath = (0, import_path3.join)(basePath2, ".workflow", "config.json");
-  let config;
-  try {
-    config = JSON.parse(await (0, import_promises2.readFile)(configPath, "utf-8"));
-  } catch {
+  const config = await loadHooksConfig(basePath2);
+  if (!config) {
     return;
   }
   const cmd = config.hooks?.[hookName];
@@ -1235,6 +1291,9 @@ async function extractAll(text, source, existingMemories) {
 // src/infrastructure/history.ts
 var import_promises3 = require("fs/promises");
 var import_path4 = require("path");
+var PERSISTENT_CONFIG_PATH = [".flowpilot", "config.json"];
+var LEGACY_SNAPSHOT_CONFIG_KEY = "config.json";
+var SNAPSHOT_CONFIG_KEY = ".flowpilot/config.json";
 function collectStats(data) {
   const tasksByType = {};
   const failsByType = {};
@@ -1470,6 +1529,12 @@ async function safeRead(p, fallback) {
     return fallback;
   }
 }
+function resolvePersistentConfigPath(basePath2) {
+  return (0, import_path4.join)(basePath2, ...PERSISTENT_CONFIG_PATH);
+}
+function readSnapshotConfig(snapshot) {
+  return snapshot.files[SNAPSHOT_CONFIG_KEY] ?? snapshot.files[LEGACY_SNAPSHOT_CONFIG_KEY] ?? null;
+}
 var KNOWN_PARAMS = ["maxRetries", "timeout", "parallelLimit", "verifyTimeout"];
 function parseConfigAction(action) {
   for (const k of KNOWN_PARAMS) {
@@ -1510,6 +1575,13 @@ async function loadLatestSnapshot(basePath2) {
     return null;
   }
 }
+function findLatestExperimentSnapshotLog(logs) {
+  for (let index = logs.length - 1; index >= 0; index -= 1) {
+    const logEntry = logs[index];
+    if (logEntry?.snapshotFile) return logEntry;
+  }
+  return null;
+}
 async function appendExperimentsMd(basePath2, expLog, report) {
   const mdPath = (0, import_path4.join)(basePath2, ".flowpilot", "EXPERIMENTS.md");
   const existing = await safeRead(mdPath, "# Evolution Experiments\n");
@@ -1531,9 +1603,9 @@ async function appendExperimentsMd(basePath2, expLog, report) {
 async function experiment(report, basePath2) {
   const log2 = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), experiments: [], status: "completed" };
   if (!report.experiments.length) return log2;
-  const configPath = (0, import_path4.join)(basePath2, ".workflow", "config.json");
+  const configPath = resolvePersistentConfigPath(basePath2);
   const configSnapshot = await safeRead(configPath, "{}");
-  const snapshotFile = await saveSnapshot(basePath2, { "config.json": configSnapshot });
+  const snapshotFile = await saveSnapshot(basePath2, { [SNAPSHOT_CONFIG_KEY]: configSnapshot });
   log2.snapshotFile = snapshotFile;
   try {
     let configObj = JSON.parse(configSnapshot);
@@ -1583,7 +1655,7 @@ async function review(basePath2) {
   let rolledBack = false;
   let rollbackReason;
   const historyDir = (0, import_path4.join)(basePath2, ".flowpilot", "history");
-  const configPath = (0, import_path4.join)(basePath2, ".workflow", "config.json");
+  const configPath = resolvePersistentConfigPath(basePath2);
   const expPath = (0, import_path4.join)(basePath2, ".flowpilot", "evolution", "experiments.json");
   let history = [];
   try {
@@ -1647,17 +1719,19 @@ async function review(basePath2) {
   if (rolledBack) {
     try {
       const logs = JSON.parse(await (0, import_promises3.readFile)(expPath, "utf-8"));
-      const firstExp = logs.find((l) => l.snapshotFile);
+      const latestSnapshotLog = findLatestExperimentSnapshotLog(logs);
       let snapshot = null;
-      if (firstExp?.snapshotFile) {
+      if (latestSnapshotLog?.snapshotFile) {
         try {
-          snapshot = JSON.parse(await (0, import_promises3.readFile)(firstExp.snapshotFile, "utf-8"));
+          snapshot = JSON.parse(await (0, import_promises3.readFile)(latestSnapshotLog.snapshotFile, "utf-8"));
         } catch {
         }
       }
       if (!snapshot) snapshot = await loadLatestSnapshot(basePath2);
-      if (snapshot) {
-        if (snapshot.files["config.json"]) await (0, import_promises3.writeFile)(configPath, snapshot.files["config.json"], "utf-8");
+      const snapshotConfig = snapshot ? readSnapshotConfig(snapshot) : null;
+      if (snapshotConfig !== null) {
+        await (0, import_promises3.mkdir)((0, import_path4.dirname)(configPath), { recursive: true });
+        await (0, import_promises3.writeFile)(configPath, snapshotConfig, "utf-8");
       }
       if (logs.length) {
         logs[logs.length - 1].status = "skipped";
@@ -2600,15 +2674,15 @@ async function runHeartbeat(basePath2, config) {
   const warnings = [];
   const actions = [];
   try {
-    const raw = await (0, import_promises7.readFile)((0, import_path8.join)(basePath2, ".workflow", "progress.json"), "utf-8");
-    const data = JSON.parse(raw);
+    const raw = await (0, import_promises7.readFile)((0, import_path8.join)(basePath2, ".workflow", "progress.md"), "utf-8");
+    const data = parseProgressMarkdown(raw);
     if (data.status === "running") {
-      const active = data.tasks.filter((t) => t.status === "active");
+      const active = data.tasks.filter((task) => task.status === "active");
       if (active.length) {
         const window = await loadWindow(basePath2);
         const lastTs = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
         if (lastTs && Date.now() - lastTs > TASK_TIMEOUT_MS) {
-          warnings.push(`[TIMEOUT] \u4EFB\u52A1 ${active.map((t) => t.id).join(",")} \u8D85\u8FC730\u5206\u949F\u65E0checkpoint`);
+          warnings.push(`[TIMEOUT] \u4EFB\u52A1 ${active.map((task) => task.id).join(",")} \u8D85\u8FC730\u5206\u949F\u65E0checkpoint`);
         }
       }
     }
@@ -2840,6 +2914,7 @@ ${def.description}
 `);
     await this.repo.ensureClaudeMd();
     await this.repo.ensureHooks();
+    await this.repo.ensureClaudeWorktreesIgnored();
     await this.applyHistoryInsights();
     await decayMemory(this.repo.projectRoot());
     const memories = await loadMemory(this.repo.projectRoot());
@@ -3115,6 +3190,7 @@ ${detail}
     const existing = await this.repo.loadProgress();
     const wrote = await this.repo.ensureClaudeMd();
     await this.repo.ensureHooks();
+    await this.repo.ensureClaudeWorktreesIgnored();
     const lines = [];
     if (existing && (existing.status === "running" || existing.status === "finishing")) {
       const done = existing.tasks.filter((t) => t.status === "done").length;
@@ -3167,23 +3243,28 @@ ${detail}
     await runLifecycleHook("onWorkflowFinish", this.repo.projectRoot(), { WORKFLOW_NAME: data.name });
     const wfStats = collectStats(data);
     await this.repo.saveHistory(wfStats);
+    const configBeforeEvolution = await this.repo.loadConfig();
     const reflectReport = await reflect(wfStats, this.repo.projectRoot());
-    if (reflectReport.experiments.length) {
+    const experimentRan = reflectReport.experiments.length > 0;
+    if (experimentRan) {
       await experiment(reflectReport, this.repo.projectRoot());
     }
-    const configNow = await this.repo.loadConfig();
-    const evolutions = await this.repo.loadEvolutions();
-    const lastEvo = evolutions[evolutions.length - 1];
-    const configBefore = lastEvo?.configAfter ?? {};
-    if (JSON.stringify(configBefore) !== JSON.stringify(configNow)) {
+    const configAfterEvolution = await this.repo.loadConfig();
+    const changedConfigKeys = this.diffConfigKeys(configBeforeEvolution, configAfterEvolution);
+    if (changedConfigKeys.length > 0) {
       await this.repo.saveEvolution({
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         workflowName: data.name,
-        configBefore,
-        configAfter: configNow,
+        configBefore: configBeforeEvolution,
+        configAfter: configAfterEvolution,
         suggestions: []
       });
     }
+    const evolutionSummary = this.formatEvolutionSummary({
+      reflectRan: true,
+      experimentRan,
+      changedConfigKeys
+    });
     await this.repo.cleanupInjections();
     this.repo.cleanTags();
     const changedFiles = this.repo.listChangedFiles();
@@ -3195,9 +3276,26 @@ ${titles}`, changedFiles);
     }
     const scripts = result.scripts.length ? result.scripts.join(", ") : "\u65E0\u9A8C\u8BC1\u811A\u672C";
     return `\u9A8C\u8BC1\u901A\u8FC7: ${scripts}
-${stats}${this.formatCommitMessage(commitResult, "finish")}
+${stats}
+${evolutionSummary}${this.formatCommitMessage(commitResult, "finish")}
 \u5DE5\u4F5C\u6D41\u56DE\u5230\u5F85\u547D\u72B6\u6001
 \u7B49\u5F85\u4E0B\u4E00\u4E2A\u9700\u6C42...`;
+  }
+  /** 计算 config 变更的键列表（浅比较，键名排序） */
+  diffConfigKeys(before, after) {
+    const keys = /* @__PURE__ */ new Set([...Object.keys(before), ...Object.keys(after)]);
+    return [...keys].filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key])).sort();
+  }
+  /** 格式化 finish 阶段的进化摘要 */
+  formatEvolutionSummary(summary) {
+    const changedKeysText = summary.changedConfigKeys.length ? summary.changedConfigKeys.join(", ") : "\u65E0";
+    return [
+      "\u8FDB\u5316\u6458\u8981:",
+      `- reflect: ${summary.reflectRan ? "\u5DF2\u6267\u884C" : "\u672A\u6267\u884C"}`,
+      `- experiment: ${summary.experimentRan ? "\u5DF2\u6267\u884C" : "\u672A\u6267\u884C"}`,
+      `- config\u53D8\u66F4: ${summary.changedConfigKeys.length > 0 ? "\u662F" : "\u5426"}`,
+      `- \u53D8\u66F4\u952E: ${changedKeysText}`
+    ].join("\n");
   }
   /** 将 git 提交结果映射为面向用户的真实提示语 */
   formatCommitMessage(result, stage) {

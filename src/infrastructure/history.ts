@@ -369,6 +369,14 @@ async function loadLatestSnapshot(basePath: string): Promise<FilesSnapshot | nul
   } catch { return null; }
 }
 
+function findLatestExperimentSnapshotLog(logs: ExperimentLog[]): ExperimentLog | null {
+  for (let index = logs.length - 1; index >= 0; index -= 1) {
+    const logEntry = logs[index];
+    if (logEntry?.snapshotFile) return logEntry;
+  }
+  return null;
+}
+
 /** 追加 EXPERIMENTS.md 人类可读日志 */
 async function appendExperimentsMd(basePath: string, expLog: ExperimentLog, report: ReflectReport): Promise<void> {
   const mdPath = join(basePath, '.flowpilot', 'EXPERIMENTS.md');
@@ -539,10 +547,10 @@ export async function review(basePath: string): Promise<ReviewResult> {
   if (rolledBack) {
     try {
       const logs: ExperimentLog[] = JSON.parse(await readFile(expPath, 'utf-8'));
-      const firstExp = logs.find(l => l.snapshotFile);
+      const latestSnapshotLog = findLatestExperimentSnapshotLog(logs);
       let snapshot: FilesSnapshot | null = null;
-      if (firstExp?.snapshotFile) {
-        try { snapshot = JSON.parse(await readFile(firstExp.snapshotFile, 'utf-8')); } catch { /* fallback below */ }
+      if (latestSnapshotLog?.snapshotFile) {
+        try { snapshot = JSON.parse(await readFile(latestSnapshotLog.snapshotFile, 'utf-8')); } catch { /* fallback below */ }
       }
       if (!snapshot) snapshot = await loadLatestSnapshot(basePath);
       const snapshotConfig = snapshot ? readSnapshotConfig(snapshot) : null;

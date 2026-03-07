@@ -244,6 +244,43 @@ describe('review', () => {
     expect(cfg.maxRetries).toBe(3);
   });
 
+  it('review rollback restores the latest experiment snapshot when multiple snapshots exist', async () => {
+    const histDir = join(base, '.flowpilot', 'history');
+    mkdirSync(histDir, { recursive: true });
+    const good: WorkflowStats = makeStats({ totalTasks: 10, failCount: 0, skipCount: 0, retryTotal: 0 });
+    const bad: WorkflowStats = makeStats({ totalTasks: 10, failCount: 4, skipCount: 0, retryTotal: 0 });
+    writeFileSync(join(histDir, '001.json'), JSON.stringify(good));
+    writeFileSync(join(histDir, '002.json'), JSON.stringify(bad));
+
+    const evoDir = join(base, '.flowpilot', 'evolution');
+    mkdirSync(evoDir, { recursive: true });
+    const configPath = join(base, '.flowpilot', 'config.json');
+    mkdirSync(join(base, '.flowpilot'), { recursive: true });
+    writeFileSync(configPath, '{"maxRetries":9}');
+
+    const olderSnapshotPath = join(evoDir, 'snapshot-2024-01-01T00-00-00-000Z.json');
+    writeFileSync(olderSnapshotPath, JSON.stringify({
+      timestamp: '',
+      files: { '.flowpilot/config.json': '{"maxRetries":2}' },
+    }));
+
+    const newerSnapshotPath = join(evoDir, 'snapshot-2024-01-02T00-00-00-000Z.json');
+    writeFileSync(newerSnapshotPath, JSON.stringify({
+      timestamp: '',
+      files: { '.flowpilot/config.json': '{"maxRetries":4}' },
+    }));
+
+    writeFileSync(join(evoDir, 'experiments.json'), JSON.stringify([
+      { timestamp: '2024-01-01T00:00:00.000Z', snapshotFile: olderSnapshotPath, experiments: [] },
+      { timestamp: '2024-01-02T00:00:00.000Z', snapshotFile: newerSnapshotPath, experiments: [] },
+    ]));
+
+    const result = await review(base);
+    expect(result.rolledBack).toBe(true);
+    const cfg = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(cfg.maxRetries).toBe(4);
+  });
+
   it('invalid config.json fails check', async () => {
     mkdirSync(join(base, '.flowpilot'), { recursive: true });
     writeFileSync(join(base, '.flowpilot', 'config.json'), '{broken json!!!');
