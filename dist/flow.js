@@ -3960,12 +3960,13 @@ ${detail}
     const comparison = compareDirtyFilesAgainstBaseline(currentDirtyFiles, baseline?.files ?? []);
     const explainableOwnedSet = /* @__PURE__ */ new Set([...setupOwnedFiles, ...checkpointOwnedFiles]);
     if (!baseline) {
+      const details = comparison.currentFiles.length > 0 ? [
+        `\u672A\u627E\u5230 dirty baseline\uFF1B\u4FDD\u5B88\u8DF3\u8FC7\u6700\u7EC8 auto-commit\uFF0C\u5E76\u4FDD\u7559\u5F53\u524D ${comparison.currentFiles.length} \u4E2A\u810F\u4E1A\u52A1\u6587\u4EF6:`,
+        ...comparison.currentFiles.map((file) => `- ${file}`)
+      ] : ["\u672A\u627E\u5230 dirty baseline\uFF1B\u5F53\u524D\u5DE5\u4F5C\u533A\u65E0\u810F\u4E1A\u52A1\u6587\u4EF6\uFF0C\u4FDD\u5B88\u8DF3\u8FC7\u6700\u7EC8 auto-commit\u3002"];
       return {
-        ok: false,
-        message: [
-          "\u62D2\u7EDD\u6700\u7EC8\u63D0\u4EA4\uFF1A\u672A\u627E\u5230 dirty baseline\uFF0C\u65E0\u6CD5\u8BC1\u660E\u5DE5\u4F5C\u6D41\u8FB9\u754C\u5B89\u5168\u3002",
-          ...comparison.currentFiles.map((file) => `- ${file}`)
-        ].join("\n")
+        ok: "degraded",
+        message: details.join("\n")
       };
     }
     const unexplainedDirtyFiles = comparison.newDirtyFiles.filter((file) => !explainableOwnedSet.has(file));
@@ -4091,10 +4092,20 @@ ${verifySummary}
     const failed = data.tasks.filter((t) => t.status === "failed");
     const stats = [`${done.length} done`, skipped2.length ? `${skipped2.length} skipped` : "", failed.length ? `${failed.length} failed` : ""].filter(Boolean).join(", ");
     const finishBoundary = await this.resolveFinishCommitFiles();
-    if (!finishBoundary.ok) {
+    if (finishBoundary.ok === false) {
       return `${verifySummary}
 ${stats}
 ${finishBoundary.message}`;
+    }
+    if (finishBoundary.ok === "degraded") {
+      this.repo.cleanTags();
+      await this.repo.clearAll();
+      return `${verifySummary}
+${stats}
+${finishBoundary.message}
+\u672A\u63D0\u4EA4\u6700\u7EC8commit\uFF1A\u672A\u627E\u5230 dirty baseline\uFF0C\u4FDD\u5B88\u8DF3\u8FC7 auto-commit
+\u5DE5\u4F5C\u6D41\u56DE\u5230\u5F85\u547D\u72B6\u6001
+\u7B49\u5F85\u4E0B\u4E00\u4E2A\u9700\u6C42...`;
     }
     const titles = done.map((t) => `- ${t.id}: ${t.title}`).join("\n");
     await runLifecycleHook("onWorkflowFinish", this.repo.projectRoot(), { WORKFLOW_NAME: data.name });

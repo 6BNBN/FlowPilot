@@ -438,7 +438,11 @@ export class WorkflowService {
   }
 
   /** 计算 finish 的 workflow-owned 提交边界，必要时拒绝最终提交 */
-  private async resolveFinishCommitFiles(): Promise<{ ok: true; files: string[] } | { ok: false; message: string }> {
+  private async resolveFinishCommitFiles(): Promise<
+    | { ok: true; files: string[] }
+    | { ok: false; message: string }
+    | { ok: 'degraded'; message: string }
+  > {
     const baseline = await loadDirtyBaseline(this.repo.projectRoot());
     const checkpointOwnedFiles = collectOwnedFiles(await loadOwnedFiles(this.repo.projectRoot()));
     const checkpointOwnedSet = new Set(checkpointOwnedFiles);
@@ -473,12 +477,15 @@ export class WorkflowService {
     const explainableOwnedSet = new Set([...setupOwnedFiles, ...checkpointOwnedFiles]);
 
     if (!baseline) {
-      return {
-        ok: false,
-        message: [
-          '拒绝最终提交：未找到 dirty baseline，无法证明工作流边界安全。',
+      const details = comparison.currentFiles.length > 0
+        ? [
+          `未找到 dirty baseline；保守跳过最终 auto-commit，并保留当前 ${comparison.currentFiles.length} 个脏业务文件:`,
           ...comparison.currentFiles.map(file => `- ${file}`),
-        ].join('\n'),
+        ]
+        : ['未找到 dirty baseline；当前工作区无脏业务文件，保守跳过最终 auto-commit。'];
+      return {
+        ok: 'degraded',
+        message: details.join('\n'),
       };
     }
 
@@ -615,8 +622,14 @@ export class WorkflowService {
     const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : '', failed.length ? `${failed.length} failed` : ''].filter(Boolean).join(', ');
 
     const finishBoundary = await this.resolveFinishCommitFiles();
-    if (!finishBoundary.ok) {
+    if (finishBoundary.ok === false) {
       return `${verifySummary}\n${stats}\n${finishBoundary.message}`;
+    }
+
+    if (finishBoundary.ok === 'degraded') {
+      this.repo.cleanTags();
+      await this.repo.clearAll();
+      return `${verifySummary}\n${stats}\n${finishBoundary.message}\n未提交最终commit：未找到 dirty baseline，保守跳过 auto-commit\n工作流回到待命状态\n等待下一个需求...`;
     }
 
     const titles = done.map(t => `- ${t.id}: ${t.title}`).join('\n');

@@ -727,6 +727,75 @@ describe('WorkflowService 集成测试', () => {
     expect((await svc.status())?.status).toBe('finishing');
   });
 
+  it('review和缺少baseline时的finish失败不会删除baseline，工作流仍可继续收尾', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
+    changedFilesSpy.mockReturnValueOnce([]);
+    changedFilesSpy.mockReturnValueOnce(['src/unowned.ts']);
+    vi.spyOn(repo, 'verify').mockReturnValue({ passed: true, scripts: ['npm test'] });
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+    await completeWorkflow(svc);
+
+    const baselinePath = join(dir, '.workflow', 'dirty-baseline.json');
+    const baselineBeforeReview = await readFile(baselinePath, 'utf-8');
+    await svc.review();
+    expect(await readFile(baselinePath, 'utf-8')).toBe(baselineBeforeReview);
+
+    const msg = await svc.finish();
+
+    expect(msg).toContain('拒绝最终提交');
+    expect(await readFile(baselinePath, 'utf-8')).toBe(baselineBeforeReview);
+    expect((await svc.status())?.status).toBe('finishing');
+  });
+
+  it('finish在 legacy 或外部删除 baseline 时不再死锁，而是显式降级完成', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
+    changedFilesSpy.mockReturnValueOnce([]);
+    changedFilesSpy.mockReturnValueOnce(['src/legacy.ts']);
+    const commitSpy = vi.spyOn(repo, 'commit');
+    const clearAllSpy = vi.spyOn(repo, 'clearAll');
+    vi.spyOn(repo, 'verify').mockReturnValue({ passed: true, scripts: ['npm test'] });
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+    await completeWorkflow(svc);
+    await rm(join(dir, '.workflow', 'dirty-baseline.json'), { force: true });
+    await svc.review();
+
+    const msg = await svc.finish();
+
+    expect(msg).toContain('未找到 dirty baseline');
+    expect(msg).toContain('未提交最终commit');
+    expect(msg).toContain('src/legacy.ts');
+    expect(msg).toContain('工作流回到待命状态');
+    expect(commitSpy).not.toHaveBeenCalledWith('finish', expect.any(String), expect.any(String), expect.anything());
+    expect(clearAllSpy).toHaveBeenCalledTimes(1);
+    expect(await svc.status()).toBeNull();
+  });
+
+  it('finish在 baseline 缺失但工作区已清理时也会显式降级完成且不自动提交', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
+    changedFilesSpy.mockReturnValueOnce([]);
+    changedFilesSpy.mockReturnValueOnce([]);
+    const commitSpy = vi.spyOn(repo, 'commit');
+    const clearAllSpy = vi.spyOn(repo, 'clearAll');
+    vi.spyOn(repo, 'verify').mockReturnValue({ passed: true, scripts: ['npm test'] });
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+    await completeWorkflow(svc);
+    await rm(join(dir, '.workflow', 'dirty-baseline.json'), { force: true });
+    await svc.review();
+
+    const msg = await svc.finish();
+
+    expect(msg).toContain('未找到 dirty baseline');
+    expect(msg).toContain('当前工作区无脏业务文件');
+    expect(msg).toContain('未提交最终commit');
+    expect(msg).toContain('工作流回到待命状态');
+    expect(commitSpy).not.toHaveBeenCalledWith('finish', expect.any(String), expect.any(String), expect.anything());
+    expect(clearAllSpy).toHaveBeenCalledTimes(1);
+    expect(await svc.status()).toBeNull();
+  });
+
   it('finish在未提供文件时说明未提交最终commit但仍正常收尾', async () => {
     const repo = new FsWorkflowRepository(dir);
     mockChangedFiles(repo, []);
