@@ -4,7 +4,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 export type VerifyStepStatus = 'passed' | 'skipped' | 'failed';
@@ -79,7 +79,16 @@ function detectNoTestsReason(output: string): string | null {
 
 function normalizeCommands(cwd: string, commands: string[]): string[] {
   const testScript = loadPackageScripts(cwd).test;
-  return commands.map(command => shouldForceVitestRun(command, testScript) ? 'npm run test -- --run' : command);
+  return commands.map(command => {
+    if (shouldForceVitestRun(command, testScript)) return 'npm run test -- --run';
+
+    const nested = matchNestedNpmTestCommand(command);
+    if (!nested) return command;
+    const nestedTestScript = loadPackageScripts(join(cwd, nested.dir)).test;
+    return shouldForceVitestRun('npm run test', nestedTestScript)
+      ? `cd ${nested.dir} && npm run test -- --run`
+      : command;
+  });
 }
 
 function loadPackageScripts(cwd: string): Record<string, string> {
@@ -102,16 +111,58 @@ function shouldForceVitestRun(command: string, testScript?: string): boolean {
   return !/\bvitest\b.*(?:\s|^)(?:run\b|--run\b)/.test(normalizedScript);
 }
 
+function matchNestedNpmTestCommand(command: string): { dir: string } | null {
+  const match = /^cd\s+(.+?)\s+&&\s+npm run test$/.exec(command.trim());
+  return match ? { dir: match[1] } : null;
+}
+
+interface DetectedCommandSet {
+  cwd: string;
+  commands: string[];
+}
+
+function detectNodeCommands(projectDir: string): string[] {
+  try {
+    const s = JSON.parse(readFileSync(join(projectDir, 'package.json'), 'utf-8')).scripts || {};
+    return ['build', 'test', 'lint'].filter(k => k in s).map(k => `npm run ${k}`);
+  } catch {
+    return [];
+  }
+}
+
+function detectNestedProjectCommands(cwd: string): string[] {
+  const children = readdirSync(cwd, { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules');
+
+  const candidates: DetectedCommandSet[] = [];
+  for (const child of children) {
+    const childDir = join(cwd, child.name);
+    if (existsSync(join(childDir, 'package.json'))) {
+      const commands = detectNodeCommands(childDir);
+      if (commands.length) candidates.push({ cwd: child.name, commands });
+      continue;
+    }
+    if (existsSync(join(childDir, 'Cargo.toml'))) {
+      candidates.push({ cwd: child.name, commands: ['cargo build', 'cargo test'] });
+      continue;
+    }
+    if (existsSync(join(childDir, 'go.mod'))) {
+      candidates.push({ cwd: child.name, commands: ['go build ./...', 'go test ./...'] });
+    }
+  }
+
+  if (candidates.length !== 1) return [];
+  return candidates[0].commands.map(command => `cd ${candidates[0].cwd} && ${command}`);
+}
+
 /** 按项目标记文件检测验证命令 */
 function detectCommands(cwd: string): string[] {
   const has = (f: string) => existsSync(join(cwd, f));
 
   // Node.js
   if (has('package.json')) {
-    try {
-      const s = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf-8')).scripts || {};
-      return ['build', 'test', 'lint'].filter(k => k in s).map(k => `npm run ${k}`);
-    } catch { /* fall through */ }
+    const commands = detectNodeCommands(cwd);
+    if (commands.length) return commands;
   }
   // Rust
   if (has('Cargo.toml')) return ['cargo build', 'cargo test'];
@@ -147,6 +198,9 @@ function detectCommands(cwd: string): string[] {
       if (targets.length) return targets;
     } catch { /* ignore */ }
   }
+
+  const nested = detectNestedProjectCommands(cwd);
+  if (nested.length) return nested;
 
   return [];
 }

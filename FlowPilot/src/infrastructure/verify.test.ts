@@ -51,6 +51,39 @@ describe('runVerify', () => {
     }
   });
 
+  it('在工作流根目录缺少标记文件时自动检测单个子项目的验证命令', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'flow-verify-nested-'));
+
+    try {
+      const nestedDir = join(dir, 'FlowPilot');
+      await mkdir(nestedDir, { recursive: true });
+      await writeFile(
+        join(nestedDir, 'package.json'),
+        JSON.stringify({
+          scripts: {
+            test: 'vitest',
+          },
+        }, null, 2),
+        'utf-8',
+      );
+      await symlink(join(process.cwd(), 'node_modules'), join(nestedDir, 'node_modules'), 'dir');
+
+      const result = runVerify(dir) as any;
+
+      expect(result.passed).toBe(true);
+      expect(result.status).toBe('passed');
+      expect(result.steps).toEqual([
+        {
+          command: 'cd FlowPilot && npm run test -- --run',
+          status: 'skipped',
+          reason: '未找到测试文件',
+        },
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('将 vitest 测试脚本转换为非 watch 验证命令', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'flow-verify-'));
 
