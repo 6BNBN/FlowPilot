@@ -4,21 +4,56 @@
 
 ## 这是什么
 
-一个 99KB 的单文件工具，让 Claude Code 变成全自动开发机器。
+一个单文件工具，让 Claude Code / Codex / Cursor / snow-cli 等客户端进入全自动开发模式。
 复制一个文件到项目里，一句开发需求，它就会自动拆解需求、分配任务、写代码、提交 git、跑测试，直到全部完成。
+
+## 快速开始
+
+```bash
+# 1. 复制 flow.js 到你的项目
+cp /path/to/workflow-engine/dist/flow.js  你的项目目录/
+
+# 2. 初始化（会显示客户端选项）
+cd 你的项目目录
+node flow.js init
+
+# 3. 打开客户端，直接描述需求
+claude --dangerously-skip-permissions
+```
+
+初始化时会直接显示客户端选项：
+- `Claude Code`：生成 `AGENTS.md` + `.claude/settings.json`
+- `Codex`：生成 `AGENTS.md`，并附加 Codex 平台增强规则（并行调度 + 子任务契约）
+- `Cursor` / `Other`：生成通用版 `AGENTS.md`
+- `snow-cli`：生成 `AGENTS.md` + `ROLE.md`
+
+中断恢复：
+
+```bash
+claude --dangerously-skip-permissions --continue
+```
+
+下面的「前置条件」「详细初始化步骤」会解释每一步为什么这样做。
 
 ## 前置条件
 
 - Node.js >= 20
-- Claude Code (CC) 已安装
-- **必须开启 Agent Teams 功能**：
-  - 在 `~/.claude/settings.json` 中添加 `"env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }`
-  - 这是核心依赖，未开启则无法派发子Agent执行任务
-- **建议先安装插件**（未安装则子Agent功能降级）：
-  在 CC 中执行 `/plugin` 打开插件商店，选择安装：
-  `superpowers`、`frontend-design`、`feature-dev`、`code-review`、`context7`
+- 已安装一个受支持的客户端：`Claude Code`、`Codex`、`Cursor`、`snow-cli` 或其他可运行 instruction file 的客户端
+- 按客户端开启并行 / 自动运行：
+  - `Claude Code`：在 `~/.claude/settings.json` 中添加 `"env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }`
+  - `Codex`：在 `~/.codex/config.toml` 中加入
+    ```toml
+    [features]
+    multi_agent = true
+    ```
+    建议全自动运行时使用：`codex --yolo`
+  - `Cursor`：在设置的 `Agents` 中开启 `Agents`，并将 `Auto-Run Mode` 调成 `Run Everything`
+  - `其他客户端`：请先自测多代理 / 自动运行能力
+- **建议先安装插件 / 技能**（未安装则功能降级）：
+  - Claude Code 可通过 `/plugin` 安装 `superpowers`、`frontend-design`、`feature-dev`、`code-review`、`context7`
+  - Codex / Cursor 可用文末的一键安装包
 
-## 快速开始
+## 详细初始化步骤
 
 ### 第一步：复制 flow.js 到你的项目
 
@@ -34,7 +69,13 @@ node flow.js init
 ```
 
 这会自动生成：
-- `CLAUDE.md` — 嵌入调度协议（`<!-- flowpilot:start/end -->` 标记包裹）
+- 会先显示客户端选项，并按选择生成：
+  - `AGENTS.md` — 新项目默认 instruction file（嵌入调度协议）
+  - `CLAUDE.md` — 仅兼容旧项目，已有时继续复用
+  - `ROLE.md` — 仅在选择 `snow-cli` 时额外生成，内容与 `AGENTS.md` 一致
+  - `.claude/settings.json` — 仅在选择 `Claude Code` 时生成
+- 生成的 instruction file 会将终端输出风格作为硬约束，并默认强化依赖分析、并行调度与危险操作确认；其中 `Codex` 额外补强子任务下发契约（代理名称 / 任务定义 / 执行动作 / 预期结果）
+- `Codex` 的增强规则还会显式要求按“任务分析 → 并行调度与子任务下发 → 结果汇总 → 递归迭代”推进复杂任务
 - `.workflow/` 目录 — 本地临时运行态
 - `.gitignore` 本地状态忽略规则（若缺失）— 默认忽略 `.workflow/`、`.flowpilot/`、`.claude/settings.json`、`.claude/worktrees/`
 
@@ -75,13 +116,21 @@ node flow.js init    # 接管项目
 ```
 # 新开一个CC窗口
 你：继续任务
-CC：恢复工作流: 博客系统 | 进度: 7/12 | 中断任务 008 已重置，将重新执行
+CC：恢复工作流: 博客系统 | 进度: 7/12 | 检测到中断任务 008 的待接管变更，已暂停继续调度
 ```
 
-如果工作区仍然有脏文件，`resume` 会继续补充真实边界信息，而不是笼统地说“已恢复”：
-- 启动前就存在、现在仍保留的 baseline 脏文件
-- 中断任务残留并被保守保留的新增脏业务文件
-- dirty baseline 缺失时的保守警告（会明确说无法证明这是干净重启）
+客户端建议：
+- `Claude Code`：优先使用 `claude --dangerously-skip-permissions --continue`
+- `Codex`：重新进入项目目录，运行 `codex --yolo` 后说「继续任务」
+- `Cursor`：重新打开项目，在原会话或新会话中说「继续任务」
+- `snow-cli` / 其他客户端：重新进入项目目录，恢复或新开会话后说「继续任务」
+
+如果工作区仍然有未归档变更，`resume` 会继续补充真实边界信息，而不是笼统地说“已恢复”：
+- 启动前就存在、现在仍保留的 baseline 未归档变更
+- 由显式 ownership 支撑、可接管的 task-owned 变更
+- 工作流期间新增但归属未明的变更（可能包含用户手动修改/删除；FlowPilot 不会自动恢复这些文件）
+- dirty baseline 缺失时的保守警告（会明确说无法证明这是干净重启，也无法区分用户手动操作）
+- 若存在待处理变更，工作流进入 `reconciling`，必须先 `adopt`，或在确认并处理列出的 task-owned 变更后 `restart`
 
 ## 命令参考
 
@@ -91,10 +140,12 @@ CC：恢复工作流: 博客系统 | 进度: 7/12 | 中断任务 008 已重置�
 | `node flow.js init --force` | 强制重新初始化（覆盖已有工作流） |
 | `node flow.js status` | 查看当前进度 |
 | `node flow.js next` | 获取下一个任务（含依赖上下文） |
-| `node flow.js next --batch` | 获取所有可并行任务 |
+| `node flow.js next --batch` | 获取所有依赖上可并行且适合批量派发的任务 |
 | `node flow.js checkpoint <id>` | 标记任务完成（stdin/--file/内联文本）[--files f1 f2 ...] |
+| `node flow.js adopt <id>` | 接管中断后待接管变更并补 checkpoint |
+| `node flow.js restart <id>` | 在处理完列出的本任务变更后允许任务从头重做；归属未明变更需人工确认 |
 | `node flow.js skip <id>` | 跳过某个任务 |
-| `node flow.js resume` | 中断恢复（重置active→pending） |
+| `node flow.js resume` | 中断恢复（必要时进入 reconciling） |
 | `node flow.js review` | 标记code-review已完成（finish前必须执行） |
 | `node flow.js finish` | 智能收尾（验证+汇报通过/跳过项+必要时拒绝最终提交，需先review） |
 | `node flow.js add <描述> [--type T]` | 追加新任务（参数顺序任意） |
@@ -132,7 +183,8 @@ CC：恢复工作流: 博客系统 | 进度: 7/12 | 中断任务 008 已重置�
 ```
 你的项目/
 ├── flow.js                    # 工具本体（你复制过来的）
-├── CLAUDE.md                  # CC 配置（嵌入调度协议）
+├── AGENTS.md                  # 新项目默认 instruction file
+├── ROLE.md                    # 仅 snow-cli 模式额外生成
 └── .workflow/
     ├── progress.md            # 任务状态表（核心记忆）
     ├── tasks.md               # 原始任务定义
@@ -148,11 +200,11 @@ CC：恢复工作流: 博客系统 | 进度: 7/12 | 中断任务 008 已重置�
 ```
 用户描述开发需求
     ↓
-CC 读 CLAUDE.md → 发现嵌入协议 → 进入调度模式
+客户端读取 instruction file（新项目默认 AGENTS.md，旧项目兼容 CLAUDE.md）→ 发现嵌入协议 → 进入调度模式
     ↓
 flow resume → 检查是否有未完成工作流
     ↓
-flow next --batch → 返回所有可并行任务 + 依赖上下文
+flow next --batch → 返回所有依赖上可并行任务 + 依赖上下文
     ↓
 CC 用 Task 工具并行派发子Agent（Agent Teams）
     ↓
@@ -189,7 +241,7 @@ flow finish → 自动跑 build/test/lint → 汇报完成/跳过/失败项 → 
 ```
 
 关键点：
-- 主Agent 用 `flow next --batch` 一次性获取所有可并行任务
+- 主Agent 优先用 `flow next --batch` 一次性获取所有依赖上可并行任务；若写入边界仍不清晰，可暂时用 `flow next` 串行推进
 - 在**同一条消息**中用多个 Task 工具调用并行派发
 - 每个子Agent**独立工作、独立checkpoint、独立git提交**
 - 主Agent上下文不会因为子Agent的产出而膨胀（子Agent自行记录）
@@ -273,16 +325,17 @@ flow finish → 自动跑 build/test/lint → 汇报完成/跳过/失败项 → 
   ↓
 检测到3个active任务 → 全部重置为pending
   ↓
-flow next --batch → 重新并行派发这3个任务
+flow next --batch → 重新并行派发这3个任务（前提是写边界清晰）
 ```
 
 `flow resume` 会把**所有** active 任务重置为 pending，不管有几个。这意味着并行中断后恢复时，那一批任务会被完整重做。已经 checkpoint 的任务不受影响。
 
 同时，resume 会如实说明 dirty worktree 的状态：
-- `当前工作区无残留脏业务文件，本次恢复是干净重启`
-- `工作流启动前已有 N 个脏文件仍然保留`
-- `已保留 N 个中断任务残留的脏业务文件`
-- `未找到 dirty baseline；无法可靠区分启动前脏文件与中断残留`
+- `当前工作区无待接管变更，本次恢复是干净重启`
+- `工作流启动前已有 N 个未归档变更仍然保留`
+- `已保留 N 个由显式 ownership 支撑的待接管变更`
+- `发现 N 个工作流期间新增但归属未明的变更（可能包含用户手动修改/删除，FlowPilot 不会自动恢复这些文件）`
+- `未找到 dirty baseline；无法可靠区分启动前变更、中断任务残留与用户手动修改/删除`
 
 这段提示是边界说明，不是报错；它的目的就是防止把脏工作区误说成“完全干净”。
 
@@ -386,7 +439,7 @@ FlowPilot 内置三阶段自我进化循环，灵感来自 [Memoh-v2](https://gi
 **Phase 2: Experiment（实验）** — `finish()` 末尾自动触发
 
 基于反思报告自动调整：
-- **config 参数**：`maxRetries`、`timeout`、`parallelLimit`、`verifyTimeout`
+- **config 参数**：`maxRetries`、`timeout`、`verifyTimeout`
 - **协议模板**：在 protocol.md 末尾追加经验规则
 
 每次修改前保存完整快照，支持回滚。
@@ -419,7 +472,6 @@ Experiment 阶段自动调整的参数会在下一轮工作流中生效：
 | 参数 | 说明 | 调整场景 |
 |------|------|---------|
 | `maxRetries` | 任务最大重试次数 | 重试热点多时增大，全部成功时减小 |
-| `parallelLimit` | 最大并行子Agent数 | 并行冲突多时减小 |
 | `hints` | 协议模板追加的经验规则 | 从失败模式中提炼的具体建议 |
 | `verifyTimeout` | 验证超时时间 | 验证超时时增大 |
 
@@ -511,7 +563,7 @@ CC 自动 compact 后，说"继续任务"即可恢复。所有状态都在文件
 **Q: `flow finish` 为什么会拒绝最终提交？**
 最常见原因有三类：
 1. 有新增脏文件没有被任何 checkpoint 的 `--files` 声明归属
-2. `CLAUDE.md`、`.claude/settings.json`、`.gitignore` 在 cleanup 后仍残留用户改动
+2. instruction file（`AGENTS.md` / 兼容旧 `CLAUDE.md`）、`.claude/settings.json`、`.gitignore` 在 cleanup 后仍残留用户改动
 3. 缺少 dirty baseline，无法证明工作流边界安全
 
 这时 FlowPilot 会停在 `finishing` 状态，并把可疑文件列出来，让你先处理，而不是替你误提交。
@@ -519,7 +571,7 @@ CC 自动 compact 后，说"继续任务"即可恢复。所有状态都在文件
 **Q: `.workflow` 目录要提交到 git 吗？**
 通常不需要，也不建议提交。`.workflow/` 是本地临时运行态，`flow finish` 收尾成功后会自动清除；默认 `.gitignore` 也会忽略它。
 
-**Q: `CLAUDE.md`、`.claude/settings.json`、`.gitignore` 收尾时会怎么处理？**
+**Q: `AGENTS.md` / `CLAUDE.md`、`.claude/settings.json`、`.gitignore` 收尾时会怎么处理？**
 它们遵循“谁创建/注入，谁负责 cleanup”的对称规则：
 - 如果是 FlowPilot 在 setup/init 阶段创建、且内容仍与注入内容完全一致，finish 会自动删除或精确回退
 - 如果这些文件原本就存在，finish 只会移除 FlowPilot 注入的那部分，保留你原来的内容
@@ -528,3 +580,62 @@ CC 自动 compact 后，说"继续任务"即可恢复。所有状态都在文件
 
 **Q: 任务很多时摘要会不会太长？**
 不会。超过 10 个已完成任务后，摘要会自动按类型压缩，只保留每组最近 3 个任务名。
+
+## 可选：兼容 Codex / Cursor 一键安装技能
+
+> 这是可选增强项。不安装也能正常使用 FlowPilot，只是 Skills / MCP 相关能力会降级。
+
+仓库内置了兼容 `Codex CLI` 与 `Cursor` 的一键安装包：
+
+- 总目录：[`兼容codex@cursor一键安装技能/`](/work2026/tools/FlowPilot/兼容codex@cursor一键安装技能)
+- Codex 包：[`兼容codex@cursor一键安装技能/codex一键安装技能/`](/work2026/tools/FlowPilot/兼容codex@cursor一键安装技能/codex一键安装技能)
+- Cursor 包：[`兼容codex@cursor一键安装技能/cursor一键安装技能/`](/work2026/tools/FlowPilot/兼容codex@cursor一键安装技能/cursor一键安装技能)
+
+选择规则：
+- 给 `Codex CLI` 安装技能 / MCP：使用 `codex一键安装技能/`
+- 给 `Cursor` 安装技能 / MCP：使用 `cursor一键安装技能/`
+
+常用入口：
+
+```bash
+# Codex（macOS / Linux）
+cd "兼容codex@cursor一键安装技能/codex一键安装技能"
+chmod +x install.sh repair.sh
+./install.sh --force
+
+# Cursor（macOS / Linux）
+cd "兼容codex@cursor一键安装技能/cursor一键安装技能"
+chmod +x install_cursor_skills.sh repair_cursor_skills.sh self_check_cursor_skills.sh
+./install_cursor_skills.sh
+```
+
+Windows 直接运行对应目录里的 `.bat` / `.ps1` 脚本即可。
+
+安装后要点：
+- `Codex`：重启 `Codex CLI`
+- `Cursor`：重启 `Cursor`
+- 如果只想先用 FlowPilot 主流程，可以完全跳过这一步
+
+## 卸载 FlowPilot
+
+如果你之后不想继续在某个项目里使用 FlowPilot，只需要删除它带入或运行时生成的文件：
+
+- `flow.js`（你复制进项目的单文件工具）
+- instruction file：
+  - 新项目通常是 `AGENTS.md`
+  - 兼容旧项目时可能是 `CLAUDE.md`
+  - `snow-cli` 模式下还可能有 `ROLE.md`
+- `.claude/settings.json`（如果是 FlowPilot 在 `Claude Code` 模式下生成的）
+- `.workflow/`（本地临时运行态）
+- `.flowpilot/`（本地持久状态）
+
+常见做法：
+
+```bash
+rm -rf flow.js AGENTS.md CLAUDE.md ROLE.md .claude/settings.json .workflow .flowpilot
+```
+
+注意：
+- 如果 `AGENTS.md` / `CLAUDE.md` / `ROLE.md` 里已经被你手动加入了项目自己的长期说明，请先保留需要的内容
+- 如果 `.claude/` 目录因为删掉 `settings.json` 变成空目录，也可以一起删除
+- 如果你只想停用工作流而保留 instruction file，也可以只删 `flow.js`、`.claude/settings.json`、`.workflow/`、`.flowpilot/`

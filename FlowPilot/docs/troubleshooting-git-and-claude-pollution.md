@@ -52,7 +52,7 @@ node flow.js init
 - **行为**：`finish()` 会先执行精确 cleanup，然后检查：
   - dirty baseline 是否存在
   - 当前新增脏文件是否都被 checkpoint `--files` 解释
-  - `CLAUDE.md`、`.claude/settings.json`、`.gitignore` 在 cleanup 后是否仍有用户残留改动
+  - instruction file（`AGENTS.md` / 兼容旧 `CLAUDE.md`）、`.claude/settings.json`、`.gitignore` 在 cleanup 后是否仍有用户残留改动
 - **意义**：verify 通过也不代表会最终提交；只要边界仍不安全，finish 就会 fail closed，明确列出原因和文件。
 
 ---
@@ -61,7 +61,7 @@ node flow.js init
 
 - **边界解释错误**：如果不理解 dirty baseline，容易把“启动前就脏”的文件误认为是 FlowPilot 新写出来的。
 - **遗漏 checkpoint ownership**：业务文件没有出现在任何任务的 `--files` 中时，finish 会拒绝最终提交，工作流停在 `finishing`。
-- **setup-owned 文件残留用户改动**：`CLAUDE.md`、`.claude/settings.json`、`.gitignore` 在 cleanup 后仍然脏，会被视为风险边界，阻止最终提交。
+- **setup-owned 文件残留用户改动**：instruction file（`AGENTS.md` / 兼容旧 `CLAUDE.md`）、`.claude/settings.json`、`.gitignore` 在 cleanup 后仍然脏，会被视为风险边界，阻止最终提交。
 - **协作成本上升**：团队成员若不知道 finish 的 fail-closed 语义，容易把“拒绝最终提交”误判成 verify 失败，增加排查时间。
 
 ---
@@ -74,9 +74,9 @@ node flow.js init
 
 ### 4.1 先理解 ownership-based cleanup，不要把三类文件一概而论
 
-FlowPilot 对 `CLAUDE.md`、`.claude/settings.json`、`.gitignore` 采用“谁创建/注入，谁负责 cleanup”的对称策略：
+FlowPilot 对 instruction file（`AGENTS.md` / 兼容旧 `CLAUDE.md`）、`.claude/settings.json`、`.gitignore` 采用“谁创建/注入，谁负责 cleanup”的对称策略：
 
-- **`CLAUDE.md`**：如果是 FlowPilot 在 setup/init 阶段新建，且文件内容仍只包含 FlowPilot scaffold / protocol block，finish 会自动删除；如果文件原本就存在，则只移除 FlowPilot 注入块，保留用户原文
+- **instruction file（`AGENTS.md` / 兼容旧 `CLAUDE.md`）**：如果是 FlowPilot 在 setup/init 阶段新建，且文件内容仍只包含 FlowPilot scaffold / protocol block，finish 会自动删除；如果文件原本就存在，则只移除 FlowPilot 注入块，保留用户原文
 - **`.claude/settings.json`**：如果是 FlowPilot 新建且 cleanup 后没有用户残留，会自动删除；如果原本存在，则回退到 baseline 快照，只移除 FlowPilot 注入的 hooks
 - **`.gitignore`**：如果是 FlowPilot 仅为本地状态忽略规则而创建，且 cleanup 后仍只有这些 FlowPilot 注入规则，会自动删除；如果原本存在，则只移除这些 FlowPilot 注入规则
 
@@ -96,7 +96,7 @@ echo "完成xxx [REMEMBER] ..." | node flow.js checkpoint 001 --files src/a.ts s
 
 因此，最佳实践不是“让它猜”，而是：
 - 每个任务都明确写出 `--files`
-- 让 `CLAUDE.md` / `.claude/settings.json` / `.gitignore` 只由 setup/init ownership 管理，不要把它们混进普通业务任务的 `--files`
+- 让 instruction file（`AGENTS.md` / 兼容旧 `CLAUDE.md`）、`.claude/settings.json` / `.gitignore` 只由 setup/init ownership 管理，不要把它们混进普通业务任务的 `--files`
 - 在 finish 拒绝时，先看它列出的未归属文件，再决定补 checkpoint、手动清理，还是保留到下一轮工作流
 
 ### 4.3 运行 FlowPilot 前，尽量让工作区可解释（dirty baseline 越清晰越好）
@@ -128,7 +128,7 @@ git status --porcelain
 
 1. **先看文件属于哪一类**
    - 业务文件：通常说明某个任务漏写了 checkpoint `--files`
-   - `CLAUDE.md` / `.claude/settings.json` / `.gitignore`：通常说明 cleanup 后还有用户残留改动
+   - instruction file（`AGENTS.md` / 兼容旧 `CLAUDE.md`）/ `.claude/settings.json` / `.gitignore`：通常说明 cleanup 后还有用户残留改动
 2. **再决定归属方式**
    - 属于本轮任务产物：在正确的任务 checkpoint 中补上 `--files`
    - 不属于本轮任务：手动还原、另开任务处理，或保留到下一轮 workflow
@@ -152,7 +152,7 @@ git status --porcelain
 1. **checkpoint 永远带 `--files`**
    - 这决定了 finish 能否证明某个业务文件属于本轮 workflow
 2. **把 setup-owned 文件和业务文件分开理解**
-   - `CLAUDE.md`、`.claude/settings.json`、`.gitignore` 由 setup/init ownership 管理
+   - instruction file（`AGENTS.md` / 兼容旧 `CLAUDE.md`）、`.claude/settings.json`、`.gitignore` 由 setup/init ownership 管理
    - 普通业务文件由各任务 checkpoint ownership 管理
 3. **读懂 finish 的验证语义**
    - `验证通过 ... 请派子Agent执行 code-review ...` = verify 已通过，但还没进入允许最终提交的 `finishing` 状态
@@ -199,9 +199,8 @@ node flow.js finish
 cat .workflow/owned-files.json
 
 # 4) 若怀疑 setup-owned cleanup 后还有 residue，检查这三个文件
-git diff -- CLAUDE.md .claude/settings.json .gitignore
+git diff -- AGENTS.md CLAUDE.md .claude/settings.json .gitignore
 
 # 5) 当前本地状态 ignore policy（FlowPilot 注入规则）
 git diff -- .gitignore
 ```
-

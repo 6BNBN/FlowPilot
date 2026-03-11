@@ -45,7 +45,11 @@ export function formatTask(task: TaskEntry, context: string): string {
 
 /** 格式化多个并行任务（flow next --batch 输出） */
 export function formatBatch(items: { task: TaskEntry; context: string }[]): string {
-  const lines = [`=== 并行任务批次 (${items.length}个) ===`, ''];
+  const lines = [
+    `=== 并行任务批次 (${items.length}个) ===`,
+    '必须将本批次全部任务在同一条消息中并行派发给子Agent。若改为串行派发，会直接降低吞吐量并违反协议。',
+    '',
+  ];
   for (const { task, context } of items) {
     lines.push(formatTask(task, context), '');
   }
