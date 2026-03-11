@@ -309,4 +309,18 @@ describe('runtime-state shared metadata', () => {
       ambiguousFiles: ['docs/note.md'],
     });
   });
+
+  it('classifyResumeDirtyFiles keeps deleted-looking paths ambiguous unless ownership is explicit', () => {
+    expect(classifyResumeDirtyFiles(
+      ['docs/manual.md', 'src/task-owned.ts'],
+      [],
+      [],
+      ['src/task-owned.ts'],
+    )).toEqual({
+      currentFiles: ['docs/manual.md', 'src/task-owned.ts'],
+      preservedBaselineFiles: [],
+      taskOwnedResidueFiles: ['src/task-owned.ts'],
+      ambiguousFiles: ['docs/manual.md'],
+    });
+  });
 });

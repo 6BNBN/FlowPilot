@@ -186,6 +186,28 @@ describe('WorkflowService 集成测试', () => {
     expect(data?.tasks.find(task => task.id === '001')?.status).toBe('done');
   });
 
+  it('resume会把显式 ownership 支撑的残留改动展示为可接管而非归属未明', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    vi.spyOn(repo, 'listChangedFiles')
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce(['src/task-owned.ts']);
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+
+    await svc.init(TASKS_MD);
+    await svc.next();
+    await writeFile(join(dir, '.workflow', 'owned-files.json'), JSON.stringify({
+      byTask: {
+        '001': ['src/task-owned.ts'],
+      },
+    }), 'utf-8');
+
+    const msg = await svc.resume();
+
+    expect(msg).toContain('已保留 1 个由显式 ownership 支撑的待接管变更');
+    expect(msg).toContain('src/task-owned.ts');
+    expect(msg).not.toContain('工作流期间新增但归属未明的变更');
+  });
+
   it('restart 在存在归属未明变更时拒绝重跑，清理后允许重新执行', async () => {
     const repo = new FsWorkflowRepository(dir);
     const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
@@ -257,6 +279,27 @@ describe('WorkflowService 集成测试', () => {
     expect(msg).toContain('用户手动修改/删除');
     expect(msg).toContain('src/legacy.ts');
     expect(msg).not.toContain('干净重启');
+  });
+
+  it('resume会把工作流期间用户手动删除的文件保守标记为归属未明', async () => {
+    await initGitRepo(dir);
+    await writeFile(join(dir, 'manual-delete.txt'), 'tracked before workflow\n', 'utf-8');
+    runGit(['add', '--', 'manual-delete.txt'], dir);
+    runGit(['commit', '-m', 'add manual-delete'], dir);
+
+    const repo = new FsWorkflowRepository(dir);
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+
+    await svc.init(TASKS_MD);
+    await svc.next();
+    await rm(join(dir, 'manual-delete.txt'));
+
+    const msg = await svc.resume();
+
+    expect(msg).toContain('已暂停继续调度');
+    expect(msg).toContain('manual-delete.txt');
+    expect(msg).toContain('用户手动修改/删除');
+    expect(msg).toContain('不要整文件 git restore');
   });
 
   it('resume在 baseline 缺失但存在归属未明变更时仍进入 reconciling', async () => {
