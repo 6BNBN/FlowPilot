@@ -4,8 +4,60 @@
 
 **一个文件，一句开发需求，全自动开发。**
 
-把 `flow.js` 丢进任何项目，打开 Claude Code 描述你要做什么，然后去喝杯咖啡。
+把 `flow.js` 丢进任何项目，打开你选择的客户端（`Claude Code` / `Codex` / `Cursor` / `snow-cli` 等）描述你要做什么，然后去喝杯咖啡。
 回来的时候，代码写好了，测试跑完了，git 也提交了。
+
+> 新增说明：现已兼容 `Claude Code`、`Codex`、`Cursor`、`snow-cli` 和其他客户端；`init` 时可直接选择目标客户端并生成对应的 instruction file / 配置。
+
+> 新增说明：内置 `AGENTS.md` / 客户端增强模板现已将**输出风格作为硬约束**，要求回答遵循：**先结论、后细节、简洁直给、终端友好**；同时补强了依赖分析、并行调度、危险操作确认等执行约束。
+
+> 多客户端全自动并行开关：
+> - `Claude Code`：开启 Agent Teams
+> - `Codex`：在 `~/.codex/config.toml` 中设置 `multi_agent = true`，建议直接用 `codex --yolo`
+> - `Cursor`：开启 `Agents`，并将 `Auto-Run Mode` 调成 `Run Everything`
+
+> `Codex` 增强规则预览：
+> - 标准执行流程：任务分析 → 并行调度与子任务下发 → 结果汇总 → 递归迭代
+> - 并行约束：无前置依赖且无写冲突的任务优先并发；单轮最多同时下发 `50` 个子任务
+> - 子任务契约：下发子任务时必须明确 `代理名称 / 任务定义 / 执行动作 / 预期结果`
+
+## 快速开始
+
+```bash
+# 1. 构建并复制到你的项目
+cd FlowPilot && npm install && npm run build
+cp dist/flow.js /your/project/
+
+# 2. 初始化（会显示客户端选项）
+cd /your/project
+node flow.js init
+
+# 3. 启动客户端，直接描述需求
+claude --dangerously-skip-permissions
+```
+
+初始化时会直接显示客户端选项：
+- `Claude Code`：生成 `AGENTS.md` + `.claude/settings.json`
+- `Codex`：生成 `AGENTS.md`，并附加 Codex 平台增强规则（并行调度 + 子任务契约）
+- `Cursor` / `Other`：生成通用版 `AGENTS.md`
+- `snow-cli`：生成 `AGENTS.md` + `ROLE.md`
+
+中断后直接继续：
+
+```bash
+# Claude Code
+claude --dangerously-skip-permissions --continue
+
+# Codex
+codex --yolo
+```
+
+- `Claude Code`：推荐直接用 `--continue` / `--resume`
+- `Codex`：重新进入项目目录后启动 `codex --yolo`，然后说「继续任务」
+- `Cursor`：重新打开项目，在原会话或新会话中说「继续任务」
+- `snow-cli` / 其他客户端：重新进入项目目录，恢复或新开会话后说「继续任务」
+
+需要更完整说明时，再往下看「初始化与客户端选项」「执行流程」「错误处理」。
 
 ## 最近更新
 
@@ -36,7 +88,7 @@ FlowPilot：你是甲方——只说要什么，剩下的全自动。
 | 一次只能做一件事 | 多个子Agent并行开发，速度翻倍 |
 | 做到一半忘了之前的决策 | 四层记忆 + 跨工作流长期记忆，100个任务也不迷路 |
 | 每次手动 git commit | 每完成一个任务自动提交，收尾自动跑测试 |
-| 换个项目要重新配置 | 99KB 单文件复制即用，Node/Rust/Go/Python/Java/C++/Makefile 通吃 |
+| 换个项目要重新配置 | 单文件复制即用，Node/Rust/Go/Python/Java/C++/Makefile 通吃 |
 | 每次都犯同样的错 | 自我进化引擎，每轮自动反思优化，越跑越聪明 |
 
 ### 和主流方案的区别
@@ -69,7 +121,7 @@ CC 自带 Task 工具能派子Agent，但它是**无状态**的——上下文�
 | 定位 | 规划层：需求 → 规格文档 | 执行层：任务 → 代码 → 提交 |
 | 产出 | Markdown 文档 | 可运行代码 + git 历史 |
 | 执行 | 文档写完仍需人工/AI 逐个实现 | 全自动派发、并行执行、自动提交 |
-| 适用范围 | 工具无关，20+ AI 助手 | Claude Code 专用，深度集成 |
+| 适用范围 | 工具无关，20+ AI 助手 | 面向 Claude Code / Codex / Cursor / snow-cli 等客户端，深度集成 |
 
 FlowPilot 的核心优势是**端到端自动化**——从需求到代码到提交到验证，中间不需要人。OpenSpec 在规划阶段更强，两者已实现集成：
 
@@ -100,6 +152,8 @@ node flow.js init
 
 CC 会自动：拆解任务 → 识别依赖 → 并行派发子Agent → 写代码 → checkpoint → git commit → 跑 build/test/lint → 全部完成。
 
+`flow finish` 现在会真正执行自动验证，而不是停留在“尽力探测”。如果当前工作流根目录本身没有可检测脚本，但只包含一个可识别子项目（例如 `FlowPilot/`），它会自动进入该子项目执行验证命令；对 `vitest` 测试脚本也会自动补成 `--run`，避免 finish 卡在 watch 模式。
+
 ## 核心优势
 
 ### 无限上下文 — 做 100 个任务也不会 compact 丢失
@@ -129,10 +183,12 @@ CC 会自动：拆解任务 → 识别依赖 → 并行派发子Agent → 写代
 关窗口、断网、compact、CC 崩溃，随便来：
 
 ```
-新窗口 → 说：继续任务 → flow resume → 检测到中断 → 重置未完成任务 → 继续
+新窗口 → 说：继续任务 → flow resume
+  ├─ 若无待接管变更：重置未完成任务 → 继续
+  └─ 若有待处理变更：暂停调度 → adopt / 确认并处理列出的本任务变更后 restart → 再继续
 ```
 
-所有状态持久化在文件里，不依赖对话历史。哪怕并行执行中 3 个子Agent 同时中断，恢复后全部重新派发。
+所有状态持久化在文件里，不依赖对话历史。哪怕并行执行中 3 个子Agent 同时中断，恢复后也不会盲目重派；若检测到工作流期间新增但归属未明的变更，FlowPilot 会暂停并要求人工确认，而不是暗示你整文件 `git restore`。只有列出的 task-owned 变更才适合 `adopt` 或在处理后 `restart`。
 
 ### 迭代审查 — 跑完一轮再来一轮，越改越好
 
@@ -146,7 +202,7 @@ CC 会自动：拆解任务 → 识别依赖 → 并行派发子Agent → 写代
 
 ### 自我进化 — 每跑一轮，下一轮更聪明
 
-FlowPilot 内置三阶段有机进化循环，成功和失败均触发进化，结果写入 `.flowpilot/config.json`，被 maxRetries / parallelLimit / hints / verify / hooks 真正消费：
+FlowPilot 内置三阶段有机进化循环，成功和失败均触发进化，结果写入 `.flowpilot/config.json`，被 maxRetries / hints / verify / hooks 真正消费；历史上曾存在的 `parallelLimit` 不再参与运行时批次裁剪，也不会被自动进化改写：
 
 ```
 finish() 触发：
@@ -166,21 +222,38 @@ Finalization 阶段（可选）：
 | Experiment | finish 末尾 | 自动调整 config 参数和协议模板，保存完整快照 |
 | Review | review 时 | 对比进化前后指标，恶化自动回滚，检查配置完整性 |
 
+### 收尾总结 — 清目录前先把结果说清楚
+
+`flow finish` 在删除临时工作流目录前，会先完成两件事：
+
+1. 在终端输出本轮工作流最终总结
+2. 在 `.workflow/final-summary.md` 落一份同样的总结，然后再执行清理
+
+总结会列出所有任务，并用下面的标记显示状态：
+
+```text
+[x] 已完成
+[-] 已跳过
+[!] 已失败
+[ ] 未完成
+```
+
+这样用户在 `.workflow/` 被清掉之前，就已经能在终端看见完整结果；同时流程内也可以验证“先总结、后清理”的顺序。
+
 进化结果直接影响工作流行为：
 
 | 参数 | 作用 |
 |------|------|
 | `maxRetries` | checkpoint 失败时决定重试次数 |
-| `parallelLimit` | `nextBatch` 限制并行任务数 |
 | `hints` | 注入到子Agent上下文作为"进化建议" |
 
-- 成功时：提升并行度，优化参数
-- 失败时：增加前置检查建议，降低并行度
+- 成功时：优化重试与经验规则
+- 失败时：增加前置检查建议，优化重试与验证策略
 - 有 `ANTHROPIC_API_KEY` 时用 LLM 深度分析，没有则用规则引擎——零依赖约束下的优雅降级
 
-### 99KB 通吃一切 — 零依赖，复制即用
+### 单文件通吃一切 — 零依赖，复制即用
 
-- 单文件 `dist/flow.js`，99KB
+- 单文件 `dist/flow.js`，当前构建产物约 `213KB`
 - 零运行时依赖，只需 Node.js
 - 自动识别 8 种项目类型，收尾时自动跑对应的验证命令，并区分通过 / 跳过 / 未发现命令
 
@@ -191,7 +264,9 @@ Finalization 阶段（可选）：
 
 ## 前置准备
 
-建议先安装插件，否则子Agent功能会降级。在 CC 中执行 `/plugin` 打开插件商店，选择安装：
+建议先安装插件 / 技能，否则多代理和上下文增强能力会降级。
+
+`Claude Code` 可在 CC 中执行 `/plugin` 打开插件商店，选择安装：
 
 - `superpowers` — 需求拆解头脑风暴
 - `frontend-design` — 前端任务
@@ -199,21 +274,41 @@ Finalization 阶段（可选）：
 - `code-review` — 收尾代码审查
 - `context7` — 实时查阅第三方库文档
 
-另外确保开启 **Agent Teams**，在 `~/.claude/settings.json` 中添加：
+不同客户端的并行 / 自动运行开关：
 
-```json
-"env": {
-  "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
-}
-```
+- `Claude Code`
+  - 在 `~/.claude/settings.json` 中添加：
+    ```json
+    "env": {
+      "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+    }
+    ```
+- `Codex`
+  - 在 `~/.codex/config.toml` 中加入：
+    ```toml
+    [features]
+    multi_agent = true
+    ```
+  - 全自动运行建议使用：`codex --yolo`
+- `Cursor`
+  - 在设置的 `Agents` 中开启 `Agents`
+  - 将 `Auto-Run Mode` 调成 `Run Everything`
+- `其他客户端`
+  - 没有统一标准，请先按各自文档自测多代理 / 自动运行能力
 
-`node flow.js init` 会自动生成协议和 Hooks，缺失插件会在输出中提醒。
+`node flow.js init` 在接管模式下会直接显示客户端选项：
+- `Claude Code`：生成 `AGENTS.md` + `.claude/settings.json`
+- `Codex`：生成 `AGENTS.md`，并附加 Codex 平台增强规则（如多代理并行调度约定）
+- `Cursor` / `Other`：生成通用版 `AGENTS.md`
+- `snow-cli`：生成 `AGENTS.md` + `ROLE.md`（两者内容保持一致）
 
-setup/init 写入的 `CLAUDE.md`、`.claude/settings.json`、`.gitignore` 遵循 ownership-based cleanup：FlowPilot 只清理自己创建或注入的部分，cleanup 后若仍有用户残留改动，`flow finish` 会拒绝最终提交。
+缺失插件会在输出中提醒。
+
+setup/init 写入的 instruction file（新项目默认 `AGENTS.md`，兼容旧的 `CLAUDE.md`）、`.claude/settings.json`、`.gitignore` 遵循 ownership-based cleanup：FlowPilot 只清理自己创建或注入的部分，cleanup 后若仍有用户残留改动，`flow finish` 会拒绝最终提交。
 
 默认情况下，FlowPilot 还会在项目 `.gitignore` 中确保以下本地状态被忽略：`.workflow/`（本地临时运行态）、`.flowpilot/`（本地持久化产品状态）、`.claude/settings.json`（本地集成配置）、`.claude/worktrees/`（本地工作树目录）。不会忽略整个 `.claude/` 目录。
 
-## 快速开始
+## 初始化与客户端选项
 
 ```bash
 # 构建单文件
@@ -227,7 +322,7 @@ npm run test:run
 cp dist/flow.js /your/project/
 cd /your/project
 
-# 初始化（协议嵌入CLAUDE.md + Hooks注入）
+# 初始化（显示客户端选项；新项目默认生成 AGENTS.md）
 node flow.js init
 
 # 全自动模式启动 CC，直接描述需求，剩下的全自动
@@ -242,7 +337,7 @@ claude --dangerously-skip-permissions --continue   # 接续最近一次对话
 claude --dangerously-skip-permissions --resume     # 从历史对话列表选择
 ```
 
-如果恢复时工作区仍然有脏业务文件，`resume` 会明确告诉你哪些是启动前就存在的 baseline 脏文件，哪些是中断任务残留的新脏文件；如果 dirty baseline 缺失，也会直接说明“无法证明这是干净重启”。
+如果恢复时工作区仍然有未归档变更，`resume` 会明确告诉你哪些是启动前就存在的 baseline 未归档变更，哪些是由显式 ownership 支撑的 task-owned 变更，哪些是工作流期间新增但归属未明的变更（可能包含你的手动修改/删除）；如果 dirty baseline 缺失，也会直接说明“无法证明这是干净重启，也无法可靠区分用户操作与任务残留”。
 
 ## 架构概览
 
@@ -267,7 +362,7 @@ claude --dangerously-skip-permissions --resume     # 从历史对话列表选择
   │       └─ task-xxx.md    # 各任务详细产出
   │
   └─ .flowpilot/（本地持久化产品状态）
-      ├─ config.json        # 持久配置（maxRetries/parallelLimit/hints/verify/hooks）
+      ├─ config.json        # 持久配置（maxRetries/hints/verify/hooks 等）
       ├─ memory.json        # 长期记忆库（知识条目 + 标签 + 时间戳）
       └─ evolution/         # 进化历史（reflect/experiment/review 记录）
 ```
@@ -353,7 +448,7 @@ node flow.js evolve               # 接收 CC sub-agent 反思结果并应用进
 ```
 node flow.js init
        ↓
-  协议嵌入 CLAUDE.md + Hooks 注入
+  协议嵌入 instruction file（新项目默认 AGENTS.md，旧项目兼容 CLAUDE.md）+ 按客户端选择注入额外配置
        ↓
   用户描述需求 / 丢入开发文档
        ↓                          ← 以下全自动，无需人工介入
@@ -378,9 +473,9 @@ node flow.js init
 
 - **任务失败** — 自动重试 3 次，3 次仍失败则标记 `failed` 并跳过
 - **级联跳过** — 依赖了失败任务的后续任务自动标记 `skipped`
-- **中断恢复** — `active` 状态的任务重置为 `pending`，从头重做；若工作区仍脏，`resume` 会明确区分 baseline 脏文件、任务残留脏文件、以及缺失 baseline 的保守警告
+- **中断恢复** — `active` 状态的任务在干净场景下会重置为 `pending`；若检测到工作流期间新增的未处理变更，工作流进入 `reconciling`。只有列出的 task-owned 变更适合 `adopt` / `restart`；归属未明的文件必须先人工确认，不能整文件 `git restore`
 - **验证失败** — `flow finish` 报错后可派子Agent修复，再次 finish
-- **最终提交拒绝** — `flow finish` 在 verify/review 之后还会检查 dirty baseline、checkpoint owned files、以及 `CLAUDE.md` / `.claude/settings.json` / `.gitignore` 的 cleanup 结果；只要边界不安全，就拒绝最终提交并列出文件
+- **最终提交拒绝** — `flow finish` 在 verify/review 之后还会检查 dirty baseline、checkpoint owned files、以及 instruction file（`AGENTS.md` / 兼容旧 `CLAUDE.md`）、`.claude/settings.json` / `.gitignore` 的 cleanup 结果；只要边界不安全，就拒绝最终提交并列出文件
 - **循环检测** — 三策略防护（重复失败/乒乓/全局熔断），自动注入警告到下一任务
 - **心跳自检** — 活跃任务超时（>30分钟）告警，记忆膨胀（>100条）自动压缩
 - **进化回滚** — 实验导致指标恶化时，`review` 自动回滚到实验前快照
@@ -454,3 +549,36 @@ interfaces → application → domain ← infrastructure
 本项目基于 [MIT License](LICENSE) 开源。
 
 Copyright (c) 2025-2026 FlowPilot Contributors
+
+## QQ群交流
+
+欢迎加入 `FlowPilot交流` QQ 群交流使用问题、工作流实践和改进建议。
+
+- 群号：`760311090`
+- 群主 QQ：`879360806`
+
+![FlowPilot QQ 群二维码](docs/qq_qr.png)
+
+## 卸载 FlowPilot
+
+如果你之后不想继续在某个项目里使用 FlowPilot，只需要删除它带入或运行时生成的文件：
+
+- `flow.js`（你复制进项目的单文件工具）
+- instruction file：
+  - 新项目通常是 `AGENTS.md`
+  - 兼容旧项目时可能是 `CLAUDE.md`
+  - `snow-cli` 模式下还可能有 `ROLE.md`
+- `.claude/settings.json`（如果是 FlowPilot 在 `Claude Code` 模式下生成的）
+- `.workflow/`（本地临时运行态）
+- `.flowpilot/`（本地持久状态）
+
+常见做法：
+
+```bash
+rm -rf flow.js AGENTS.md CLAUDE.md ROLE.md .claude/settings.json .workflow .flowpilot
+```
+
+注意：
+- 如果 `AGENTS.md` / `CLAUDE.md` / `ROLE.md` 里已经被你手动加入了项目自己的长期说明，请先保留需要的内容
+- 如果 `.claude/` 目录因为删掉 `settings.json` 变成空目录，也可以一起删除
+- 如果你只想停用工作流而保留 instruction file，也可以只删 `flow.js`、`.claude/settings.json`、`.workflow/`、`.flowpilot/`

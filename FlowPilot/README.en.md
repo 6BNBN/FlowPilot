@@ -4,8 +4,17 @@
 
 **One file, one requirement, fully automated development.**
 
-Drop `flow.js` into any project, open Claude Code, describe what you want, then go grab a coffee.
+Drop `flow.js` into any project, open your preferred client (`Claude Code`, `Codex`, `Cursor`, `snow-cli`, etc.), describe what you want, then go grab a coffee.
 When you come back, the code is written, tests have passed, and git commits are done.
+
+> Update: FlowPilot now supports `Claude Code`, `Codex`, `Cursor`, `snow-cli`, and other clients. During `init`, you can directly choose the target client and generate the matching instruction file / setup extras.
+
+> Update: The built-in `AGENTS.md` / client-specific templates now include **response-style shaping**. They rein in the overly verbose default output common in GPT-style clients and make it closer to Claude-style communication: **conclusion first, details after, concise, direct, terminal-friendly** — while still enforcing parallelism, safety confirmation, and engineering discipline.
+
+> Multi-client full-auto parallel switches:
+> - `Claude Code`: enable Agent Teams
+> - `Codex`: set `multi_agent = true` in `~/.codex/config.toml`, and preferably run with `codex --yolo`
+> - `Cursor`: enable `Agents` and set `Auto-Run Mode` to `Run Everything`
 
 ## Recent Updates
 
@@ -100,6 +109,8 @@ You: Build an e-commerce system with user registration, product management, shop
 
 CC will automatically: decompose tasks → identify dependencies → dispatch sub-agents in parallel → write code → checkpoint → git commit → run build/test/lint → done.
 
+`flow finish` now performs real automatic verification instead of stopping at a best-effort probe. If the workflow root itself has no detectable scripts but contains exactly one recognizable child project (for example `FlowPilot/`), FlowPilot automatically descends into that child project and runs verification there; `vitest` test scripts are also normalized to `--run` so finish does not hang in watch mode.
+
 ## Core Advantages
 
 ### Unlimited Context — 100 Tasks Without Compact Loss
@@ -129,10 +140,12 @@ Parallel:   DB → [User API, Product API] → [User Page, Product Page]  (3 rou
 Close window, lose network, compact, CC crash — bring it on:
 
 ```
-New window → Say: continue task → flow resume → detect interruption → reset unfinished tasks → continue
+New window → Say: continue task → flow resume
+  ├─ no pending task-owned changes: reset unfinished tasks → continue
+  └─ pending worktree changes detected: pause scheduling → adopt / after handling only the listed task-owned changes restart → continue
 ```
 
-All state persisted in files, independent of conversation history. Even if 3 sub-agents are interrupted simultaneously during parallel execution, all are re-dispatched after recovery.
+All state persisted in files, independent of conversation history. Even if 3 sub-agents are interrupted simultaneously during parallel execution, FlowPilot will not blindly re-dispatch them when worktree changes remain; if ownership is ambiguous, it pauses and requires manual review instead of nudging you toward a whole-file `git restore`.
 
 ### Iterative Review — Run Another Round, Keep Improving
 
@@ -146,7 +159,7 @@ Round 3: Polish → Code quality improvement → Final verification
 
 ### Self-Evolution — Each Round Makes the Next Smarter
 
-FlowPilot has a built-in three-phase organic evolution cycle. Both success and failure trigger evolution, with results written to `.flowpilot/config.json` and consumed by maxRetries / parallelLimit / hints / verify / hooks:
+FlowPilot has a built-in three-phase organic evolution cycle. Both success and failure trigger evolution, with results written to `.flowpilot/config.json` and consumed by maxRetries / hints / verify / hooks; the historical `parallelLimit` field no longer affects runtime batch sizing and is not rewritten by automatic evolution:
 
 ```
 finish() triggers:
@@ -166,16 +179,33 @@ Finalization phase (optional):
 | Experiment | End of finish | Auto-adjust config params and protocol templates, save full snapshots |
 | Review | During review | Compare metrics before/after evolution, auto-rollback if degraded, check config integrity |
 
+### Final Summary Before Cleanup
+
+Before `flow finish` deletes the temporary workflow directory, it now does two things first:
+
+1. Prints a final workflow summary to the terminal
+2. Writes the same summary to `.workflow/final-summary.md`, then proceeds with cleanup
+
+The summary lists every task with explicit status markers:
+
+```text
+[x] done
+[-] skipped
+[!] failed
+[ ] incomplete
+```
+
+This way the user sees the full outcome immediately, and the workflow can still verify the "summarize first, clear later" ordering before `.workflow/` is removed.
+
 Evolution results directly affect workflow behavior:
 
 | Parameter | Effect |
 |-----------|--------|
 | `maxRetries` | Determines retry count on checkpoint failure |
-| `parallelLimit` | Limits parallel task count in `nextBatch` |
 | `hints` | Injected into sub-agent context as "evolution suggestions" |
 
-- On success: increase parallelism, optimize parameters
-- On failure: add pre-check suggestions, reduce parallelism
+- On success: optimize retries and experience hints
+- On failure: add pre-check suggestions and tune retries/verification
 - With `ANTHROPIC_API_KEY`: deep LLM analysis. Without: rule engine fallback — graceful degradation under zero-dependency constraints
 
 ### 99KB Does It All — Zero Dependencies, Copy and Use
@@ -199,17 +229,37 @@ Install plugins first for best results (sub-agent functionality degrades without
 - `code-review` — Finalization code review
 - `context7` — Real-time third-party library documentation lookup
 
-Also enable **Agent Teams** by adding to `~/.claude/settings.json`:
+Client-side parallel / auto-run switches:
 
-```json
-"env": {
-  "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
-}
-```
+- `Claude Code`
+  - Add to `~/.claude/settings.json`:
+    ```json
+    "env": {
+      "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+    }
+    ```
+- `Codex`
+  - Add to `~/.codex/config.toml`:
+    ```toml
+    [features]
+    multi_agent = true
+    ```
+  - For unattended execution, prefer `codex --yolo`
+- `Cursor`
+  - Enable `Agents` in settings
+  - Set `Auto-Run Mode` to `Run Everything`
+- `Other clients`
+  - No single standard exists; self-test multi-agent / auto-run behavior first
 
-`node flow.js init` auto-generates the protocol and Hooks, and warns about missing plugins in the output.
+In setup mode, `node flow.js init` now shows direct client options:
+- `Claude Code`: generates `AGENTS.md` + `.claude/settings.json`
+- `Codex`: generates `AGENTS.md` with extra Codex-specific enhancement rules
+- `Cursor` / `Other`: generate the generic `AGENTS.md`
+- `snow-cli`: generates `AGENTS.md` + `ROLE.md` with identical content
 
-Setup/init changes to `CLAUDE.md`, `.claude/settings.json`, and `.gitignore` follow ownership-based cleanup: FlowPilot only removes what it created or injected, and `flow finish` refuses the final commit if user residue still remains afterward.
+Missing plugins are still reported in the output.
+
+Setup/init changes to the instruction file (new projects default to `AGENTS.md`, existing `CLAUDE.md` projects remain compatible), `.claude/settings.json`, and `.gitignore` follow ownership-based cleanup: FlowPilot only removes what it created or injected, and `flow finish` refuses the final commit if user residue still remains afterward.
 
 By default, FlowPilot also ensures these local-only paths are ignored in the repo `.gitignore`: `.workflow/` (local transient runtime state), `.flowpilot/` (local persistent product state), `.claude/settings.json` (local integration state), and `.claude/worktrees/` (local worktree directory). It does not ignore the entire `.claude/` directory.
 
@@ -227,7 +277,7 @@ npm run test:run
 cp dist/flow.js /your/project/
 cd /your/project
 
-# Initialize (protocol embedded in CLAUDE.md + Hooks injected)
+# Initialize (shows client options; new projects default to AGENTS.md)
 node flow.js init
 
 # Launch CC in fully automated mode, describe your requirements, everything else is automatic
@@ -238,11 +288,20 @@ claude --dangerously-skip-permissions
 
 Interruption recovery:
 ```bash
+# Claude Code
 claude --dangerously-skip-permissions --continue   # Resume most recent conversation
 claude --dangerously-skip-permissions --resume     # Pick from conversation history
+
+# Codex
+codex --yolo
 ```
 
-If the worktree is still dirty when resuming, `resume` explicitly tells you which dirty files predate the workflow, which ones were left behind by interrupted tasks, and whether the dirty baseline is missing.
+- `Claude Code`: prefer `--continue` / `--resume`
+- `Codex`: re-enter the project directory, launch `codex --yolo`, then say "continue task"
+- `Cursor`: reopen the project and continue in the existing chat or a new one
+- `snow-cli` / other clients: reopen the project, restore or start a new session, then say "continue task"
+
+If the worktree still has unarchived changes when resuming, `resume` explicitly tells you which changes predate the workflow, which ones are explicitly owned task changes, which ones are ownership-ambiguous additions that may include manual user edits/deletions, and whether the dirty baseline is missing.
 
 ## Architecture Overview
 
@@ -267,7 +326,7 @@ Main Agent (dispatcher, < 100 lines context)
   │       └─ task-xxx.md    # Detailed output per task
   │
   └─ .flowpilot/ (local persistent product state)
-      ├─ config.json        # Persistent config (maxRetries/parallelLimit/hints/verify/hooks)
+      ├─ config.json        # Persistent config (maxRetries/hints/verify/hooks, etc.)
       ├─ memory.json        # Long-term memory store (knowledge entries + tags + timestamps)
       └─ evolution/         # Evolution history (reflect/experiment/review records)
 ```
@@ -353,7 +412,7 @@ Companion npm scripts:
 ```
 node flow.js init
        ↓
-  Protocol embedded in CLAUDE.md + Hooks injected
+  Protocol embedded in the instruction file (AGENTS.md by default for new projects, CLAUDE.md for legacy repos) + client-specific setup extras when selected
        ↓
   User describes requirements / provides dev docs
        ↓                          ← Everything below is fully automated, no human intervention
@@ -378,9 +437,9 @@ node flow.js init
 
 - **Task failure** — Auto-retry 3 times, still failing after 3 → mark `failed` and skip
 - **Cascade skip** — Downstream tasks depending on failed tasks auto-marked `skipped`
-- **Interruption recovery** — `active` tasks reset to `pending`, redo from scratch; if the worktree is still dirty, `resume` explicitly separates baseline dirt, interrupted-task residue, and missing-baseline warnings
+- **Interruption recovery** — clean interruptions reset `active` tasks back to `pending`; when workflow-period changes remain, the workflow enters `reconciling`. Only the listed task-owned changes are safe for `adopt` / `restart`; ownership-ambiguous files must be reviewed manually and must not be cleared with a whole-file `git restore`
 - **Verification failure** — `flow finish` reports error, dispatch sub-agent to fix, retry finish
-- **Final commit refusal** — after verify/review, `flow finish` also checks the dirty baseline, checkpoint-owned files, and cleanup results for `CLAUDE.md` / `.claude/settings.json` / `.gitignore`; any unsafe boundary causes an explicit refusal with the file list
+- **Final commit refusal** — after verify/review, `flow finish` also checks the dirty baseline, checkpoint-owned files, and cleanup results for the instruction file (`AGENTS.md`, or legacy `CLAUDE.md`) / `.claude/settings.json` / `.gitignore`; any unsafe boundary causes an explicit refusal with the file list
 - **Loop detection** — Three-strategy defense (repeated failures/ping-pong/global circuit breaker), auto-injects warnings into next task
 - **Health check** — Active task timeout (>30min) alerts, memory bloat (>100 entries) auto-compaction
 - **Evolution rollback** — If experiments degrade metrics, `review` auto-rolls back to pre-experiment snapshot
@@ -454,3 +513,27 @@ Zero runtime external dependencies, only Node.js built-in modules (fs, path, chi
 This project is open-sourced under the [MIT License](LICENSE).
 
 Copyright (c) 2025-2026 FlowPilot Contributors
+
+## Uninstalling FlowPilot
+
+If you no longer want FlowPilot in a project, remove the files it copied in or generated at runtime:
+
+- `flow.js` (the single-file tool you copied into the project)
+- the instruction file:
+  - usually `AGENTS.md` for new projects
+  - possibly `CLAUDE.md` for legacy-compatible setups
+  - `ROLE.md` as well in `snow-cli` mode
+- `.claude/settings.json` (if FlowPilot generated it in `Claude Code` mode)
+- `.workflow/` (local transient runtime state)
+- `.flowpilot/` (local persistent state)
+
+Typical cleanup:
+
+```bash
+rm -rf flow.js AGENTS.md CLAUDE.md ROLE.md .claude/settings.json .workflow .flowpilot
+```
+
+Notes:
+- If you manually added long-term project guidance into `AGENTS.md` / `CLAUDE.md` / `ROLE.md`, keep what you need before deleting them
+- If deleting `settings.json` leaves `.claude/` empty, you can remove the directory too
+- If you only want to disable the workflow but keep the instruction file, you can remove just `flow.js`, `.claude/settings.json`, `.workflow/`, and `.flowpilot/`

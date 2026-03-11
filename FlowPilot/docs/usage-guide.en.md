@@ -117,12 +117,26 @@ If the worktree still has unarchived changes, `resume` also reports the real bou
 | `node flow.js skip <id>` | Skip a task |
 | `node flow.js resume` | Interruption recovery (enters reconciling when needed) |
 | `node flow.js review` | Mark code-review as done (required before finish) |
-| `node flow.js finish` | Smart finalization (verify+report passed/skipped steps+refuse unsafe final commits, requires review) |
+| `node flow.js finish` | Smart finalization (run auto verification, print the final task summary, and refuse unsafe final commits when needed; review required) |
 | `node flow.js add <desc> [--type T]` | Add new task (argument order flexible) |
 | `node flow.js recall <keyword>` | Search historical memories (BM25 + MMR + temporal decay) |
 | `node flow.js evolve` | Accept AI reflection results and apply evolution (stdin) |
 
 > Note: During normal use you don't need to run these commands manually — CC calls them automatically per protocol.
+
+### What `finish` Does Now
+
+`node flow.js finish` now has a clearer shutdown order:
+
+1. Run automatic verification first  
+   It prefers `verify.commands` from `.flowpilot/config.json` / `.workflow/config.json`; if the current directory has no detectable scripts but contains exactly one recognizable child project, FlowPilot automatically descends into that child project and verifies there. `vitest` is normalized to `--run` to avoid watch-mode hangs.
+2. Print the final workflow summary  
+   The terminal output includes the full task list with `[x] / [-] / [!] / [ ]` markers for done, skipped, failed, and incomplete tasks.
+3. Write `.workflow/final-summary.md` before deleting `.workflow/`  
+   This preserves the "summarize first, clear later" ordering and leaves a summary file in place until cleanup actually happens.
+4. Only then perform cleanup and final commit / idle transition
+
+If verification fails, `finish` still aborts finalization and asks you to fix the issue first. But once finish enters the successful shutdown path, summary output now always happens before temporary workflow cleanup.
 
 ## Task Input Format
 

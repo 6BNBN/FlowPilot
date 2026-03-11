@@ -147,12 +147,26 @@ CC：恢复工作流: 博客系统 | 进度: 7/12 | 检测到中断任务 008 �
 | `node flow.js skip <id>` | 跳过某个任务 |
 | `node flow.js resume` | 中断恢复（必要时进入 reconciling） |
 | `node flow.js review` | 标记code-review已完成（finish前必须执行） |
-| `node flow.js finish` | 智能收尾（验证+汇报通过/跳过项+必要时拒绝最终提交，需先review） |
+| `node flow.js finish` | 智能收尾（执行自动验证、输出最终任务总结、必要时拒绝最终提交，需先review） |
 | `node flow.js add <描述> [--type T]` | 追加新任务（参数顺序任意） |
 | `node flow.js recall <关键词>` | 检索历史记忆（BM25 + MMR + 时间衰减） |
 | `node flow.js evolve` | 接收 AI 反思结果并执行进化（stdin 传入） |
 
 > 注意：正常使用时你不需要手动执行这些命令，CC 会按协议自动调用。
+
+### `finish` 现在具体会做什么
+
+`node flow.js finish` 的收尾顺序现在更明确：
+
+1. 先执行自动验证  
+   优先使用 `.flowpilot/config.json` / `.workflow/config.json` 中的 `verify.commands`；若当前目录没有可检测脚本，但只有一个可识别子项目，也会自动进入该子项目执行验证。`vitest` 会自动改成 `--run`，避免 watch 卡住。
+2. 再输出本轮工作流最终总结  
+   终端会打印完整任务列表，并用 `[x] / [-] / [!] / [ ]` 标记完成、跳过、失败、未完成。
+3. 在删除 `.workflow/` 前先写出 `.workflow/final-summary.md`  
+   这样流程内可以验证“先总结、后清理”，用户也能在目录清理前拿到 summary 文件。
+4. 最后才执行清理与最终提交/待命切换
+
+如果验证失败，`finish` 仍会像以前一样中断收尾并要求先修复；但只要进入成功收尾路径，就一定会先输出总结，再清理临时目录。
 
 ## 任务输入格式
 
