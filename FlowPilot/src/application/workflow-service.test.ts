@@ -133,7 +133,7 @@ describe('WorkflowService 集成测试', () => {
     expect(r?.task.id).toBe('001');
   });
 
-  it('resume会明确报告中断任务保留的脏业务文件', async () => {
+  it('resume会把工作流期间新增但无ownership的变更标记为归属未明', async () => {
     const repo = new FsWorkflowRepository(dir);
     const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
     changedFilesSpy.mockReturnValueOnce([]);
@@ -145,9 +145,67 @@ describe('WorkflowService 集成测试', () => {
 
     const msg = await svc.resume();
 
-    expect(msg).toContain('中断任务 001 已重置，将重新执行');
-    expect(msg).toContain('已保留 1 个中断任务残留的脏业务文件');
+    expect(msg).toContain('已暂停继续调度');
+    expect(msg).toContain('node flow.js adopt 001');
+    expect(msg).toContain('归属未明');
+    expect(msg).toContain('不要整文件 git restore');
     expect(msg).toContain('src/feature.ts');
+  });
+
+  it('reconciling 状态下 next 会拒绝继续派发任务', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
+    changedFilesSpy.mockReturnValueOnce([]);
+    changedFilesSpy.mockReturnValueOnce(['src/feature.ts']);
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+
+    await svc.init(TASKS_MD);
+    await svc.next();
+    await svc.resume();
+
+    await expect(svc.next()).rejects.toThrow(/adopt|restart|skip/);
+  });
+
+  it('adopt 会认领中断任务残留并在最后一个待接管任务后恢复 running', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    vi.spyOn(repo, 'listChangedFiles')
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce(['src/feature.ts']);
+    mockCommitResult(repo, { status: 'committed' });
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+
+    await svc.init(TASKS_MD);
+    await svc.next();
+    await svc.resume();
+
+    const msg = await svc.adopt('001', '[REMEMBER] 接管中断残留', ['src/feature.ts']);
+    expect(msg).toContain('任务 001 完成');
+
+    const data = await svc.status();
+    expect(data?.status).toBe('running');
+    expect(data?.tasks.find(task => task.id === '001')?.status).toBe('done');
+  });
+
+  it('restart 在存在归属未明变更时拒绝重跑，清理后允许重新执行', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
+    changedFilesSpy
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce(['src/feature.ts'])
+      .mockReturnValueOnce(['src/feature.ts'])
+      .mockReturnValueOnce([]);
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+
+    await svc.init(TASKS_MD);
+    await svc.next();
+    await svc.resume();
+
+    await expect(svc.restart('001')).rejects.toThrow(/归属未明变更/);
+    const msg = await svc.restart('001');
+    expect(msg).toContain('任务 001 已确认从头重做');
+
+    const nextTask = await svc.next();
+    expect(nextTask?.task.id).toBe('001');
   });
 
   it('resume会区分启动前已脏且恢复后仍脏的文件', async () => {
@@ -162,9 +220,9 @@ describe('WorkflowService 集成测试', () => {
 
     const msg = await svc.resume();
 
-    expect(msg).toContain('工作流启动前已有 1 个脏文件仍然保留');
+    expect(msg).toContain('工作流启动前已有 1 个未归档变更仍然保留');
     expect(msg).toContain('README.md');
-    expect(msg).not.toContain('中断任务残留的脏业务文件');
+    expect(msg).not.toContain('归属未明');
   });
 
   it('resume会把无脏文件的恢复表述为干净重启', async () => {
@@ -179,7 +237,7 @@ describe('WorkflowService 集成测试', () => {
 
     const msg = await svc.resume();
 
-    expect(msg).toContain('当前工作区无残留脏业务文件，本次恢复是干净重启');
+    expect(msg).toContain('当前工作区无待接管变更，本次恢复是干净重启');
   });
 
   it('resume在旧工作流缺少baseline时给出保守警告而非误报干净', async () => {
@@ -196,11 +254,31 @@ describe('WorkflowService 集成测试', () => {
     const msg = await svc.resume();
 
     expect(msg).toContain('未找到 dirty baseline');
+    expect(msg).toContain('用户手动修改/删除');
     expect(msg).toContain('src/legacy.ts');
     expect(msg).not.toContain('干净重启');
   });
 
-  it('resume会过滤 FlowPilot 运行时脏文件，不把 .claude/settings.json 误报为业务文件', async () => {
+  it('resume在 baseline 缺失但存在归属未明变更时仍进入 reconciling', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
+    changedFilesSpy.mockReturnValueOnce([]);
+    changedFilesSpy.mockReturnValueOnce(['src/legacy.ts']);
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+
+    await svc.init(TASKS_MD);
+    await rm(join(dir, '.workflow', 'dirty-baseline.json'), { force: true });
+    await svc.next();
+
+    const msg = await svc.resume();
+
+    expect(msg).toContain('已暂停继续调度');
+    expect(msg).toContain('node flow.js adopt 001');
+    expect(msg).toContain('归属未明');
+    await expect(svc.next()).rejects.toThrow(/adopt|restart|skip/);
+  });
+
+  it('resume会过滤 FlowPilot 运行时变更，不把 .claude/settings.json 误报为项目变更', async () => {
     await initGitRepo(dir);
     const repo = new FsWorkflowRepository(dir);
     svc = new WorkflowService(repo, parseTasksMarkdown);
@@ -219,7 +297,7 @@ describe('WorkflowService 集成测试', () => {
     expect(msg).not.toContain('.flowpilot/');
   });
 
-  it('resume在旧工作流缺少baseline时也会过滤 FlowPilot 运行时脏文件', async () => {
+  it('resume在旧工作流缺少baseline时也会过滤 FlowPilot 运行时变更', async () => {
     await initGitRepo(dir);
     const repo = new FsWorkflowRepository(dir);
     svc = new WorkflowService(repo, parseTasksMarkdown);
@@ -280,6 +358,24 @@ describe('WorkflowService 集成测试', () => {
     await svc.init(md);
     const batch = await svc.nextBatch();
     expect(batch.map(b => b.task.id)).toEqual(['001', '002']);
+  });
+
+  it('nextBatch不再受parallelLimit配置裁剪', async () => {
+    const md = '# 并行测试\n\n1. [backend] A\n2. [frontend] B\n3. [general] C\n4. [general] D';
+    const repo = new FsWorkflowRepository(dir);
+    await repo.saveConfig({ parallelLimit: 1 });
+    await svc.init(md);
+    const batch = await svc.nextBatch();
+    expect(batch.map(b => b.task.id)).toEqual(['001', '002', '003', '004']);
+  });
+
+  it('next在存在多个可并行任务时允许串行返回首个任务，并提示可改用 batch', async () => {
+    const md = '# 并行测试\n\n1. [backend] A\n2. [frontend] B\n3. [general] C (deps: 1,2)';
+    await svc.init(md);
+
+    const result = await svc.next();
+    expect(result?.task.id).toBe('001');
+    expect(result?.context).toContain('next --batch');
   });
 
   it('init在setup前记录工作流初始dirty baseline', async () => {
@@ -442,6 +538,60 @@ describe('WorkflowService 集成测试', () => {
 
     expect(helperSpy).not.toHaveBeenCalled();
     expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe(LOCAL_STATE_GITIGNORE);
+  });
+
+  it('setup 选择 Claude Code 时会生成 hooks', async () => {
+    const msg = await svc.setup('claude');
+    expect(msg).toContain('.claude/settings.json 已更新');
+    expect(await readFile(join(dir, 'AGENTS.md'), 'utf-8')).toContain('flowpilot:start');
+    expect(await readFile(join(dir, '.claude', 'settings.json'), 'utf-8')).toContain('TaskCreate');
+  });
+
+  it('setup 选择 Codex 后，后续 init 不会生成 .claude/settings.json', async () => {
+    await svc.setup('codex');
+    await svc.init(TASKS_MD, true);
+    await expect(readFile(join(dir, '.claude', 'settings.json'), 'utf-8')).rejects.toThrow();
+  });
+
+  it('setup 选择 Codex 时不生成 .claude/settings.json', async () => {
+    await svc.setup('codex');
+    await expect(readFile(join(dir, '.claude', 'settings.json'), 'utf-8')).rejects.toThrow();
+    const content = await readFile(join(dir, 'AGENTS.md'), 'utf-8');
+    expect(content).toContain('flowpilot:start');
+    expect(content).toContain('multi_agent');
+    expect(content).toContain('50');
+  });
+
+  it('setup 选择 snow-cli 时额外生成 ROLE.md', async () => {
+    const msg = await svc.setup('snow-cli');
+    expect(msg).toContain('ROLE.md 已更新');
+    const agents = await readFile(join(dir, 'AGENTS.md'), 'utf-8');
+    const role = await readFile(join(dir, 'ROLE.md'), 'utf-8');
+    expect(agents).toContain('flowpilot:start');
+    expect(role).toContain('flowpilot:start');
+    expect(role).toBe(agents);
+    await expect(readFile(join(dir, '.claude', 'settings.json'), 'utf-8')).rejects.toThrow();
+  });
+
+  it('setup 选择 Other 时使用通用模板而不注入 codex 平台增强段', async () => {
+    await svc.setup('other');
+    const content = await readFile(join(dir, 'AGENTS.md'), 'utf-8');
+    expect(content).not.toContain('multi_agent');
+  });
+
+  it('reconciling 状态下 skip 不允许跳过待接管列表之外的任务', async () => {
+    const md = '# 待接管测试\n\n1. [backend] A\n2. [frontend] B';
+    const repo = new FsWorkflowRepository(dir);
+    const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
+    changedFilesSpy.mockReturnValueOnce([]);
+    changedFilesSpy.mockReturnValueOnce(['src/feature.ts']);
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+
+    await svc.init(md);
+    await svc.next();
+    await svc.resume();
+
+    await expect(svc.skip('002')).rejects.toThrow(/待接管列表/);
   });
 
   it('checkpoint提取[REMEMBER]标记写入永久记忆', async () => {
@@ -788,7 +938,7 @@ describe('WorkflowService 集成测试', () => {
     const msg = await svc.finish();
 
     expect(msg).toContain('未找到 dirty baseline');
-    expect(msg).toContain('当前工作区无脏业务文件');
+    expect(msg).toContain('当前工作区无未归档变更');
     expect(msg).toContain('未提交最终commit');
     expect(msg).toContain('工作流回到待命状态');
     expect(commitSpy).not.toHaveBeenCalledWith('finish', expect.any(String), expect.any(String), expect.anything());
@@ -814,23 +964,23 @@ describe('WorkflowService 集成测试', () => {
     expect(await svc.status()).toBeNull();
   });
 
-  it('finish在 cleanup 后若 CLAUDE.md 残留用户改动则拒绝最终提交', async () => {
+  it('finish在 cleanup 后若 AGENTS.md 残留用户改动则拒绝最终提交', async () => {
     const repo = new FsWorkflowRepository(dir);
     const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
     changedFilesSpy.mockReturnValueOnce([]);
-    changedFilesSpy.mockReturnValue(['CLAUDE.md']);
+    changedFilesSpy.mockReturnValue(['AGENTS.md']);
     const commitSpy = vi.spyOn(repo, 'commit');
     vi.spyOn(repo, 'verify').mockReturnValue({ passed: true, scripts: ['npm test'] });
     svc = new WorkflowService(repo, parseTasksMarkdown);
 
     await completeWorkflow(svc);
-    await writeFile(join(dir, 'CLAUDE.md'), `${await readFile(join(dir, 'CLAUDE.md'), 'utf-8')}User residue\n`, 'utf-8');
+    await writeFile(join(dir, 'AGENTS.md'), `${await readFile(join(dir, 'AGENTS.md'), 'utf-8')}User residue\n`, 'utf-8');
     await svc.review();
 
     const msg = await svc.finish();
 
     expect(msg).toContain('拒绝最终提交');
-    expect(msg).toContain('CLAUDE.md');
+    expect(msg).toContain('AGENTS.md');
     expect(commitSpy).not.toHaveBeenCalledWith('finish', expect.any(String), expect.any(String), expect.anything());
     expect((await svc.status())?.status).toBe('finishing');
   });
@@ -893,6 +1043,7 @@ describe('WorkflowService 集成测试', () => {
     vi.spyOn(repo, 'verify').mockReturnValue({ passed: true, scripts: ['npm test'] });
     svc = new WorkflowService(repo, parseTasksMarkdown);
 
+    await svc.setup('claude');
     await completeWorkflow(svc);
     const settingsPath = join(dir, '.claude', 'settings.json');
     const settings = JSON.parse(await readFile(settingsPath, 'utf-8'));
@@ -922,6 +1073,7 @@ describe('WorkflowService 集成测试', () => {
     vi.spyOn(repo, 'verify').mockReturnValue({ passed: true, scripts: ['npm test'] });
     svc = new WorkflowService(repo, parseTasksMarkdown);
 
+    await svc.setup('claude');
     await completeWorkflow(svc);
     const settingsPath = join(dir, '.claude', 'settings.json');
     const settings = JSON.parse(await readFile(settingsPath, 'utf-8'));
@@ -948,7 +1100,7 @@ describe('WorkflowService 集成测试', () => {
     expect(JSON.parse(await readFile(settingsPath, 'utf-8'))).toEqual({ model: 'sonnet' });
   });
 
-  it('finish会对称清理由 setup 创建且内容仍完整匹配的 CLAUDE.md、settings.json 和 .gitignore', async () => {
+  it('finish会对称清理由 setup 创建且内容仍完整匹配的 AGENTS.md、settings.json 和 .gitignore', async () => {
     const repo = new FsWorkflowRepository(dir);
     const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
     changedFilesSpy.mockReturnValueOnce([]);
@@ -964,13 +1116,13 @@ describe('WorkflowService 集成测试', () => {
 
     expect(await svc.status()).toBeNull();
     expect(await repo.loadProgress()).toBeNull();
-    await expect(readFile(join(dir, 'CLAUDE.md'), 'utf-8')).rejects.toThrow();
+    await expect(readFile(join(dir, 'AGENTS.md'), 'utf-8')).rejects.toThrow();
     await expect(readFile(join(dir, '.claude', 'settings.json'), 'utf-8')).rejects.toThrow();
     expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe(LOCAL_STATE_GITIGNORE);
   });
 
   it('abort仅移除预存文件中的 FlowPilot 注入内容', async () => {
-    await writeFile(join(dir, 'CLAUDE.md'), '# Custom\n\nKeep me.\n', 'utf-8');
+    await writeFile(join(dir, 'AGENTS.md'), '# Custom\n\nKeep me.\n', 'utf-8');
     await mkdir(join(dir, '.claude'), { recursive: true });
     await writeFile(join(dir, '.claude', 'settings.json'), JSON.stringify({
       model: 'opus',
@@ -989,7 +1141,7 @@ describe('WorkflowService 集成测试', () => {
     const msg = await svc.abort();
 
     expect(msg).toContain('已中止');
-    expect(await readFile(join(dir, 'CLAUDE.md'), 'utf-8')).toBe('# Custom\n\nKeep me.\n');
+    expect(await readFile(join(dir, 'AGENTS.md'), 'utf-8')).toBe('# Custom\n\nKeep me.\n');
     expect(JSON.parse(await readFile(join(dir, '.claude', 'settings.json'), 'utf-8'))).toEqual({
       model: 'opus',
       hooks: {
@@ -1029,9 +1181,9 @@ describe('WorkflowService 集成测试', () => {
 
     expect(msg).toContain('进化摘要:');
     expect(msg).toContain('reflect: 已执行');
-    expect(msg).toContain('experiment: 已执行');
-    expect(msg).toContain('config变更: 是');
-    expect(msg).toContain('变更键: parallelLimit');
+    expect(msg).toContain('experiment: 未执行');
+    expect(msg).toContain('config变更: 否');
+    expect(msg).toContain('变更键: 无');
   });
 
   it('finish在无实验时也输出未执行和无配置变更', async () => {

@@ -7,12 +7,20 @@ import { readFileSync } from 'fs';
 import { resolve, relative } from 'path';
 import type { WorkflowService } from '../application/workflow-service';
 import { formatStatus, formatTask, formatBatch } from './formatter';
-import { readStdinIfPiped } from './stdin';
+import { promptSetupClient, readStdinIfPiped } from './stdin';
 import { enableVerbose } from '../infrastructure/logger';
+import type { SetupClient } from '../domain/types';
 
+interface CliDeps {
+  readStdinIfPiped?: typeof readStdinIfPiped;
+  promptSetupClient?: () => Promise<SetupClient>;
+}
 
 export class CLI {
-  constructor(private readonly service: WorkflowService) {}
+  constructor(
+    private readonly service: WorkflowService,
+    private readonly deps: CliDeps = {},
+  ) {}
 
   async run(argv: string[]): Promise<void> {
     const args = argv.slice(2);
@@ -38,13 +46,14 @@ export class CLI {
     switch (cmd) {
       case 'init': {
         const force = rest.includes('--force');
-        const md = await readStdinIfPiped();
+        const md = await (this.deps.readStdinIfPiped ?? readStdinIfPiped)();
         let out: string;
         if (md.trim()) {
           const data = await s.init(md, force);
           out = `已初始化工作流: ${data.name} (${data.tasks.length} 个任务)`;
         } else {
-          out = await s.setup();
+          const client = await (this.deps.promptSetupClient ?? promptSetupClient)();
+          out = await s.setup(client);
         }
         return out + '\n\n提示: 建议先通过 /plugin 安装插件 superpowers、frontend-design、feature-dev、code-review、context7，未安装则子Agent无法使用专业技能，功能会降级';
       }
@@ -83,9 +92,42 @@ export class CLI {
         } else if (rest.length > 1 && fileIdx < 0 && filesIdx < 0) {
           detail = rest.slice(1).join(' ');
         } else {
-          detail = await readStdinIfPiped();
+          detail = await (this.deps.readStdinIfPiped ?? readStdinIfPiped)();
         }
         return await s.checkpoint(id, detail.trim(), files);
+      }
+
+      case 'adopt': {
+        const id = rest[0];
+        if (!id) throw new Error('需要任务ID');
+        const filesIdx = rest.indexOf('--files');
+        const fileIdx = rest.indexOf('--file');
+        let detail: string;
+        let files: string[] | undefined;
+
+        if (filesIdx >= 0) {
+          files = [];
+          for (let i = filesIdx + 1; i < rest.length && !rest[i].startsWith('--'); i++) {
+            files.push(rest[i]);
+          }
+        }
+
+        if (fileIdx >= 0 && rest[fileIdx + 1]) {
+          const filePath = resolve(rest[fileIdx + 1]);
+          if (relative(process.cwd(), filePath).startsWith('..')) throw new Error('--file 路径不能超出项目目录');
+          detail = readFileSync(filePath, 'utf-8');
+        } else if (rest.length > 1 && fileIdx < 0 && filesIdx < 0) {
+          detail = rest.slice(1).join(' ');
+        } else {
+          detail = await (this.deps.readStdinIfPiped ?? readStdinIfPiped)();
+        }
+        return await s.adopt(id, detail.trim(), files);
+      }
+
+      case 'restart': {
+        const id = rest[0];
+        if (!id) throw new Error('需要任务ID');
+        return await s.restart(id);
       }
 
       case 'skip': {
@@ -119,7 +161,7 @@ export class CLI {
       }
 
       case 'evolve': {
-        const text = await readStdinIfPiped();
+        const text = await (this.deps.readStdinIfPiped ?? readStdinIfPiped)();
         if (!text.trim()) throw new Error('需要通过 stdin 传入反思结果');
         return await s.evolve(text.trim());
       }
@@ -147,9 +189,11 @@ export class CLI {
 }
 
 const USAGE = `用法: node flow.js [--verbose] <command>
-  init [--force]       初始化工作流 (stdin传入任务markdown，无stdin则接管项目)
+  init [--force]       初始化工作流 (stdin传入任务markdown，无stdin则显示客户端选项并接管项目)
   next [--batch]       获取下一个待执行任务 (--batch 返回所有可并行任务)
   checkpoint <id>      记录任务完成 [--file <path> | stdin | 内联文本] [--files f1 f2 ...]
+  adopt <id>           接管中断后待接管变更并补 checkpoint [--file <path> | stdin | 内联文本] [--files f1 f2 ...]
+  restart <id>         在确认并处理列出的本任务变更后允许任务从头重做；归属未明变更需人工确认，禁止整文件 git restore
   skip <id>            手动跳过任务
   review               标记code-review已完成 (finish前必须执行)
   finish               智能收尾 (验证+总结+回到待命，需先review)

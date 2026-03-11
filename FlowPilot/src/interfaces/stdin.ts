@@ -3,6 +3,9 @@
  * @description stdin 工具
  */
 
+import { createInterface } from 'node:readline/promises';
+import type { SetupClient } from '../domain/types';
+
 /** 检测是否为交互式终端 */
 export function isTTY(): boolean {
   return process.stdin.isTTY === true;
@@ -18,4 +21,37 @@ export function readStdinIfPiped(timeout = 30_000): Promise<string> {
     process.stdin.on('end', () => { clearTimeout(timer); resolve(Buffer.concat(chunks).toString('utf-8')); });
     process.stdin.on('error', e => { clearTimeout(timer); reject(e); });
   });
+}
+
+const CLIENT_OPTIONS: Array<{ key: string; value: SetupClient; label: string; detail: string }> = [
+  { key: '1', value: 'claude', label: 'Claude Code', detail: '生成 AGENTS.md + .claude/settings.json' },
+  { key: '2', value: 'codex', label: 'Codex', detail: '只生成 AGENTS.md' },
+  { key: '3', value: 'cursor', label: 'Cursor', detail: '只生成 AGENTS.md' },
+  { key: '4', value: 'snow-cli', label: 'snow-cli', detail: '生成 AGENTS.md + ROLE.md' },
+  { key: '5', value: 'other', label: 'Other', detail: '只生成 AGENTS.md' },
+];
+
+export function resolveSetupClientChoice(answer: string): SetupClient {
+  const trimmed = answer.trim();
+  const matched = CLIENT_OPTIONS.find(option => option.key === trimmed);
+  return matched?.value ?? 'other';
+}
+
+export async function promptSetupClient(): Promise<SetupClient> {
+  if (!isTTY()) return 'other';
+
+  process.stdout.write([
+    '请选择目标客户端：',
+    ...CLIENT_OPTIONS.map(option => `${option.key}. ${option.label} - ${option.detail}`),
+    '直接回车默认选择 5. Other',
+    '',
+  ].join('\n'));
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await rl.question('选择 [1-5]：');
+    return resolveSetupClientChoice(answer);
+  } finally {
+    rl.close();
+  }
 }
