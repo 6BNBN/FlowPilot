@@ -164,11 +164,7 @@ function fourDimensionAnalysis(stats: WorkflowStats): { findings: string[]; expe
     const rate = ((efficient.length / stats.totalTasks) * 100).toFixed(0);
     findings.push(`[delight] ${efficient.length}/${stats.totalTasks} 任务一次通过 (${rate}%)`);
     if (efficient.length === stats.totalTasks && stats.totalTasks >= 3) {
-      experiments.push({
-        trigger: '全部一次通过', observation: `${stats.totalTasks} 个任务零重试`,
-        action: '将 parallelLimit 提升至 ' + Math.min(stats.totalTasks, 5), expected: '提高并行度',
-        target: 'config',
-      });
+      findings.push('[delight] 吞吐稳定，可继续保持高并行人工配置');
     }
   }
   // 成功但有重试的任务 → 建议加前置检查
@@ -326,7 +322,7 @@ function readSnapshotConfig(snapshot: FilesSnapshot): string | null {
 }
 
 /** 已知 config 参数名 */
-const KNOWN_PARAMS = ['maxRetries', 'timeout', 'parallelLimit', 'verifyTimeout'] as const;
+const KNOWN_PARAMS = ['maxRetries', 'timeout', 'verifyTimeout'] as const;
 
 /** 从 action 文本提取参数名和数值 */
 function parseConfigAction(action: string): { key: string; value: number } | null {
@@ -337,7 +333,7 @@ function parseConfigAction(action: string): { key: string; value: number } | nul
   }
   // 中文关键词映射
   const CN_MAP: Record<string, string> = {
-    '并行': 'parallelLimit', '重试': 'maxRetries', '超时': 'timeout', '验证超时': 'verifyTimeout',
+    '重试': 'maxRetries', '超时': 'timeout', '验证超时': 'verifyTimeout',
   };
   const cnEntries = Object.entries(CN_MAP).sort((a, b) => b[0].length - a[0].length);
   for (const [cn, key] of cnEntries) {

@@ -103,10 +103,10 @@ describe('FsWorkflowRepository', () => {
     expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe(`node_modules/\n${LOCAL_STATE_GITIGNORE}`);
   });
 
-  it('ensureClaudeMd 首次创建', async () => {
+  it('ensureClaudeMd 首次创建 AGENTS.md', async () => {
     const wrote = await repo.ensureClaudeMd();
     expect(wrote).toBe(true);
-    const content = await readFile(join(dir, 'CLAUDE.md'), 'utf-8');
+    const content = await readFile(join(dir, 'AGENTS.md'), 'utf-8');
     expect(content).toContain('flowpilot:start');
   });
 
@@ -114,6 +114,23 @@ describe('FsWorkflowRepository', () => {
     await repo.ensureClaudeMd();
     const wrote = await repo.ensureClaudeMd();
     expect(wrote).toBe(false);
+  });
+
+  it('ensureClaudeMd 在已有 CLAUDE.md 时保持兼容并继续写入 CLAUDE.md', async () => {
+    await writeFile(join(dir, 'CLAUDE.md'), '# Custom\n\n', 'utf-8');
+
+    const wrote = await repo.ensureClaudeMd();
+
+    expect(wrote).toBe(true);
+    expect(await readFile(join(dir, 'CLAUDE.md'), 'utf-8')).toContain('flowpilot:start');
+    expect(existsSync(join(dir, 'AGENTS.md'))).toBe(false);
+  });
+
+  it('ensureRoleMd 首次创建 ROLE.md', async () => {
+    const wrote = await repo.ensureRoleMd();
+    expect(wrote).toBe(true);
+    const content = await readFile(join(dir, 'ROLE.md'), 'utf-8');
+    expect(content).toContain('flowpilot:start');
   });
 
   it('config 读写', async () => {
@@ -162,19 +179,19 @@ describe('FsWorkflowRepository', () => {
     expect(await repo.loadProgress()).toBeNull();
   });
 
-  it('cleanupInjections 移除 CLAUDE.md 协议块', async () => {
-    await writeFile(join(dir, 'CLAUDE.md'), '# Custom\n\n', 'utf-8');
+  it('cleanupInjections 移除 AGENTS.md 协议块', async () => {
+    await writeFile(join(dir, 'AGENTS.md'), '# Custom\n\n', 'utf-8');
     await repo.ensureClaudeMd();
     await repo.cleanupInjections();
-    const content = await readFile(join(dir, 'CLAUDE.md'), 'utf-8');
+    const content = await readFile(join(dir, 'AGENTS.md'), 'utf-8');
     expect(content).toBe('# Custom\n');
     expect(content).not.toContain('flowpilot:start');
   });
 
-  it('cleanupInjections 在注入块被编辑后保持 CLAUDE.md 不变', async () => {
-    await writeFile(join(dir, 'CLAUDE.md'), '# Custom\n\n', 'utf-8');
+  it('cleanupInjections 在注入块被编辑后保持 AGENTS.md 不变', async () => {
+    await writeFile(join(dir, 'AGENTS.md'), '# Custom\n\n', 'utf-8');
     await repo.ensureClaudeMd();
-    const path = join(dir, 'CLAUDE.md');
+    const path = join(dir, 'AGENTS.md');
     const original = await readFile(path, 'utf-8');
     const edited = original.replace('FlowPilot Workflow Protocol', 'FlowPilot Workflow Protocol (edited)');
     expect(edited).not.toBe(original);
@@ -244,19 +261,21 @@ describe('FsWorkflowRepository', () => {
 
   it('cleanupInjections 删除由 FlowPilot 创建且无用户内容的文件', async () => {
     await repo.ensureClaudeMd();
+    await repo.ensureRoleMd();
     await repo.ensureHooks();
     await repo.ensureLocalStateIgnored();
 
     await repo.cleanupInjections();
 
-    expect(existsSync(join(dir, 'CLAUDE.md'))).toBe(false);
+    expect(existsSync(join(dir, 'AGENTS.md'))).toBe(false);
+    expect(existsSync(join(dir, 'ROLE.md'))).toBe(false);
     expect(existsSync(join(dir, '.claude', 'settings.json'))).toBe(false);
     expect(existsSync(join(dir, '.claude'))).toBe(false);
     expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe(LOCAL_STATE_GITIGNORE);
   });
 
   it('cleanupInjections 仅移除预存文件中的 FlowPilot 注入内容', async () => {
-    await writeFile(join(dir, 'CLAUDE.md'), '# Custom\n\nKeep me.\n', 'utf-8');
+    await writeFile(join(dir, 'AGENTS.md'), '# Custom\n\nKeep me.\n', 'utf-8');
     await mkdir(join(dir, '.claude'), { recursive: true });
     await writeFile(join(dir, '.claude', 'settings.json'), JSON.stringify({
       model: 'opus',
@@ -273,7 +292,7 @@ describe('FsWorkflowRepository', () => {
     await repo.ensureLocalStateIgnored();
     await repo.cleanupInjections();
 
-    expect(await readFile(join(dir, 'CLAUDE.md'), 'utf-8')).toBe('# Custom\n\nKeep me.\n');
+    expect(await readFile(join(dir, 'AGENTS.md'), 'utf-8')).toBe('# Custom\n\nKeep me.\n');
     expect(JSON.parse(await readFile(join(dir, '.claude', 'settings.json'), 'utf-8'))).toEqual({
       model: 'opus',
       hooks: {
@@ -290,7 +309,7 @@ describe('FsWorkflowRepository', () => {
     await repo.ensureHooks();
     await repo.ensureLocalStateIgnored();
 
-    await writeFile(join(dir, 'CLAUDE.md'), `${await readFile(join(dir, 'CLAUDE.md'), 'utf-8')}User note\n`, 'utf-8');
+    await writeFile(join(dir, 'AGENTS.md'), `${await readFile(join(dir, 'AGENTS.md'), 'utf-8')}User note\n`, 'utf-8');
     const settingsPath = join(dir, '.claude', 'settings.json');
     const settings = JSON.parse(await readFile(settingsPath, 'utf-8'));
     await writeFile(settingsPath, JSON.stringify({
@@ -308,8 +327,8 @@ describe('FsWorkflowRepository', () => {
 
     await repo.cleanupInjections();
 
-    expect(await readFile(join(dir, 'CLAUDE.md'), 'utf-8')).toContain('User note');
-    expect(await readFile(join(dir, 'CLAUDE.md'), 'utf-8')).not.toContain('flowpilot:start');
+    expect(await readFile(join(dir, 'AGENTS.md'), 'utf-8')).toContain('User note');
+    expect(await readFile(join(dir, 'AGENTS.md'), 'utf-8')).not.toContain('flowpilot:start');
     expect(JSON.parse(await readFile(settingsPath, 'utf-8'))).toEqual({
       model: 'sonnet',
       hooks: {
@@ -370,6 +389,27 @@ describe('FsWorkflowRepository', () => {
     expect(settings.model).toBe('opus');
     expect(preToolUse.map(entry => entry.matcher)).toEqual(['TaskCreate', 'OtherTool', 'TaskUpdate', 'TaskList']);
     expect(preToolUse.filter(entry => entry.matcher === 'TaskCreate')).toHaveLength(1);
+  });
+
+  it('ensureHooks 忽略畸形的 PreToolUse 项并继续补齐缺失 hooks', async () => {
+    await mkdir(join(dir, '.claude'), { recursive: true });
+    await writeFile(join(dir, '.claude', 'settings.json'), JSON.stringify({
+      model: 'opus',
+      hooks: {
+        PreToolUse: [
+          'broken entry',
+          { matcher: 'TaskCreate' },
+          { matcher: 'OtherTool', hooks: [{ type: 'prompt', prompt: 'keep me' }] },
+        ],
+      },
+    }, null, 2) + '\n', 'utf-8');
+
+    await expect(repo.ensureHooks()).resolves.toBe(true);
+
+    const settings = JSON.parse(await readFile(join(dir, '.claude', 'settings.json'), 'utf-8'));
+    const preToolUse = settings.hooks.PreToolUse as Array<{ matcher: string }>;
+    expect(settings.model).toBe('opus');
+    expect(preToolUse.map(entry => entry.matcher)).toEqual(['OtherTool', 'TaskCreate', 'TaskUpdate', 'TaskList']);
   });
 
   it('ensureHooks records the earliest exact settings baseline and cleanup compares against it', async () => {

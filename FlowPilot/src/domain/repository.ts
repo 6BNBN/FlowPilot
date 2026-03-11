@@ -3,7 +3,7 @@
  * @description 仓储接口 - 持久化契约
  */
 
-import type { ProgressData, WorkflowStats, EvolutionEntry } from './types';
+import type { ProgressData, SetupClient, WorkflowStats, EvolutionEntry } from './types';
 
 /** 单个验证步骤状态 */
 export type VerifyStepStatus = 'passed' | 'skipped' | 'failed';
@@ -53,8 +53,10 @@ export interface WorkflowRepository {
   /** 保存任务树定义 */
   saveTasks(content: string): Promise<void>;
   loadTasks(): Promise<string | null>;
-  /** 确保CLAUDE.md包含工作流协议 */
-  ensureClaudeMd(): Promise<boolean>;
+  /** 确保 instruction file（新项目默认 AGENTS.md，兼容旧的 CLAUDE.md）包含工作流协议 */
+  ensureClaudeMd(client?: SetupClient): Promise<boolean>;
+  /** 为 snow-cli 额外生成 ROLE.md，内容与主 instruction file 协议一致 */
+  ensureRoleMd(client?: SetupClient): Promise<boolean>;
   /** 确保.claude/settings.json包含hooks，并记录首次注入前的精确基线 */
   ensureHooks(): Promise<boolean>;
   ensureLocalStateIgnored(): Promise<boolean>;
@@ -75,7 +77,7 @@ export interface WorkflowRepository {
   cleanup(): void;
   /** 执行项目验证（build/test/lint） */
   verify(): VerifyResult;
-  /** 清理注入的CLAUDE.md协议块和hooks */
+  /** 清理注入的 instruction file 协议块和hooks */
   cleanupInjections(): Promise<void>;
   /** cleanup 后的 settings.json 是否与注入前精确基线一致 */
   doesSettingsResidueMatchBaseline(): Promise<boolean>;

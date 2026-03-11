@@ -6,11 +6,14 @@
 /** 任务类型 - 决定子Agent调用哪个插件 */
 export type TaskType = 'frontend' | 'backend' | 'general';
 
+/** setup 目标客户端 */
+export type SetupClient = 'claude' | 'codex' | 'cursor' | 'snow-cli' | 'other';
+
 /** 任务状态 */
 export type TaskStatus = 'pending' | 'active' | 'done' | 'skipped' | 'failed';
 
 /** 工作流状态 */
-export type WorkflowStatus = 'idle' | 'running' | 'finishing' | 'completed' | 'aborted';
+export type WorkflowStatus = 'idle' | 'running' | 'reconciling' | 'finishing' | 'completed' | 'aborted';
 
 /** 单个任务条目 */
 export interface TaskEntry {

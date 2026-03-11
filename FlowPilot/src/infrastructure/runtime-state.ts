@@ -15,6 +15,7 @@ const ACTIVATED_FILE = 'activated.json';
 const DIRTY_BASELINE_FILE = 'dirty-baseline.json';
 const OWNED_FILES_FILE = 'owned-files.json';
 const SETUP_OWNED_FILES_FILE = 'setup-owned.json';
+const RECONCILE_STATE_FILE = 'reconcile-state.json';
 const INJECTIONS_FILE = 'injections.json';
 const RUNTIME_PATH_PREFIXES = ['.flowpilot/', '.workflow/'];
 const RUNTIME_FILES = new Set(['.claude/settings.json']);
@@ -49,6 +50,11 @@ export interface SetupOwnedState {
   files: string[];
 }
 
+/** 中断恢复后待接管的任务 */
+export interface ReconcileState {
+  taskIds: string[];
+}
+
 /** FlowPilot 写入 settings.json 的 hook 结构 */
 export interface HookEntry {
   matcher: string;
@@ -65,6 +71,7 @@ export interface ExactFileSnapshot {
 export interface ClaudeMdInjectionState {
   created: boolean;
   block: string;
+  path?: string;
   scaffold?: string;
 }
 
@@ -85,6 +92,7 @@ export interface GitignoreInjectionState {
 /** setup/init 阶段的精确注入 manifest */
 export interface SetupInjectionManifest {
   claudeMd?: ClaudeMdInjectionState;
+  roleMd?: ClaudeMdInjectionState;
   hooks?: HooksInjectionState;
   gitignore?: GitignoreInjectionState;
 }
@@ -94,6 +102,14 @@ export interface DirtyFileComparison {
   currentFiles: string[];
   preservedBaselineFiles: string[];
   newDirtyFiles: string[];
+}
+
+/** resume/restart 时的 dirty 文件归属分类 */
+export interface ResumeDirtyClassification {
+  currentFiles: string[];
+  preservedBaselineFiles: string[];
+  taskOwnedResidueFiles: string[];
+  ambiguousFiles: string[];
 }
 
 /** 运行时锁解析结果 */
@@ -175,6 +191,10 @@ function isSetupOwnedState(value: unknown): value is SetupOwnedState {
   return isRecord(value) && Array.isArray(value.files);
 }
 
+function isReconcileState(value: unknown): value is ReconcileState {
+  return isRecord(value) && Array.isArray(value.taskIds);
+}
+
 function isHookEntry(value: unknown): value is HookEntry {
   if (!isRecord(value) || typeof value.matcher !== 'string' || !Array.isArray(value.hooks)) {
     return false;
@@ -193,6 +213,7 @@ function isClaudeMdInjectionState(value: unknown): value is ClaudeMdInjectionSta
   return isRecord(value)
     && typeof value.created === 'boolean'
     && typeof value.block === 'string'
+    && (value.path === undefined || typeof value.path === 'string')
     && (value.scaffold === undefined || typeof value.scaffold === 'string');
 }
 
@@ -215,6 +236,7 @@ function isGitignoreInjectionState(value: unknown): value is GitignoreInjectionS
 function isSetupInjectionManifest(value: unknown): value is SetupInjectionManifest {
   return isRecord(value)
     && (value.claudeMd === undefined || isClaudeMdInjectionState(value.claudeMd))
+    && (value.roleMd === undefined || isClaudeMdInjectionState(value.roleMd))
     && (value.hooks === undefined || isHooksInjectionState(value.hooks))
     && (value.gitignore === undefined || isGitignoreInjectionState(value.gitignore));
 }
@@ -222,6 +244,17 @@ function isSetupInjectionManifest(value: unknown): value is SetupInjectionManife
 function normalizeSetupOwnedState(state: SetupOwnedState): SetupOwnedState {
   return {
     files: normalizeDirtyFiles(state.files.filter((file): file is string => typeof file === 'string')),
+  };
+}
+
+function normalizeReconcileState(state: ReconcileState): ReconcileState {
+  return {
+    taskIds: [...new Set(
+      state.taskIds
+        .filter((taskId): taskId is string => typeof taskId === 'string')
+        .map(taskId => taskId.trim())
+        .filter(taskId => taskId.length > 0),
+    )],
   };
 }
 
@@ -253,7 +286,17 @@ function normalizeSetupInjectionManifest(manifest: SetupInjectionManifest): Setu
     normalized.claudeMd = {
       created: manifest.claudeMd.created,
       block: manifest.claudeMd.block,
+      ...(manifest.claudeMd.path !== undefined ? { path: manifest.claudeMd.path } : {}),
       ...(manifest.claudeMd.scaffold !== undefined ? { scaffold: manifest.claudeMd.scaffold } : {}),
+    };
+  }
+
+  if (manifest.roleMd) {
+    normalized.roleMd = {
+      created: manifest.roleMd.created,
+      block: manifest.roleMd.block,
+      ...(manifest.roleMd.path !== undefined ? { path: manifest.roleMd.path } : {}),
+      ...(manifest.roleMd.scaffold !== undefined ? { scaffold: manifest.roleMd.scaffold } : {}),
     };
   }
 
@@ -307,6 +350,27 @@ export function compareDirtyFilesAgainstBaseline(
     currentFiles: normalizedCurrentFiles,
     preservedBaselineFiles: normalizedCurrentFiles.filter(file => baselineSet.has(file)),
     newDirtyFiles: normalizedCurrentFiles.filter(file => !baselineSet.has(file)),
+  };
+}
+
+/** 将当前 dirty 文件划分为 baseline 保留、明确 task-owned residue、以及归属未明变更 */
+export function classifyResumeDirtyFiles(
+  currentFiles: string[],
+  baselineFiles: string[] | null,
+  setupOwnedFiles: string[],
+  taskOwnedFiles: string[],
+): ResumeDirtyClassification {
+  const comparison = compareDirtyFilesAgainstBaseline(currentFiles, baselineFiles ?? []);
+  const setupOwnedSet = new Set(normalizeDirtyFiles(setupOwnedFiles));
+  const taskOwnedSet = new Set(normalizeDirtyFiles(taskOwnedFiles));
+  const candidateFiles = (baselineFiles ? comparison.newDirtyFiles : comparison.currentFiles)
+    .filter(file => !setupOwnedSet.has(file));
+
+  return {
+    currentFiles: comparison.currentFiles.filter(file => !setupOwnedSet.has(file)),
+    preservedBaselineFiles: comparison.preservedBaselineFiles.filter(file => !setupOwnedSet.has(file)),
+    taskOwnedResidueFiles: candidateFiles.filter(file => taskOwnedSet.has(file)),
+    ambiguousFiles: candidateFiles.filter(file => !taskOwnedSet.has(file)),
   };
 }
 
@@ -586,6 +650,36 @@ export async function saveSetupOwnedFiles(basePath: string, files: string[]): Pr
   return next;
 }
 
+/** 读取中断待接管任务状态，缺失时返回空列表 */
+export async function loadReconcileState(basePath: string): Promise<ReconcileState> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(runtimePath(basePath, RECONCILE_STATE_FILE), 'utf-8'));
+    if (!isReconcileState(parsed)) {
+      return { taskIds: [] };
+    }
+    return normalizeReconcileState(parsed);
+  } catch {
+    return { taskIds: [] };
+  }
+}
+
+/** 持久化中断待接管任务状态 */
+export async function saveReconcileState(basePath: string, taskIds: string[]): Promise<ReconcileState> {
+  const next = normalizeReconcileState({ taskIds });
+  await mkdir(runtimeDir(basePath), { recursive: true });
+  const path = runtimePath(basePath, RECONCILE_STATE_FILE);
+  await writeFile(path + '.tmp', JSON.stringify(next), 'utf-8');
+  await rename(path + '.tmp', path);
+  return next;
+}
+
+/** 清理中断待接管任务状态 */
+export async function clearReconcileState(basePath: string): Promise<void> {
+  try {
+    await unlink(runtimePath(basePath, RECONCILE_STATE_FILE));
+  } catch {}
+}
+
 /** 读取 setup/init 阶段的精确注入 manifest */
 export async function loadSetupInjectionManifest(basePath: string): Promise<SetupInjectionManifest> {
   try {
@@ -608,6 +702,7 @@ export async function mergeSetupInjectionManifest(
   const next = normalizeSetupInjectionManifest({
     ...current,
     ...(patch.claudeMd ? { claudeMd: patch.claudeMd } : {}),
+    ...(patch.roleMd ? { roleMd: patch.roleMd } : {}),
     ...(patch.gitignore ? { gitignore: patch.gitignore } : {}),
     ...(patch.hooks
       ? {

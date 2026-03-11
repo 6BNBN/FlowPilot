@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
+  classifyResumeDirtyFiles,
   compareDirtyFilesAgainstBaseline,
   getTaskActivationAge,
   isRuntimeLockStale,
@@ -278,6 +279,34 @@ describe('runtime-state shared metadata', () => {
       currentFiles: ['README.md', 'src/feature.ts'],
       preservedBaselineFiles: ['README.md'],
       newDirtyFiles: ['src/feature.ts'],
+    });
+  });
+
+  it('classifyResumeDirtyFiles keeps workflow-period changes ambiguous until ownership is explicit', () => {
+    expect(classifyResumeDirtyFiles(
+      ['src\\feature.ts', './README.md', '.claude/settings.json'],
+      ['README.md'],
+      ['.claude/settings.json'],
+      [],
+    )).toEqual({
+      currentFiles: ['README.md', 'src/feature.ts'],
+      preservedBaselineFiles: ['README.md'],
+      taskOwnedResidueFiles: [],
+      ambiguousFiles: ['src/feature.ts'],
+    });
+  });
+
+  it('classifyResumeDirtyFiles separates explicit task-owned residue from ambiguous files', () => {
+    expect(classifyResumeDirtyFiles(
+      ['src\\feature.ts', 'docs/note.md', './README.md'],
+      ['README.md'],
+      [],
+      ['src/feature.ts'],
+    )).toEqual({
+      currentFiles: ['README.md', 'docs/note.md', 'src/feature.ts'],
+      preservedBaselineFiles: ['README.md'],
+      taskOwnedResidueFiles: ['src/feature.ts'],
+      ambiguousFiles: ['docs/note.md'],
     });
   });
 });

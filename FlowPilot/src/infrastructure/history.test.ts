@@ -170,6 +170,20 @@ describe('experiment', () => {
     expect(snapshot.files['.flowpilot/config.json']).toBe('{"maxRetries":2}');
   });
 
+  it('config target ignores parallelLimit actions', async () => {
+    mkdirSync(join(base, '.flowpilot'), { recursive: true });
+    writeFileSync(join(base, '.flowpilot', 'config.json'), '{"maxRetries":2}');
+    const report: ReflectReport = {
+      timestamp: '', findings: [],
+      experiments: [{ trigger: 't', observation: 'o', action: '设置 parallelLimit 为 5', expected: 'e', target: 'config' }],
+    };
+    const log = await experiment(report, base);
+    const cfg = JSON.parse(readFileSync(join(base, '.flowpilot', 'config.json'), 'utf-8'));
+    expect(cfg.parallelLimit).toBeUndefined();
+    expect(cfg.maxRetries).toBe(2);
+    expect(log.experiments[0]?.applied).toBe(false);
+  });
+
   it('appends experiment log to experiments.json', async () => {
     const report: ReflectReport = {
       timestamp: '', findings: [],

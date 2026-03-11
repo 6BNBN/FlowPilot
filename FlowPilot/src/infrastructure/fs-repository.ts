@@ -7,11 +7,11 @@ import { mkdir, readFile, writeFile, unlink, rm, rename, readdir, stat, access, 
 import { join } from 'path';
 import { openSync, closeSync, writeFileSync } from 'fs';
 import { hostname } from 'os';
-import type { ProgressData, TaskEntry, WorkflowStats, EvolutionEntry } from '../domain/types';
+import type { ProgressData, SetupClient, TaskEntry, WorkflowStats, EvolutionEntry } from '../domain/types';
 import type { WorkflowRepository, VerifyResult, CommitResult } from '../domain/repository';
 import { autoCommit, gitCleanup, tagTask, rollbackToTask, cleanTags as gitCleanTags, listChangedFiles as gitListChangedFiles } from './git';
 import { runVerify } from './verify';
-import { PROTOCOL_TEMPLATE } from './protocol-template';
+import { getProtocolTemplate, PROTOCOL_TEMPLATE } from './protocol-template';
 import {
   createRuntimeLockMetadata,
   defaultInvalidLockStaleAfterMs,
@@ -28,8 +28,11 @@ import type { ExactFileSnapshot, HookEntry, SetupInjectionManifest } from './run
 const PERSISTENT_DIR = '.flowpilot';
 const LEGACY_RUNTIME_DIR = '.workflow';
 const CONFIG_FILE = 'config.json';
+const PRIMARY_INSTRUCTION_FILE = 'AGENTS.md';
+const LEGACY_INSTRUCTION_FILE = 'CLAUDE.md';
+const ROLE_INSTRUCTION_FILE = 'ROLE.md';
 
-const VALID_WORKFLOW_STATUS = new Set(['idle', 'running', 'finishing', 'completed', 'aborted']);
+const VALID_WORKFLOW_STATUS = new Set(['idle', 'running', 'reconciling', 'finishing', 'completed', 'aborted']);
 const VALID_TASK_STATUS = new Set(['pending', 'active', 'done', 'skipped', 'failed']);
 
 /** 解析 progress.md 文本为工作流状态 */
@@ -86,7 +89,7 @@ async function readPersistedConfig(basePath: string): Promise<Record<string, unk
 }
 
 /** 读取协议模板：优先 .flowpilot/config.json，兼容旧的 .workflow/config.json */
-async function loadProtocolTemplate(basePath: string): Promise<string> {
+async function loadProtocolTemplate(basePath: string, client: SetupClient = 'other'): Promise<string> {
   const config = await readPersistedConfig(basePath);
   const protocolTemplate = config?.protocolTemplate;
   if (typeof protocolTemplate === 'string' && protocolTemplate.length > 0) {
@@ -94,7 +97,7 @@ async function loadProtocolTemplate(basePath: string): Promise<string> {
       return await readFile(join(basePath, protocolTemplate), 'utf-8');
     } catch {}
   }
-  return PROTOCOL_TEMPLATE;
+  return client === 'other' ? PROTOCOL_TEMPLATE : getProtocolTemplate(client);
 }
 
 function hookEntry(matcher: string): HookEntry {
@@ -162,6 +165,48 @@ function cleanupClaudeContent(content: string, manifest: SetupInjectionManifest)
   }
 
   return normalized === content ? { effect: 'noop' } : { effect: 'write', content: normalized };
+}
+
+async function resolveInstructionFile(basePath: string): Promise<{ absPath: string; relPath: string }> {
+  const primaryPath = join(basePath, PRIMARY_INSTRUCTION_FILE);
+  try {
+    await access(primaryPath);
+    return { absPath: primaryPath, relPath: PRIMARY_INSTRUCTION_FILE };
+  } catch {}
+
+  const legacyPath = join(basePath, LEGACY_INSTRUCTION_FILE);
+  try {
+    await access(legacyPath);
+    return { absPath: legacyPath, relPath: LEGACY_INSTRUCTION_FILE };
+  } catch {}
+
+  return { absPath: primaryPath, relPath: PRIMARY_INSTRUCTION_FILE };
+}
+
+async function ensureInstructionDocument(basePath: string, relPath: string, client: SetupClient = 'other'): Promise<boolean> {
+  const path = join(basePath, relPath);
+  const marker = '<!-- flowpilot:start -->';
+  const block = (await loadProtocolTemplate(basePath, client)).trim();
+  let created = false;
+  let scaffold = '';
+  try {
+    const content = await readFile(path, 'utf-8');
+    if (content.includes(marker)) return false;
+    await writeFile(path, content.trimEnd() + '\n\n' + block + '\n', 'utf-8');
+  } catch {
+    created = true;
+    scaffold = '# Project\n\n';
+    await writeFile(path, `${scaffold}${block}\n`, 'utf-8');
+  }
+  await mergeSetupInjectionManifest(basePath, {
+    [relPath === ROLE_INSTRUCTION_FILE ? 'roleMd' : 'claudeMd']: {
+      created,
+      block,
+      path: relPath,
+      ...(created ? { scaffold } : {}),
+    },
+  });
+  return true;
 }
 
 function cleanupHookSettings(settings: Record<string, unknown>, manifest: SetupInjectionManifest): CleanupEffect {
@@ -497,30 +542,13 @@ export class FsWorkflowRepository implements WorkflowRepository {
     }
   }
 
-  async ensureClaudeMd(): Promise<boolean> {
-    const base = join(this.root, '..');
-    const path = join(base, 'CLAUDE.md');
-    const marker = '<!-- flowpilot:start -->';
-    const block = (await loadProtocolTemplate(this.base)).trim();
-    let created = false;
-    let scaffold = '';
-    try {
-      const content = await readFile(path, 'utf-8');
-      if (content.includes(marker)) return false;
-      await writeFile(path, content.trimEnd() + '\n\n' + block + '\n', 'utf-8');
-    } catch {
-      created = true;
-      scaffold = '# Project\n\n';
-      await writeFile(path, `${scaffold}${block}\n`, 'utf-8');
-    }
-    await mergeSetupInjectionManifest(this.base, {
-      claudeMd: {
-        created,
-        block,
-        ...(created ? { scaffold } : {}),
-      },
-    });
-    return true;
+  async ensureClaudeMd(client: SetupClient = 'other'): Promise<boolean> {
+    const { relPath } = await resolveInstructionFile(this.base);
+    return ensureInstructionDocument(this.base, relPath, client);
+  }
+
+  async ensureRoleMd(client: SetupClient = 'other'): Promise<boolean> {
+    return ensureInstructionDocument(this.base, ROLE_INSTRUCTION_FILE, client);
   }
 
   async ensureHooks(): Promise<boolean> {
@@ -555,7 +583,7 @@ export class FsWorkflowRepository implements WorkflowRepository {
       : {};
     const currentPreToolUse = hooks.PreToolUse;
     const existingPreToolUse = Array.isArray(currentPreToolUse)
-      ? currentPreToolUse as HookEntry[]
+      ? currentPreToolUse.filter(isHookEntry)
       : [];
     const existingMatchers = new Set(existingPreToolUse
       .map(entry => entry.matcher)
@@ -685,20 +713,25 @@ export class FsWorkflowRepository implements WorkflowRepository {
     await rename(path + '.tmp', path);
   }
 
-  /** 清理注入的 CLAUDE.md 协议块、hooks 和 .gitignore 规则，仅移除 FlowPilot-owned 内容 */
+  /** 清理注入的 instruction file 协议块、hooks 和 .gitignore 规则，仅移除 FlowPilot-owned 内容 */
   async cleanupInjections(): Promise<void> {
     const manifest = await loadSetupInjectionManifest(this.base);
 
-    const mdPath = join(this.base, 'CLAUDE.md');
-    try {
-      const content = await readFile(mdPath, 'utf-8');
-      const cleaned = cleanupClaudeContent(content, manifest);
-      if (cleaned.effect === 'delete') {
-        await unlink(mdPath);
-      } else if (cleaned.effect === 'write') {
-        await writeFile(mdPath, cleaned.content, 'utf-8');
-      }
-    } catch {}
+    for (const mdRelPath of [manifest.claudeMd?.path ?? LEGACY_INSTRUCTION_FILE, manifest.roleMd?.path].filter(Boolean) as string[]) {
+      const mdPath = join(this.base, mdRelPath);
+      try {
+        const content = await readFile(mdPath, 'utf-8');
+        const cleaned = cleanupClaudeContent(content, {
+          ...manifest,
+          claudeMd: mdRelPath === manifest.roleMd?.path ? manifest.roleMd : manifest.claudeMd,
+        });
+        if (cleaned.effect === 'delete') {
+          await unlink(mdPath);
+        } else if (cleaned.effect === 'write') {
+          await writeFile(mdPath, cleaned.content, 'utf-8');
+        }
+      } catch {}
+    }
 
     const claudeDirPath = join(this.base, '.claude');
     const settingsPath = join(claudeDirPath, 'settings.json');
