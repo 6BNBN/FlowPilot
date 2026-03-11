@@ -16,7 +16,8 @@ import { truncateHeadTail, computeMaxChars } from '../infrastructure/truncation'
 import { detect as detectLoop, type LoopDetection } from '../infrastructure/loop-detector';
 import { startHeartbeat, runHeartbeat } from '../infrastructure/heartbeat';
 import { classifyResumeDirtyFiles, clearReconcileState, collectOwnedFiles, compareDirtyFilesAgainstBaseline, getTaskActivationAge, loadDirtyBaseline, loadOwnedFiles, loadReconcileState, loadSetupInjectionManifest, loadSetupOwnedFiles, recordOwnedFiles, recordTaskActivations, saveDirtyBaseline, saveReconcileState, saveSetupOwnedFiles } from '../infrastructure/runtime-state';
-import { writeFile, readFile, unlink, mkdir } from 'fs/promises';
+import { formatFinalSummary } from '../interfaces/formatter';
+import { writeFile, readFile, unlink, mkdir, rename } from 'fs/promises';
 import { join } from 'path';
 
 const CHECKPOINT_FAILURE_PATTERNS = [
@@ -79,6 +80,17 @@ export class WorkflowService {
     return client === 'claude' || client === 'codex' || client === 'cursor' || client === 'snow-cli' || client === 'other'
       ? client
       : 'other';
+  }
+
+  private finalSummaryPath(): string {
+    return join(this.repo.projectRoot(), '.workflow', 'final-summary.md');
+  }
+
+  private async persistFinalSummary(content: string): Promise<void> {
+    const path = this.finalSummaryPath();
+    await mkdir(join(this.repo.projectRoot(), '.workflow'), { recursive: true });
+    await writeFile(`${path}.tmp`, `${content}\n`, 'utf-8');
+    await rename(`${path}.tmp`, path);
   }
 
   private async getResumeDirtyState(currentDirtyFiles = this.repo.listChangedFiles()): Promise<{
@@ -827,16 +839,18 @@ export class WorkflowService {
     const skipped = data.tasks.filter(t => t.status === 'skipped');
     const failed = data.tasks.filter(t => t.status === 'failed');
     const stats = [`${done.length} done`, skipped.length ? `${skipped.length} skipped` : '', failed.length ? `${failed.length} failed` : ''].filter(Boolean).join(', ');
+    const finalSummary = formatFinalSummary(data);
 
     const finishBoundary = await this.resolveFinishCommitFiles();
     if (finishBoundary.ok === false) {
-      return `${verifySummary}\n${stats}\n${finishBoundary.message}`;
+      return `${verifySummary}\n${stats}\n${finalSummary}\n${finishBoundary.message}`;
     }
 
     if (finishBoundary.ok === 'degraded') {
+      await this.persistFinalSummary(finalSummary);
       this.repo.cleanTags();
       await this.repo.clearAll();
-      return `${verifySummary}\n${stats}\n${finishBoundary.message}\n未提交最终commit：未找到 dirty baseline，保守跳过 auto-commit\n工作流回到待命状态\n等待下一个需求...`;
+      return `${verifySummary}\n${stats}\n${finalSummary}\n${finishBoundary.message}\n未提交最终commit：未找到 dirty baseline，保守跳过 auto-commit\n工作流回到待命状态\n等待下一个需求...`;
     }
 
     const titles = done.map(t => `- ${t.id}: ${t.title}`).join('\n');
@@ -875,10 +889,11 @@ export class WorkflowService {
     this.repo.cleanTags();
     const commitResult = this.repo.commit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`, finishBoundary.files);
     if (commitResult.status !== 'failed') {
+      await this.persistFinalSummary(finalSummary);
       await this.repo.clearAll();
     }
 
-    return `${verifySummary}\n${stats}\n${evolutionSummary}${this.formatCommitMessage(commitResult, 'finish')}\n工作流回到待命状态\n等待下一个需求...`;
+    return `${verifySummary}\n${stats}\n${finalSummary}\n${evolutionSummary}${this.formatCommitMessage(commitResult, 'finish')}\n工作流回到待命状态\n等待下一个需求...`;
   }
 
   /** 计算 config 变更的键列表（浅比较，键名排序） */

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WorkflowService } from './workflow-service';
@@ -104,5 +104,30 @@ describe('WorkflowService finish verification messaging', () => {
 
     expect(msg).toContain('验证结果: 未发现可执行的验证命令');
     expect(msg).not.toContain('验证通过: 无验证脚本');
+  });
+
+  it('finish 在 clearAll 前输出并落盘最终总结', async () => {
+    const repo = new FsWorkflowRepository(dir);
+    vi.spyOn(repo, 'verify').mockReturnValue({
+      passed: true,
+      status: 'passed',
+      scripts: ['npm run test'],
+      steps: [{ command: 'npm run test', status: 'passed' }],
+    } as any);
+    vi.spyOn(repo, 'commit').mockReturnValue({ status: 'committed' } as any);
+    const clearAllSpy = vi.spyOn(repo, 'clearAll').mockImplementation(async () => {
+      const persisted = await readFile(join(dir, '.workflow', 'final-summary.md'), 'utf-8');
+      expect(persisted).toContain('最终总结:');
+      expect(persisted).toContain('[x] 001 [backend] 完成任务 - 完成任务');
+      await rm(join(dir, '.workflow'), { recursive: true, force: true });
+    });
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+    await completeWorkflow(svc);
+
+    const msg = await svc.finish();
+
+    expect(msg).toContain('最终总结:');
+    expect(msg).toContain('[x] 001 [backend] 完成任务 - 完成任务');
+    expect(clearAllSpy).toHaveBeenCalledOnce();
   });
 });

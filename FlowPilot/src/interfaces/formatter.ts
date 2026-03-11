@@ -55,3 +55,21 @@ export function formatBatch(items: { task: TaskEntry; context: string }[]): stri
   }
   return lines.join('\n');
 }
+
+/** 格式化 finish 收尾前的最终任务总结 */
+export function formatFinalSummary(data: ProgressData): string {
+  const done = data.tasks.filter(t => t.status === 'done').length;
+  const skipped = data.tasks.filter(t => t.status === 'skipped').length;
+  const failed = data.tasks.filter(t => t.status === 'failed').length;
+  const pending = data.tasks.filter(t => t.status === 'pending' || t.status === 'active').length;
+  const lines = [
+    '最终总结:',
+    `工作流: ${data.name}`,
+    `统计: ${done} 完成${skipped ? `, ${skipped} 跳过` : ''}${failed ? `, ${failed} 失败` : ''}${pending ? `, ${pending} 未完成` : ''}`,
+    '',
+  ];
+  for (const task of data.tasks) {
+    lines.push(`${ICON[task.status] ?? '[ ]'} ${task.id} [${task.type}] ${task.title}${task.summary ? ` - ${task.summary}` : ''}`);
+  }
+  return lines.join('\n');
+}
