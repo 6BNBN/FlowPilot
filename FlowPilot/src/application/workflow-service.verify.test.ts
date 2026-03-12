@@ -41,6 +41,7 @@ afterEach(async () => {
 describe('WorkflowService finish verification messaging', () => {
   it('首次 finish 在 review 前保留 验证通过 哨兵文本', async () => {
     const repo = new FsWorkflowRepository(dir);
+    const clearAllSpy = vi.spyOn(repo, 'clearAll');
     vi.spyOn(repo, 'verify').mockReturnValue({
       passed: true,
       status: 'passed',
@@ -61,10 +62,13 @@ describe('WorkflowService finish verification messaging', () => {
     expect(msg).toContain('跳过: npm run test -- --run（未找到测试文件）');
     expect(msg).toContain('请派子Agent执行 code-review');
     expect(msg).not.toContain('验证通过: npm run build, npm run test -- --run');
+    expect(clearAllSpy).not.toHaveBeenCalled();
+    expect((await svc.status())?.status).toBe('running');
   });
 
-  it('区分 passed、skipped 与 not found 的验证步骤', async () => {
+  it('review 后 commit skipped 时保留工作流并区分 passed、skipped 验证步骤', async () => {
     const repo = new FsWorkflowRepository(dir);
+    const clearAllSpy = vi.spyOn(repo, 'clearAll');
     vi.spyOn(repo, 'commit').mockReturnValue({ status: 'skipped', reason: 'no-files' });
     vi.spyOn(repo, 'listChangedFiles').mockReturnValue([]);
     vi.spyOn(repo, 'verify').mockReturnValue({
@@ -84,11 +88,16 @@ describe('WorkflowService finish verification messaging', () => {
     expect(msg).toContain('验证结果:');
     expect(msg).toContain('通过: npm run build');
     expect(msg).toContain('跳过: npm run test -- --run（未找到测试文件）');
+    expect(msg).toContain('未提交最终commit');
+    expect(msg).not.toContain('工作流回到待命状态');
     expect(msg).not.toContain('验证通过: npm run build, npm run test -- --run');
+    expect(clearAllSpy).not.toHaveBeenCalled();
+    expect((await svc.status())?.status).toBe('finishing');
   });
 
-  it('在没有可检测验证命令时说明 not found', async () => {
+  it('review 后验证命令 not found 时保留工作流并说明 not found', async () => {
     const repo = new FsWorkflowRepository(dir);
+    const clearAllSpy = vi.spyOn(repo, 'clearAll');
     vi.spyOn(repo, 'commit').mockReturnValue({ status: 'skipped', reason: 'no-files' });
     vi.spyOn(repo, 'listChangedFiles').mockReturnValue([]);
     vi.spyOn(repo, 'verify').mockReturnValue({
@@ -104,6 +113,10 @@ describe('WorkflowService finish verification messaging', () => {
 
     expect(msg).toContain('验证结果: 未发现可执行的验证命令');
     expect(msg).not.toContain('验证通过: 无验证脚本');
+    expect(msg).toContain('未提交最终commit');
+    expect(msg).not.toContain('工作流回到待命状态');
+    expect(clearAllSpy).not.toHaveBeenCalled();
+    expect((await svc.status())?.status).toBe('finishing');
   });
 
   it('finish 在 clearAll 前输出并落盘最终总结', async () => {

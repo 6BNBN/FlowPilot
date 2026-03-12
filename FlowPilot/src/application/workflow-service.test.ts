@@ -941,7 +941,7 @@ describe('WorkflowService 集成测试', () => {
     expect((await svc.status())?.status).toBe('finishing');
   });
 
-  it('finish在 legacy 或外部删除 baseline 时不再死锁，而是显式降级完成', async () => {
+  it('finish在 legacy 或外部删除 baseline 时保留工作流并提示处理降级边界', async () => {
     const repo = new FsWorkflowRepository(dir);
     const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
     changedFilesSpy.mockReturnValueOnce([]);
@@ -959,13 +959,13 @@ describe('WorkflowService 集成测试', () => {
     expect(msg).toContain('未找到 dirty baseline');
     expect(msg).toContain('未提交最终commit');
     expect(msg).toContain('src/legacy.ts');
-    expect(msg).toContain('工作流回到待命状态');
+    expect(msg).not.toContain('工作流回到待命状态');
     expect(commitSpy).not.toHaveBeenCalledWith('finish', expect.any(String), expect.any(String), expect.anything());
-    expect(clearAllSpy).toHaveBeenCalledTimes(1);
-    expect(await svc.status()).toBeNull();
+    expect(clearAllSpy).not.toHaveBeenCalled();
+    expect((await svc.status())?.status).toBe('finishing');
   });
 
-  it('finish在 baseline 缺失但工作区已清理时也会显式降级完成且不自动提交', async () => {
+  it('finish在 baseline 缺失但工作区已清理时也保留工作流并不自动提交', async () => {
     const repo = new FsWorkflowRepository(dir);
     const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
     changedFilesSpy.mockReturnValueOnce([]);
@@ -983,16 +983,17 @@ describe('WorkflowService 集成测试', () => {
     expect(msg).toContain('未找到 dirty baseline');
     expect(msg).toContain('当前工作区无未归档变更');
     expect(msg).toContain('未提交最终commit');
-    expect(msg).toContain('工作流回到待命状态');
+    expect(msg).not.toContain('工作流回到待命状态');
     expect(commitSpy).not.toHaveBeenCalledWith('finish', expect.any(String), expect.any(String), expect.anything());
-    expect(clearAllSpy).toHaveBeenCalledTimes(1);
-    expect(await svc.status()).toBeNull();
+    expect(clearAllSpy).not.toHaveBeenCalled();
+    expect((await svc.status())?.status).toBe('finishing');
   });
 
-  it('finish在未提供文件时说明未提交最终commit但仍正常收尾', async () => {
+  it('finish在未提供文件时说明未提交最终commit并保留工作流', async () => {
     const repo = new FsWorkflowRepository(dir);
     mockChangedFiles(repo, []);
     mockCommitResult(repo, { status: 'skipped', reason: 'no-files' });
+    const clearAllSpy = vi.spyOn(repo, 'clearAll');
     vi.spyOn(repo, 'verify').mockReturnValue({ passed: true, scripts: ['npm test'] });
     svc = new WorkflowService(repo, parseTasksMarkdown);
     await completeWorkflow(svc);
@@ -1002,9 +1003,10 @@ describe('WorkflowService 集成测试', () => {
     expect(msg).toContain('验证结果:');
     expect(msg).toContain('- 通过: npm test');
     expect(msg).toContain('未提交最终commit：未提供 --files，未自动提交');
-    expect(msg).toContain('工作流回到待命状态');
+    expect(msg).not.toContain('工作流回到待命状态');
     expect(msg).not.toContain('已提交最终commit');
-    expect(await svc.status()).toBeNull();
+    expect(clearAllSpy).not.toHaveBeenCalled();
+    expect((await svc.status())?.status).toBe('finishing');
   });
 
   it('finish在 cleanup 后若 AGENTS.md 残留用户改动则拒绝最终提交', async () => {
@@ -1072,7 +1074,7 @@ describe('WorkflowService 集成测试', () => {
     expect(msg).not.toContain('拒绝最终提交');
     expect(msg).toContain('未提交最终commit：未提供 --files，未自动提交');
     expect(await readFile(join(dir, '.claude', 'settings.json'), 'utf-8')).toBe(preWorkflowDirtyContent);
-    expect((await svc.status())).toBeNull();
+    expect((await svc.status())?.status).toBe('finishing');
   });
 
   it('finish在 ignored/untracked settings.json cleanup 后仍有 residue 时也会拒绝最终提交', async () => {
@@ -1143,12 +1145,13 @@ describe('WorkflowService 集成测试', () => {
     expect(JSON.parse(await readFile(settingsPath, 'utf-8'))).toEqual({ model: 'sonnet' });
   });
 
-  it('finish会对称清理由 setup 创建且内容仍完整匹配的 AGENTS.md、settings.json 和 .gitignore', async () => {
+  it('finish在 no-files 时仍会对称清理由 setup 创建且内容仍完整匹配的文件，但保留工作流待最终提交', async () => {
     const repo = new FsWorkflowRepository(dir);
     const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
     changedFilesSpy.mockReturnValueOnce([]);
     changedFilesSpy.mockReturnValueOnce([]);
     mockCommitResult(repo, { status: 'skipped', reason: 'no-files' });
+    const clearAllSpy = vi.spyOn(repo, 'clearAll');
     vi.spyOn(repo, 'verify').mockReturnValue({ passed: true, scripts: ['npm test'] });
     svc = new WorkflowService(repo, parseTasksMarkdown);
 
@@ -1157,8 +1160,9 @@ describe('WorkflowService 集成测试', () => {
 
     await svc.finish();
 
-    expect(await svc.status()).toBeNull();
-    expect(await repo.loadProgress()).toBeNull();
+    expect(clearAllSpy).not.toHaveBeenCalled();
+    expect((await svc.status())?.status).toBe('finishing');
+    expect(await repo.loadProgress()).not.toBeNull();
     await expect(readFile(join(dir, 'AGENTS.md'), 'utf-8')).rejects.toThrow();
     await expect(readFile(join(dir, '.claude', 'settings.json'), 'utf-8')).rejects.toThrow();
     expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe(LOCAL_STATE_GITIGNORE);
@@ -1211,7 +1215,7 @@ describe('WorkflowService 集成测试', () => {
     expect(await svc.status()).not.toBeNull();
   });
 
-  it('finish输出进化摘要可观测性', async () => {
+  it('finish在最终 commit 未完成时不输出进化摘要', async () => {
     const repo = new FsWorkflowRepository(dir);
     mockChangedFiles(repo, []);
     mockCommitResult(repo, { status: 'skipped', reason: 'no-files' });
@@ -1222,14 +1226,12 @@ describe('WorkflowService 集成测试', () => {
 
     const msg = await svc.finish();
 
-    expect(msg).toContain('进化摘要:');
-    expect(msg).toContain('reflect: 已执行');
-    expect(msg).toContain('experiment: 未执行');
-    expect(msg).toContain('config变更: 否');
-    expect(msg).toContain('变更键: 无');
+    expect(msg).not.toContain('进化摘要:');
+    expect(msg).toContain('未提交最终commit');
+    expect((await svc.status())?.status).toBe('finishing');
   });
 
-  it('finish在无实验时也输出未执行和无配置变更', async () => {
+  it('finish在最终 commit 未完成时也不会执行进化步骤', async () => {
     const repo = new FsWorkflowRepository(dir);
     mockChangedFiles(repo, []);
     mockCommitResult(repo, { status: 'skipped', reason: 'no-files' });
@@ -1246,12 +1248,10 @@ describe('WorkflowService 集成测试', () => {
 
     const msg = await svc.finish();
 
-    expect(msg).toContain('进化摘要:');
-    expect(msg).toContain('reflect: 已执行');
-    expect(msg).toContain('experiment: 未执行');
-    expect(msg).toContain('config变更: 否');
-    expect(msg).toContain('变更键: 无');
-    expect(reflectSpy).toHaveBeenCalled();
+    expect(msg).not.toContain('进化摘要:');
+    expect(msg).toContain('未提交最终commit');
+    expect((await svc.status())?.status).toBe('finishing');
+    expect(reflectSpy).not.toHaveBeenCalled();
     expect(experimentSpy).not.toHaveBeenCalled();
   });
 
