@@ -25,6 +25,33 @@
 - **避免**使用超长表格、超长段落、超长路径和大段无结构文本。
 - **可适度**使用 emoji 强化视觉引导，但不得堆砌或影响可读性。
 
+### AI 对用户输出风格（只改表达，不改规则）
+- **必须**优先使用友好、直接、像同伴协作的语气；不要僵硬播报式输出。
+- **必须**优先使用以下分组锚点组织用户可见回复：
+  - `**结论**`
+  - `**当前进展**`
+  - `**原因**`
+  - `**下一步**`
+  - `**风险**`
+- **建议**在不影响可读性的前提下使用少量文字图标或 emoji 强化扫描体验，例如：
+  - `完成` / `已处理`
+  - `提示` / `注意`
+  - `下一步`
+  - `⚠️`（仅用于风险或阻塞）
+- **必须**让状态更新尽量符合以下样式：
+```text
+**当前进展**
+已完成 ...
+
+**原因**
+现在需要先处理 ...
+
+**下一步**
+接下来我会 ...
+```
+- **必须**保持协议指令、命令、checkpoint 要求的原意不变；只能优化表达和排版，不能改语义。
+- **避免**“口号式夸赞”“过度鼓励”“空洞客套”；友好不等于冗长。
+
 ### 任务执行
 - **必须**先分析，再执行。
 - **必须**先识别依赖关系图，区分「可并行节点」与「必须串行节点」。
@@ -32,7 +59,6 @@
 - 对于可独立执行且无冲突的任务，**不得**无故保守串行。
 - 并行任务**必须**避免写冲突；若存在同文件重叠修改，**必须**先拆清写入边界；在边界未拆清前，**禁止并行派发**。
 - 高风险操作前**必须**说明影响范围、主要风险，并获得明确确认。
-
 
 ### 工程质量
 - **质量第一**：正确性、可维护性与可验证性不可妥协。
@@ -94,7 +120,7 @@
 
 ### On Session Start
 Run `node flow.js resume`:
-- If unfinished workflow and resume reports **reconciling** / "已暂停继续调度" → do **NOT** enter Execution Loop. First run `node flow.js adopt <id> --files ...`, or after confirming and handling only the listed task-owned changes run `node flow.js restart <id>`. Never touch baseline changes or unrelated project code.
+- If unfinished workflow and resume reports **reconciling** / "已暂停继续调度" → do **NOT** enter Execution Loop. First run `node flow.js adopt <id> --files ...`, or after confirming and handling only the listed task-owned changes run `node flow.js restart <id>`. If resume also reports ownership-ambiguous files, stop and review manually; never use whole-file `git restore` on files that may include user edits/deletions. Never touch baseline changes or unrelated project code.
 - If unfinished workflow and no reconcile gate → enter **Execution Loop** (unless user is asking an unrelated question — handle it first via **Ad-hoc Dispatch**, then remind user the workflow is paused)
 - If no workflow → **judge the request**: reply directly for pure chitchat, use **Ad-hoc Dispatch** for one-off tasks, or enter **Requirement Decomposition** for multi-step development work. When in doubt, prefer the heavier path.
 
@@ -139,7 +165,7 @@ cat openspec/changes/<change-name>/tasks.md | node flow.js init
 OpenSpec checkbox format (`- [ ] 1.1 Task`) is auto-detected. Group N tasks depend on group N-1.
 
 ### Execution Loop
-1. Prefer running `node flow.js next --batch` when tasks are confirmed independent. **NOTE: this command will REFUSE to return tasks if any previous task is still `active`, or if the workflow is in `reconciling` state. In reconciling state you must adopt/restart/skip first, and restart may only follow handling of the listed task-owned changes. If write boundaries remain unclear, `node flow.js next` may be used for manual serialization.**
+1. Prefer running `node flow.js next --batch` when tasks are confirmed independent. **NOTE: this command will REFUSE to return tasks if any previous task is still `active`, or if the workflow is in `reconciling` state. In reconciling state you must adopt/restart/skip first, and restart may only follow handling of the listed task-owned changes. Ownership-ambiguous files must be reviewed manually; do not clear them with whole-file `git restore`. If write boundaries remain unclear, `node flow.js next` may be used for manual serialization.**
 2. When using batch output, the result already contains checkpoint commands per task. For **EVERY** task in batch, dispatch a sub-agent via Task tool. **ALL Task calls in one message.** Copy the ENTIRE task block (including checkpoint commands) into each sub-agent prompt verbatim. **If the batch contains N independent tasks, dispatch N sub-agents immediately; do not downshift to 1 for caution.**
 3. **After ALL sub-agents return**: run `node flow.js status`.
    - If any task is still `active` → sub-agent failed to checkpoint. Run fallback: `echo 'summary from sub-agent output' | node flow.js checkpoint <id> --files file1 file2`
@@ -150,7 +176,7 @@ OpenSpec checkbox format (`- [ ] 1.1 Task`) is auto-detected. Group N tasks depe
 ### Mid-Workflow Commands
 - `node flow.js skip <id>` — skip a stuck/unnecessary task (avoid skipping active tasks with running sub-agents)
 - `node flow.js adopt <id> --files ...` — adopt interrupted task-owned changes as the task result and unblock scheduling
-- `node flow.js restart <id>` — after confirming and handling only the listed task-owned changes, allow the task to be re-run from scratch; never touch baseline changes or unrelated code
+- `node flow.js restart <id>` — after confirming and handling only the listed task-owned changes, allow the task to be re-run from scratch; ownership-ambiguous files must be reviewed manually, and whole-file `git restore` is forbidden when user edits/deletions may be mixed in
 - `node flow.js add <描述> [--type frontend|backend|general]` — inject a new task mid-workflow
 
 ### Sub-Agent Prompt Template
@@ -159,6 +185,28 @@ Each sub-agent prompt MUST contain these sections in order:
 2. **Pre-analysis (MANDATORY)**: Before writing ANY code, **MUST** invoke /superpowers:brainstorming to perform multi-dimensional analysis (requirements, edge cases, architecture, risks). Skipping = protocol failure.
 3. **Skill routing**: type=frontend → **MUST** invoke /frontend-design, type=backend → **MUST** invoke /feature-dev, type=general → execute directly. **For ALL types, you MUST also check available skills and MCP tools; use any that match the task alongside the primary skill.**
 4. **Unfamiliar APIs → MUST query context7 MCP first. Never guess.**
+
+### Sub-Agent Live Progress
+- 子代理在长任务中**必须**持续汇报阶段性进展，而不是只在最终 checkpoint 时回复。
+- 推荐至少覆盖以下阶段：
+  - `analysis`：正在阅读代码 / 文档 / 定位问题
+  - `implementation`：正在修改实现
+  - `verification`：正在运行测试 / build / smoke
+  - `blocked`：遇到卡点、环境问题或边界不清
+- 若平台或 CLI 提供进度上报命令（例如 `node flow.js pulse ...`），**必须优先**使用；否则至少在回复中明确阶段、最近活动和阻塞原因。
+- 若单个阶段持续时间过长且无新 checkpoint，必须主动上报“仍在执行”或“已阻塞”，避免主代理只能看到等待面板。
+- **建议**阶段性回复尽量符合以下格式：
+```text
+**当前进展**
+阶段：implementation
+正在处理：...
+
+**原因**
+需要先完成 ...
+
+**下一步**
+完成后我会 ...
+```
 
 ### Sub-Agent Checkpoint (Iron Rule #4 — most common violation)
 Sub-agent's LAST Bash command before replying MUST be:

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// FLOWPILOT_VERSION: 0.4.0
 "use strict";
 
 // src/infrastructure/fs-repository.ts
@@ -5308,8 +5309,8 @@ ${entry}`;
 };
 
 // src/interfaces/cli.ts
-var import_fs4 = require("fs");
-var import_path12 = require("path");
+var import_fs5 = require("fs");
+var import_path13 = require("path");
 
 // src/interfaces/stdin.ts
 var import_promises11 = require("readline/promises");
@@ -5369,26 +5370,101 @@ async function promptSetupClient() {
   }
 }
 
-// src/interfaces/cli.ts
-function normalizePulsePhase(raw) {
-  const value = (raw ?? "").trim().toLowerCase();
-  switch (value) {
-    case "analysis":
-    case "\u5206\u6790":
-      return "analysis";
-    case "implementation":
-    case "\u5B9E\u73B0":
-      return "implementation";
-    case "verification":
-    case "\u9A8C\u8BC1":
-      return "verification";
-    case "blocked":
-    case "\u963B\u585E":
-      return "blocked";
-    default:
-      throw new Error("\u9700\u8981\u5408\u6CD5\u7684\u9636\u6BB5\uFF1Aanalysis|implementation|verification|blocked");
+// src/infrastructure/updater.ts
+var import_fs4 = require("fs");
+var import_path12 = require("path");
+var import_child_process2 = require("child_process");
+var REPO_OWNER = "6BNBN";
+var REPO_NAME = "FlowPilot";
+var CACHE_DURATION_MS = 24 * 60 * 60 * 1e3;
+var RELEASE_URL = "https://github.com/" + REPO_OWNER + "/" + REPO_NAME + "/releases";
+function getCachePath() {
+  return (0, import_path12.join)(process.cwd(), ".flowpilot", "update-cache.json");
+}
+function getCurrentVersion() {
+  try {
+    const cwd = process.cwd();
+    const flowPath = (0, import_fs4.existsSync)((0, import_path12.join)(cwd, "flow.js")) ? (0, import_path12.join)(cwd, "flow.js") : (0, import_path12.join)(cwd, "dist", "flow.js");
+    if ((0, import_fs4.existsSync)(flowPath)) {
+      const content = (0, import_fs4.readFileSync)(flowPath, "utf-8");
+      const match = content.match(/\/\/ FLOWPILOT_VERSION:\s*(\d+\.\d+\.\d+)/);
+      if (match) return match[1];
+    }
+  } catch {
+  }
+  return "0.0.0";
+}
+function parseVersion(version) {
+  return version.replace(/^v/, "").split(".").map(Number);
+}
+function compareVersions(current, latest) {
+  const cur = parseVersion(current);
+  const lat = parseVersion(latest);
+  for (let i = 0; i < 3; i++) {
+    const c = cur[i] || 0;
+    const l = lat[i] || 0;
+    if (l > c) return true;
+    if (l < c) return false;
+  }
+  return false;
+}
+function fetchLatestInfo() {
+  try {
+    const apiUrl = "https://api.github.com/repos/" + REPO_OWNER + "/" + REPO_NAME + "/releases/latest";
+    const cmd = 'curl -s -H "Accept: application/vnd.github+json" "' + apiUrl + '"';
+    const result = (0, import_child_process2.execSync)(cmd, { encoding: "utf-8", timeout: 1e4 });
+    const data = JSON.parse(result);
+    const version = data.tag_name ? data.tag_name.replace(/^v/, "") : null;
+    if (!version) return null;
+    return { version };
+  } catch {
+    return null;
   }
 }
+function loadCache2() {
+  const cachePath3 = getCachePath();
+  if (!(0, import_fs4.existsSync)(cachePath3)) return null;
+  try {
+    return JSON.parse((0, import_fs4.readFileSync)(cachePath3, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+function saveCache2(cache) {
+  const cachePath3 = getCachePath();
+  const dir = (0, import_path12.dirname)(cachePath3);
+  if (!(0, import_fs4.existsSync)(dir)) (0, import_fs4.mkdirSync)(dir, { recursive: true });
+  (0, import_fs4.writeFileSync)(cachePath3, JSON.stringify(cache, null, 2));
+}
+function checkForUpdate() {
+  const currentVersion = getCurrentVersion();
+  if (currentVersion === "0.0.0") return null;
+  const cache = loadCache2();
+  const now = Date.now();
+  if (cache && now - cache.checkedAt < CACHE_DURATION_MS) {
+    if (compareVersions(currentVersion, cache.latestVersion)) {
+      return "\u{1F4A1} \u53D1\u73B0\u65B0\u7248\u672C v" + cache.latestVersion + " (\u5F53\u524D v" + currentVersion + ")\uFF0C\u8FD0\u884C: curl -L " + RELEASE_URL + "/latest/download/flow.js -o flow.js";
+    }
+    return null;
+  }
+  const latestInfo = fetchLatestInfo();
+  if (!latestInfo) {
+    return null;
+  }
+  const hasUpdate = compareVersions(currentVersion, latestInfo.version);
+  const newCache = {
+    checkedAt: now,
+    latestVersion: latestInfo.version,
+    currentVersion
+  };
+  saveCache2(newCache);
+  if (hasUpdate) {
+    return "\u{1F4A1} \u53D1\u73B0\u65B0\u7248\u672C v" + latestInfo.version + " (\u5F53\u524D v" + currentVersion + ")\uFF0C\u8FD0\u884C: curl -L " + RELEASE_URL + "/latest/download/flow.js -o flow.js";
+  }
+  return null;
+}
+
+// src/interfaces/cli.ts
 var CLI = class {
   constructor(service2, deps = {}) {
     this.service = service2;
@@ -5401,18 +5477,36 @@ var CLI = class {
       enableVerbose();
       args.splice(verboseIdx, 1);
     }
+    const cmd = args[0] || "";
+    const noUpdateCheck = cmd === "version" || cmd === "help" || cmd === "-h" || cmd === "--help" || cmd === "status" || cmd === "recall";
     try {
-      const output = await this.dispatch(args);
+      let output = await this.dispatch(args);
+      if (!noUpdateCheck) {
+        const updateMsg = checkForUpdate();
+        if (updateMsg) {
+          output = output + " " + updateMsg;
+        }
+      }
       process.stdout.write(output + "\n");
     } catch (e) {
-      process.stderr.write(`\u9519\u8BEF: ${e instanceof Error ? e.message : e}
-`);
+      process.stderr.write("\u9519\u8BEF: " + (e instanceof Error ? e.message : e) + "\n");
       process.exitCode = 1;
     }
   }
   async dispatch(args) {
     const [cmd, ...rest] = args;
     const s = this.service;
+    if (cmd === "version") {
+      const cwd = process.cwd();
+      const flowPath = (0, import_fs5.existsSync)((0, import_path13.join)(cwd, "flow.js")) ? (0, import_path13.join)(cwd, "flow.js") : (0, import_path13.join)(cwd, "dist", "flow.js");
+      let version = "unknown";
+      if ((0, import_fs5.existsSync)(flowPath)) {
+        const content = (0, import_fs5.readFileSync)(flowPath, "utf-8");
+        const match = content.match(/\/\/ FLOWPILOT_VERSION:\s*(\d+\.\d+\.\d+)/);
+        if (match) version = match[1];
+      }
+      return "FlowPilot v" + version;
+    }
     switch (cmd) {
       case "init": {
         const force = rest.includes("--force");
@@ -5420,26 +5514,21 @@ var CLI = class {
         let out;
         if (md.trim()) {
           const data = await s.init(md, force);
-          out = `\u2705 \u5DF2\u521D\u59CB\u5316\u5DE5\u4F5C\u6D41: ${data.name} (${data.tasks.length} \u4E2A\u4EFB\u52A1)`;
+          out = "\u5DF2\u521D\u59CB\u5316\u5DE5\u4F5C\u6D41: " + data.name + " (" + data.tasks.length + " \u4E2A\u4EFB\u52A1)";
         } else {
           const client = await (this.deps.promptSetupClient ?? promptSetupClient)();
           out = await s.setup(client);
         }
-        return `${out}
-
-**\u2550\u2550\u2550 \u63D0\u793A \u2550\u2550\u2550**
-\u{1F4A1} \u5EFA\u8BAE\u5148\u901A\u8FC7 /plugin \u5B89\u88C5\u63D2\u4EF6: superpowers\u3001frontend-design\u3001feature-dev\u3001code-review\u3001context7
-   \u672A\u5B89\u88C5\u65F6\uFF0C\u5B50Agent\u65E0\u6CD5\u4F7F\u7528\u4E13\u4E1A\u6280\u80FD\uFF0C\u4F53\u9A8C\u4F1A\u964D\u7EA7
-   \u5982\u9700\u67E5\u770B\u5F53\u524D\u72B6\u6001\uFF0C\u53EF\u6267\u884C \`node flow.js status\``;
+        return out + "\n\n\u63D0\u793A: \u5EFA\u8BAE\u5148\u901A\u8FC7 /plugin \u5B89\u88C5\u63D2\u4EF6 superpowers\u3001frontend-design\u3001feature-dev\u3001code-review\u3001context7\uFF0C\u672A\u5B89\u88C5\u5219\u5B50Agent\u65E0\u6CD5\u4F7F\u7528\u4E13\u4E1A\u6280\u80FD\uFF0C\u529F\u80FD\u4F1A\u964D\u7EA7";
       }
       case "next": {
         if (rest.includes("--batch")) {
           const items = await s.nextBatch();
-          if (!items.length) return "\u2705 \u5168\u90E8\u5B8C\u6210";
+          if (!items.length) return "\u5168\u90E8\u5B8C\u6210";
           return formatBatch(items);
         }
         const result = await s.next();
-        if (!result) return "\u2705 \u5168\u90E8\u5B8C\u6210";
+        if (!result) return "\u5168\u90E8\u5B8C\u6210";
         return formatTask(result.task, result.context);
       }
       case "checkpoint": {
@@ -5456,31 +5545,15 @@ var CLI = class {
           }
         }
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
-          const filePath = (0, import_path12.resolve)(rest[fileIdx + 1]);
-          if ((0, import_path12.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
-          detail = (0, import_fs4.readFileSync)(filePath, "utf-8");
+          const filePath = (0, import_path13.resolve)(rest[fileIdx + 1]);
+          if ((0, import_path13.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
+          detail = (0, import_fs5.readFileSync)(filePath, "utf-8");
         } else if (rest.length > 1 && fileIdx < 0 && filesIdx < 0) {
           detail = rest.slice(1).join(" ");
         } else {
           detail = await (this.deps.readStdinIfPiped ?? readStdinIfPiped)();
         }
         return await s.checkpoint(id, detail.trim(), files);
-      }
-      case "pulse": {
-        const id = rest[0];
-        if (!id) throw new Error("\u9700\u8981\u4EFB\u52A1ID");
-        const phaseIdx = rest.indexOf("--phase");
-        const noteIdx = rest.indexOf("--note");
-        const phaseSource = phaseIdx >= 0 ? rest[phaseIdx + 1] : rest[1];
-        const phase = normalizePulsePhase(phaseSource);
-        let note = "";
-        if (noteIdx >= 0) {
-          note = rest.slice(noteIdx + 1).join(" ").trim();
-        } else {
-          const startIdx = phaseIdx >= 0 ? phaseIdx + 2 : 2;
-          note = rest.slice(startIdx).join(" ").trim();
-        }
-        return await s.pulse(id, phase, note);
       }
       case "adopt": {
         const id = rest[0];
@@ -5496,9 +5569,9 @@ var CLI = class {
           }
         }
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
-          const filePath = (0, import_path12.resolve)(rest[fileIdx + 1]);
-          if ((0, import_path12.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
-          detail = (0, import_fs4.readFileSync)(filePath, "utf-8");
+          const filePath = (0, import_path13.resolve)(rest[fileIdx + 1]);
+          if ((0, import_path13.relative)(process.cwd(), filePath).startsWith("..")) throw new Error("--file \u8DEF\u5F84\u4E0D\u80FD\u8D85\u51FA\u9879\u76EE\u76EE\u5F55");
+          detail = (0, import_fs5.readFileSync)(filePath, "utf-8");
         } else if (rest.length > 1 && fileIdx < 0 && filesIdx < 0) {
           detail = rest.slice(1).join(" ");
         } else {
@@ -5518,8 +5591,38 @@ var CLI = class {
       }
       case "status": {
         const data = await s.status();
-        if (!data) return "\u23F3 \u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41";
+        if (!data) return "\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41";
         return formatStatus(data);
+      }
+      case "pulse": {
+        const id = rest[0];
+        if (!id) throw new Error("\u9700\u8981\u4EFB\u52A1ID");
+        let phase = "analysis";
+        const phaseIdx = rest.indexOf("--phase");
+        if (phaseIdx >= 0 && rest[phaseIdx + 1]) {
+          phase = rest[phaseIdx + 1];
+        } else if (rest.length > 1 && !rest[1].startsWith("--")) {
+          phase = rest[1];
+        }
+        const phaseMap = {
+          "\u5206\u6790": "analysis",
+          "\u5B9E\u65BD": "implementation",
+          "\u9A8C\u8BC1": "verification",
+          "\u963B\u585E": "blocked"
+        };
+        const normalizedPhase = phaseMap[phase] || phase;
+        const validPhases = ["analysis", "implementation", "verification", "blocked"];
+        if (!validPhases.includes(normalizedPhase)) {
+          throw new Error(`\u65E0\u6548\u7684 phase: ${phase}\uFF0C\u53EF\u9009\u503C: analysis, implementation, verification, blocked`);
+        }
+        let note = "";
+        const noteIdx = rest.indexOf("--note");
+        if (noteIdx >= 0 && rest[noteIdx + 1]) {
+          note = rest.slice(noteIdx + 1).join(" ");
+        } else if (rest.length > 2 && !rest[2].startsWith("--")) {
+          note = rest.slice(2).join(" ");
+        }
+        return await s.pulse(id, normalizedPhase, note);
       }
       case "review":
         return await s.review();
@@ -5558,29 +5661,7 @@ var CLI = class {
     }
   }
 };
-var USAGE = `**\u2550\u2550\u2550 FlowPilot \u7528\u6CD5 \u2550\u2550\u2550**
-node flow.js [--verbose] <command>
-
-\u{1F4CB} \u5DE5\u4F5C\u6D41\u547D\u4EE4:
-  init [--force]       \u521D\u59CB\u5316\u5DE5\u4F5C\u6D41 (stdin\u4F20\u5165\u4EFB\u52A1markdown\uFF0C\u65E0stdin\u5219\u663E\u793A\u5BA2\u6237\u7AEF\u9009\u9879)
-  next [--batch]       \u83B7\u53D6\u4E0B\u4E00\u6279\u5F85\u6267\u884C\u4EFB\u52A1 (--batch \u8FD4\u56DE\u6240\u6709\u53EF\u5E76\u884C\u4EFB\u52A1)
-  checkpoint <id>      \u8BB0\u5F55\u4EFB\u52A1\u5B8C\u6210 [--file <path> | stdin | \u5185\u8054\u6587\u672C] [--files f1 f2 ...]
-  pulse <id> <phase>   \u8BB0\u5F55\u4EFB\u52A1\u9636\u6BB5 [--phase <phase>] [--note <text>]
-  adopt <id>           \u63A5\u7BA1\u4E2D\u65AD\u53D8\u66F4\u5E76\u8865 checkpoint [--file <path> | stdin] [--files f1 f2 ...]
-  restart <id>         \u786E\u8BA4\u53D8\u66F4\u540E\u5141\u8BB8\u4EFB\u52A1\u91CD\u505A (\u9700\u5148\u5904\u7406\u5F52\u5C5E\u660E\u786E\u7684\u53D8\u66F4)
-  skip <id>            \u624B\u52A8\u8DF3\u8FC7\u4EFB\u52A1
-  review               \u6807\u8BB0 code-review \u5DF2\u5B8C\u6210 (finish \u524D\u5FC5\u987B\u6267\u884C)
-  finish               \u667A\u80FD\u6536\u5C3E (\u9A8C\u8BC1+\u603B\u7ED3+\u63D0\u4EA4\uFF0C\u9700\u5148 review)
-  status               \u67E5\u770B\u5168\u5C40\u8FDB\u5EA6
-  resume               \u4E2D\u65AD\u6062\u590D
-  abort                \u4E2D\u6B62\u5DE5\u4F5C\u6D41\u5E76\u6E05\u7406 .workflow/ \u76EE\u5F55
-  rollback <id>        \u56DE\u6EDA\u5230\u6307\u5B9A\u4EFB\u52A1 (git revert + \u91CD\u7F6E\u540E\u7EED\u4EFB\u52A1)
-  evolve               \u63A5\u6536 AI \u53CD\u601D\u7ED3\u679C\u5E76\u6267\u884C\u8FDB\u5316 (stdin \u4F20\u5165)
-  recall <\u5173\u952E\u8BCD>       \u67E5\u8BE2\u76F8\u5173\u8BB0\u5FC6
-  add <\u63CF\u8FF0>           \u8FFD\u52A0\u4EFB\u52A1 [--type frontend|backend|general]
-
-\u2699\uFE0F \u5168\u5C40\u9009\u9879:
-  --verbose            \u8F93\u51FA\u8C03\u8BD5\u65E5\u5FD7 (\u7B49\u540C FLOWPILOT_VERBOSE=1)`;
+var USAGE = "\u7528\u6CD5: node flow.js [--verbose] <command>\n  init [--force]       \u521D\u59CB\u5316\u5DE5\u4F5C\u6D41\n  next [--batch]       \u83B7\u53D6\u4E0B\u4E00\u4E2A\u5F85\u6267\u884C\u4EFB\u52A1\n  checkpoint <id>      \u8BB0\u5F55\u4EFB\u52A1\u5B8C\u6210\n  adopt <id>           \u63A5\u7BA1\u53D8\u66F4\n  restart <id>         \u4EFB\u52A1\u91CD\u505A\n  skip <id>            \u8DF3\u8FC7\u4EFB\u52A1\n  review               \u6807\u8BB0 review \u5B8C\u6210\n  finish               \u6536\u5C3E\n  status               \u67E5\u770B\u8FDB\u5EA6\n  resume               \u6062\u590D\n  abort                \u4E2D\u6B62\n  rollback <id>        \u56DE\u6EDA\n  evolve               \u53CD\u601D\n  recall <\u5173\u952E\u8BCD>        \u8BB0\u5FC6\u67E5\u8BE2\n  add <\u63CF\u8FF0>           \u8FFD\u52A0\u4EFB\u52A1\n  version              \u7248\u672C\n\n\u5168\u5C40\u9009\u9879:\n  --verbose            \u8C03\u8BD5\u65E5\u5FD7";
 
 // src/main.ts
 configureLogger(process.cwd());

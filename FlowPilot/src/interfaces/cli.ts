@@ -3,37 +3,18 @@
  * @description CLI 命令路由
  */
 
-import { readFileSync } from 'fs';
-import { resolve, relative } from 'path';
+import { existsSync, readFileSync } from 'fs';
+import { resolve, relative, join } from 'path';
 import type { WorkflowService } from '../application/workflow-service';
 import { formatStatus, formatTask, formatBatch } from './formatter';
 import { promptSetupClient, readStdinIfPiped } from './stdin';
 import { enableVerbose } from '../infrastructure/logger';
-import type { SetupClient, TaskPhase } from '../domain/types';
+import { checkForUpdate } from '../infrastructure/updater';
+import type { SetupClient } from '../domain/types';
 
 interface CliDeps {
   readStdinIfPiped?: typeof readStdinIfPiped;
   promptSetupClient?: () => Promise<SetupClient>;
-}
-
-function normalizePulsePhase(raw: string | undefined): TaskPhase {
-  const value = (raw ?? '').trim().toLowerCase();
-  switch (value) {
-    case 'analysis':
-    case '分析':
-      return 'analysis';
-    case 'implementation':
-    case '实现':
-      return 'implementation';
-    case 'verification':
-    case '验证':
-      return 'verification';
-    case 'blocked':
-    case '阻塞':
-      return 'blocked';
-    default:
-      throw new Error('需要合法的阶段：analysis|implementation|verification|blocked');
-  }
 }
 
 export class CLI {
@@ -44,17 +25,30 @@ export class CLI {
 
   async run(argv: string[]): Promise<void> {
     const args = argv.slice(2);
-    // 全局 --verbose 标志，在命令分发前提取
+    // 全局 --verbose 标志
     const verboseIdx = args.indexOf('--verbose');
     if (verboseIdx >= 0) {
       enableVerbose();
       args.splice(verboseIdx, 1);
     }
+    // 跳过更新检查的命令
+    const cmd = args[0] || '';
+    const noUpdateCheck = cmd === 'version' || cmd === 'help' || cmd === '-h' || cmd === '--help' || cmd === 'status' || cmd === 'recall';
+
     try {
-      const output = await this.dispatch(args);
+      let output = await this.dispatch(args);
+      
+      // 检查更新（排除 version/help 命令）
+      if (!noUpdateCheck) {
+        const updateMsg = checkForUpdate();
+        if (updateMsg) {
+          output = output + ' ' + updateMsg;
+        }
+      }
+      
       process.stdout.write(output + '\n');
     } catch (e) {
-      process.stderr.write(`错误: ${e instanceof Error ? e.message : e}\n`);
+      process.stderr.write('错误: ' + (e instanceof Error ? e.message : e) + '\n');
       process.exitCode = 1;
     }
   }
@@ -63,29 +57,44 @@ export class CLI {
     const [cmd, ...rest] = args;
     const s = this.service;
 
+    // version 命令单独处理
+    if (cmd === 'version') {
+      const cwd = process.cwd();
+      const flowPath = existsSync(join(cwd, 'flow.js')) 
+        ? join(cwd, 'flow.js') 
+        : join(cwd, 'dist', 'flow.js');
+      let version = 'unknown';
+      if (existsSync(flowPath)) {
+        const content = readFileSync(flowPath, 'utf-8');
+        const match = content.match(/\/\/ FLOWPILOT_VERSION:\s*(\d+\.\d+\.\d+)/);
+        if (match) version = match[1];
+      }
+      return 'FlowPilot v' + version;
+    }
+
     switch (cmd) {
       case 'init': {
         const force = rest.includes('--force');
         const md = await (this.deps.readStdinIfPiped ?? readStdinIfPiped)();
-        let out: string;
+        let out;
         if (md.trim()) {
           const data = await s.init(md, force);
-          out = `✅ 已初始化工作流: ${data.name} (${data.tasks.length} 个任务)`;
+          out = '已初始化工作流: ' + data.name + ' (' + data.tasks.length + ' 个任务)';
         } else {
           const client = await (this.deps.promptSetupClient ?? promptSetupClient)();
           out = await s.setup(client);
         }
-        return `${out}\n\n**═══ 提示 ═══**\n💡 建议先通过 /plugin 安装插件: superpowers、frontend-design、feature-dev、code-review、context7\n   未安装时，子Agent无法使用专业技能，体验会降级\n   如需查看当前状态，可执行 \`node flow.js status\``;
+        return out + '\n\n提示: 建议先通过 /plugin 安装插件 superpowers、frontend-design、feature-dev、code-review、context7，未安装则子Agent无法使用专业技能，功能会降级';
       }
 
       case 'next': {
         if (rest.includes('--batch')) {
           const items = await s.nextBatch();
-          if (!items.length) return '✅ 全部完成';
+          if (!items.length) return '全部完成';
           return formatBatch(items);
         }
         const result = await s.next();
-        if (!result) return '✅ 全部完成';
+        if (!result) return '全部完成';
         return formatTask(result.task, result.context);
       }
 
@@ -94,17 +103,14 @@ export class CLI {
         if (!id) throw new Error('需要任务ID');
         const filesIdx = rest.indexOf('--files');
         const fileIdx = rest.indexOf('--file');
-        let detail: string;
-        let files: string[] | undefined;
-
-        // 解析 --files（必须在解析detail之前，从rest中剥离）
+        let detail;
+        let files;
         if (filesIdx >= 0) {
           files = [];
           for (let i = filesIdx + 1; i < rest.length && !rest[i].startsWith('--'); i++) {
             files.push(rest[i]);
           }
         }
-
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
           const filePath = resolve(rest[fileIdx + 1]);
           if (relative(process.cwd(), filePath).startsWith('..')) throw new Error('--file 路径不能超出项目目录');
@@ -117,38 +123,19 @@ export class CLI {
         return await s.checkpoint(id, detail.trim(), files);
       }
 
-      case 'pulse': {
-        const id = rest[0];
-        if (!id) throw new Error('需要任务ID');
-        const phaseIdx = rest.indexOf('--phase');
-        const noteIdx = rest.indexOf('--note');
-        const phaseSource = phaseIdx >= 0 ? rest[phaseIdx + 1] : rest[1];
-        const phase = normalizePulsePhase(phaseSource);
-        let note = '';
-        if (noteIdx >= 0) {
-          note = rest.slice(noteIdx + 1).join(' ').trim();
-        } else {
-          const startIdx = phaseIdx >= 0 ? phaseIdx + 2 : 2;
-          note = rest.slice(startIdx).join(' ').trim();
-        }
-        return await s.pulse(id, phase, note);
-      }
-
       case 'adopt': {
         const id = rest[0];
         if (!id) throw new Error('需要任务ID');
         const filesIdx = rest.indexOf('--files');
         const fileIdx = rest.indexOf('--file');
-        let detail: string;
-        let files: string[] | undefined;
-
+        let detail;
+        let files;
         if (filesIdx >= 0) {
           files = [];
           for (let i = filesIdx + 1; i < rest.length && !rest[i].startsWith('--'); i++) {
             files.push(rest[i]);
           }
         }
-
         if (fileIdx >= 0 && rest[fileIdx + 1]) {
           const filePath = resolve(rest[fileIdx + 1]);
           if (relative(process.cwd(), filePath).startsWith('..')) throw new Error('--file 路径不能超出项目目录');
@@ -175,8 +162,42 @@ export class CLI {
 
       case 'status': {
         const data = await s.status();
-        if (!data) return '⏳ 无活跃工作流';
+        if (!data) return '无活跃工作流';
         return formatStatus(data);
+      }
+
+      case 'pulse': {
+        const id = rest[0];
+        if (!id) throw new Error('需要任务ID');
+        // 解析 phase 参数
+        let phase: string = 'analysis';
+        const phaseIdx = rest.indexOf('--phase');
+        if (phaseIdx >= 0 && rest[phaseIdx + 1]) {
+          phase = rest[phaseIdx + 1];
+        } else if (rest.length > 1 && !rest[1].startsWith('--')) {
+          phase = rest[1];
+        }
+        // 中文别名映射
+        const phaseMap: Record<string, string> = {
+          '分析': 'analysis',
+          '实施': 'implementation',
+          '验证': 'verification',
+          '阻塞': 'blocked',
+        };
+        const normalizedPhase = phaseMap[phase] || phase;
+        const validPhases = ['analysis', 'implementation', 'verification', 'blocked'];
+        if (!validPhases.includes(normalizedPhase)) {
+          throw new Error(`无效的 phase: ${phase}，可选值: analysis, implementation, verification, blocked`);
+        }
+        // 解析 note 参数
+        let note = '';
+        const noteIdx = rest.indexOf('--note');
+        if (noteIdx >= 0 && rest[noteIdx + 1]) {
+          note = rest.slice(noteIdx + 1).join(' ');
+        } else if (rest.length > 2 && !rest[2].startsWith('--')) {
+          note = rest.slice(2).join(' ');
+        }
+        return await s.pulse(id, normalizedPhase as any, note);
       }
 
       case 'review':
@@ -225,26 +246,4 @@ export class CLI {
   }
 }
 
-const USAGE = `**═══ FlowPilot 用法 ═══**
-node flow.js [--verbose] <command>
-
-📋 工作流命令:
-  init [--force]       初始化工作流 (stdin传入任务markdown，无stdin则显示客户端选项)
-  next [--batch]       获取下一批待执行任务 (--batch 返回所有可并行任务)
-  checkpoint <id>      记录任务完成 [--file <path> | stdin | 内联文本] [--files f1 f2 ...]
-  pulse <id> <phase>   记录任务阶段 [--phase <phase>] [--note <text>]
-  adopt <id>           接管中断变更并补 checkpoint [--file <path> | stdin] [--files f1 f2 ...]
-  restart <id>         确认变更后允许任务重做 (需先处理归属明确的变更)
-  skip <id>            手动跳过任务
-  review               标记 code-review 已完成 (finish 前必须执行)
-  finish               智能收尾 (验证+总结+提交，需先 review)
-  status               查看全局进度
-  resume               中断恢复
-  abort                中止工作流并清理 .workflow/ 目录
-  rollback <id>        回滚到指定任务 (git revert + 重置后续任务)
-  evolve               接收 AI 反思结果并执行进化 (stdin 传入)
-  recall <关键词>       查询相关记忆
-  add <描述>           追加任务 [--type frontend|backend|general]
-
-⚙️ 全局选项:
-  --verbose            输出调试日志 (等同 FLOWPILOT_VERBOSE=1)`;
+const USAGE = '用法: node flow.js [--verbose] <command>\n  init [--force]       初始化工作流\n  next [--batch]       获取下一个待执行任务\n  checkpoint <id>      记录任务完成\n  adopt <id>           接管变更\n  restart <id>         任务重做\n  skip <id>            跳过任务\n  review               标记 review 完成\n  finish               收尾\n  status               查看进度\n  resume               恢复\n  abort                中止\n  rollback <id>        回滚\n  evolve               反思\n  recall <关键词>        记忆查询\n  add <描述>           追加任务\n  version              版本\n\n全局选项:\n  --verbose            调试日志';
