@@ -8,19 +8,22 @@ import { join } from 'path';
 import { openSync, closeSync, writeFileSync } from 'fs';
 import { hostname } from 'os';
 import type { ProgressData, SetupClient, TaskEntry, WorkflowStats, EvolutionEntry } from '../domain/types';
-import type { WorkflowRepository, VerifyResult, CommitResult } from '../domain/repository';
+import type { WorkflowRepository, VerifyResult, CommitResult, TaskPulseUpdate } from '../domain/repository';
 import { autoCommit, gitCleanup, tagTask, rollbackToTask, cleanTags as gitCleanTags, listChangedFiles as gitListChangedFiles } from './git';
 import { runVerify } from './verify';
 import { getProtocolTemplate, PROTOCOL_TEMPLATE } from './protocol-template';
 import {
+  clearTaskPulse as clearRuntimeTaskPulse,
   createRuntimeLockMetadata,
   defaultInvalidLockStaleAfterMs,
   getRuntimeLocalityToken,
   isRuntimeLockOwnedByProcess,
   isRuntimeLockStale,
+  loadTaskPulseState,
   loadSetupInjectionManifest,
   mergeSetupInjectionManifest,
   parseRuntimeLock,
+  recordTaskPulse,
   serializeRuntimeLock,
 } from './runtime-state';
 import type { ExactFileSnapshot, HookEntry, SetupInjectionManifest } from './runtime-state';
@@ -53,9 +56,12 @@ export function parseProgressMarkdown(raw: string): ProgressData {
     if (current === '无') current = null;
     if (line.startsWith('开始: ')) startTime = line.slice(4).trim();
 
-    const matchedTask = line.match(/^\|\s*(\d{3,})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
+    const matchedTask = line.match(/^\|\s*(\d{3,})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*(?:\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*)?\|$/);
     if (matchedTask) {
       const depsRaw = matchedTask[4].trim();
+      const phase = matchedTask[9] === '-' || matchedTask[9] === undefined ? undefined : matchedTask[9];
+      const phaseUpdatedAt = matchedTask[10] === '-' || matchedTask[10] === undefined ? undefined : matchedTask[10];
+      const phaseNote = matchedTask[11] === '-' || matchedTask[11] === undefined ? undefined : matchedTask[11];
       tasks.push({
         id: matchedTask[1],
         title: matchedTask[2],
@@ -65,6 +71,9 @@ export function parseProgressMarkdown(raw: string): ProgressData {
         retries: parseInt(matchedTask[6], 10),
         summary: matchedTask[7] === '-' ? '' : matchedTask[7],
         description: matchedTask[8] === '-' ? '' : matchedTask[8],
+        ...(phase ? { phase: phase as TaskEntry['phase'] } : {}),
+        ...(phaseUpdatedAt ? { phaseUpdatedAt } : {}),
+        ...(phaseNote ? { phaseNote } : {}),
       });
     }
   }
@@ -167,7 +176,7 @@ function cleanupClaudeContent(content: string, manifest: SetupInjectionManifest)
   return normalized === content ? { effect: 'noop' } : { effect: 'write', content: normalized };
 }
 
-async function resolveInstructionFile(basePath: string): Promise<{ absPath: string; relPath: string }> {
+async function resolveInstructionFile(basePath: string, client: SetupClient = 'other'): Promise<{ absPath: string; relPath: string }> {
   const primaryPath = join(basePath, PRIMARY_INSTRUCTION_FILE);
   try {
     await access(primaryPath);
@@ -179,6 +188,10 @@ async function resolveInstructionFile(basePath: string): Promise<{ absPath: stri
     await access(legacyPath);
     return { absPath: legacyPath, relPath: LEGACY_INSTRUCTION_FILE };
   } catch {}
+
+  if (client === 'claude') {
+    return { absPath: legacyPath, relPath: LEGACY_INSTRUCTION_FILE };
+  }
 
   return { absPath: primaryPath, relPath: PRIMARY_INSTRUCTION_FILE };
 }
@@ -463,13 +476,13 @@ export class FsWorkflowRepository implements WorkflowRepository {
       `当前: ${data.current ?? '无'}`,
       ...(data.startTime ? [`开始: ${data.startTime}`] : []),
       '',
-      '| ID | 标题 | 类型 | 依赖 | 状态 | 重试 | 摘要 | 描述 |',
-      '|----|------|------|------|------|------|------|------|',
+      '| ID | 标题 | 类型 | 依赖 | 状态 | 重试 | 摘要 | 描述 | 阶段 | 最近更新 | 阶段进展 |',
+      '|----|------|------|------|------|------|------|------|------|----------|----------|',
     ];
     for (const t of data.tasks) {
       const deps = t.deps.length ? t.deps.join(',') : '-';
       const esc = (s: string) => (s || '-').replace(/\|/g, '∣').replace(/\n/g, ' ');
-      lines.push(`| ${t.id} | ${esc(t.title)} | ${t.type} | ${deps} | ${t.status} | ${t.retries} | ${esc(t.summary)} | ${esc(t.description)} |`);
+      lines.push(`| ${t.id} | ${esc(t.title)} | ${t.type} | ${deps} | ${t.status} | ${t.retries} | ${esc(t.summary)} | ${esc(t.description)} | ${esc(t.phase ?? '')} | ${esc(t.phaseUpdatedAt ?? '')} | ${esc(t.phaseNote ?? '')} |`);
     }
     const p = join(this.root, 'progress.md');
     await writeFile(p + '.tmp', lines.join('\n') + '\n', 'utf-8');
@@ -542,8 +555,25 @@ export class FsWorkflowRepository implements WorkflowRepository {
     }
   }
 
+  async saveTaskPulse(taskId: string, update: TaskPulseUpdate): Promise<void> {
+    await recordTaskPulse(this.base, taskId, {
+      phase: update.phase,
+      updatedAt: update.updatedAt ?? new Date().toISOString(),
+      ...(update.note ? { note: update.note } : {}),
+    });
+  }
+
+  async loadTaskPulses(): Promise<Record<string, TaskPulseUpdate>> {
+    const state = await loadTaskPulseState(this.base);
+    return { ...state.byTask };
+  }
+
+  async clearTaskPulse(taskId: string): Promise<void> {
+    await clearRuntimeTaskPulse(this.base, taskId);
+  }
+
   async ensureClaudeMd(client: SetupClient = 'other'): Promise<boolean> {
-    const { relPath } = await resolveInstructionFile(this.base);
+    const { relPath } = await resolveInstructionFile(this.base, client);
     return ensureInstructionDocument(this.base, relPath, client);
   }
 

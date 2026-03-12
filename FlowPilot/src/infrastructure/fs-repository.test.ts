@@ -103,11 +103,19 @@ describe('FsWorkflowRepository', () => {
     expect(await readFile(join(dir, '.gitignore'), 'utf-8')).toBe(`node_modules/\n${LOCAL_STATE_GITIGNORE}`);
   });
 
-  it('ensureClaudeMd 首次创建 AGENTS.md', async () => {
+  it('ensureClaudeMd 默认首次创建 AGENTS.md', async () => {
     const wrote = await repo.ensureClaudeMd();
     expect(wrote).toBe(true);
     const content = await readFile(join(dir, 'AGENTS.md'), 'utf-8');
     expect(content).toContain('flowpilot:start');
+  });
+
+  it('ensureClaudeMd 在 claude 客户端下首次创建 CLAUDE.md', async () => {
+    const wrote = await repo.ensureClaudeMd('claude');
+    expect(wrote).toBe(true);
+    const content = await readFile(join(dir, 'CLAUDE.md'), 'utf-8');
+    expect(content).toContain('flowpilot:start');
+    expect(existsSync(join(dir, 'AGENTS.md'))).toBe(false);
   });
 
   it('ensureClaudeMd 幂等', async () => {
@@ -124,6 +132,16 @@ describe('FsWorkflowRepository', () => {
     expect(wrote).toBe(true);
     expect(await readFile(join(dir, 'CLAUDE.md'), 'utf-8')).toContain('flowpilot:start');
     expect(existsSync(join(dir, 'AGENTS.md'))).toBe(false);
+  });
+
+  it('ensureClaudeMd 在已有 AGENTS.md 时即使 claude 客户端也保持兼容并继续写入 AGENTS.md', async () => {
+    await writeFile(join(dir, 'AGENTS.md'), '# Custom\n\n', 'utf-8');
+
+    const wrote = await repo.ensureClaudeMd('claude');
+
+    expect(wrote).toBe(true);
+    expect(await readFile(join(dir, 'AGENTS.md'), 'utf-8')).toContain('flowpilot:start');
+    expect(existsSync(join(dir, 'CLAUDE.md'))).toBe(false);
   });
 
   it('ensureRoleMd 首次创建 ROLE.md', async () => {

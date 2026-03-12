@@ -7,6 +7,7 @@ import { readFileSync } from 'fs';
 import { mkdir, readFile, rename, writeFile } from 'fs/promises';
 import { hostname as getHostname } from 'os';
 import { join } from 'path';
+import type { ProgressData, TaskPhase } from '../domain/types';
 
 const DEFAULT_INVALID_LOCK_STALE_AFTER_MS = 30_000;
 const LINUX_BOOT_ID_PATH = '/proc/sys/kernel/random/boot_id';
@@ -16,6 +17,7 @@ const DIRTY_BASELINE_FILE = 'dirty-baseline.json';
 const OWNED_FILES_FILE = 'owned-files.json';
 const SETUP_OWNED_FILES_FILE = 'setup-owned.json';
 const RECONCILE_STATE_FILE = 'reconcile-state.json';
+const TASK_PULSES_FILE = 'task-pulses.json';
 const INJECTIONS_FILE = 'injections.json';
 const RUNTIME_PATH_PREFIXES = ['.flowpilot/', '.workflow/'];
 const RUNTIME_FILES = new Set(['.claude/settings.json']);
@@ -53,6 +55,18 @@ export interface SetupOwnedState {
 /** 中断恢复后待接管的任务 */
 export interface ReconcileState {
   taskIds: string[];
+}
+
+/** 子代理实时阶段上报 */
+export interface TaskPulseStateEntry {
+  phase: TaskPhase;
+  updatedAt: string;
+  note?: string;
+}
+
+/** 所有任务的实时阶段状态 */
+export interface TaskPulseState {
+  byTask: Record<string, TaskPulseStateEntry>;
 }
 
 /** FlowPilot 写入 settings.json 的 hook 结构 */
@@ -195,6 +209,26 @@ function isReconcileState(value: unknown): value is ReconcileState {
   return isRecord(value) && Array.isArray(value.taskIds);
 }
 
+function isTaskPulsePhase(value: unknown): value is TaskPhase {
+  return value === 'analysis'
+    || value === 'implementation'
+    || value === 'verification'
+    || value === 'blocked';
+}
+
+function isTaskPulseStateEntry(value: unknown): value is TaskPulseStateEntry {
+  return isRecord(value)
+    && isTaskPulsePhase(value.phase)
+    && isValidCreatedAt(value.updatedAt)
+    && (value.note === undefined || typeof value.note === 'string');
+}
+
+function isTaskPulseState(value: unknown): value is TaskPulseState {
+  return isRecord(value)
+    && isRecord(value.byTask)
+    && Object.values(value.byTask).every(isTaskPulseStateEntry);
+}
+
 function isHookEntry(value: unknown): value is HookEntry {
   if (!isRecord(value) || typeof value.matcher !== 'string' || !Array.isArray(value.hooks)) {
     return false;
@@ -255,6 +289,24 @@ function normalizeReconcileState(state: ReconcileState): ReconcileState {
         .map(taskId => taskId.trim())
         .filter(taskId => taskId.length > 0),
     )],
+  };
+}
+
+function normalizeTaskPulseState(state: TaskPulseState): TaskPulseState {
+  return {
+    byTask: Object.fromEntries(
+      Object.entries(state.byTask)
+        .filter(([taskId]) => taskId.trim().length > 0)
+        .filter(([, entry]) => isTaskPulseStateEntry(entry))
+        .map(([taskId, entry]) => [
+          taskId.trim(),
+          {
+            phase: entry.phase,
+            updatedAt: entry.updatedAt,
+            ...(entry.note && entry.note.trim().length > 0 ? { note: entry.note.trim() } : {}),
+          },
+        ]),
+    ),
   };
 }
 
@@ -638,6 +690,72 @@ export async function loadSetupOwnedFiles(basePath: string): Promise<SetupOwnedS
   } catch {
     return { files: [] };
   }
+}
+
+/** 读取任务实时阶段状态 */
+export async function loadTaskPulseState(basePath: string): Promise<TaskPulseState> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(runtimePath(basePath, TASK_PULSES_FILE), 'utf-8'));
+    if (!isTaskPulseState(parsed)) return { byTask: {} };
+    return normalizeTaskPulseState(parsed);
+  } catch {
+    return { byTask: {} };
+  }
+}
+
+/** 保存整个任务实时阶段状态 */
+export async function saveTaskPulseState(basePath: string, state: TaskPulseState): Promise<TaskPulseState> {
+  const normalized = normalizeTaskPulseState(state);
+  await mkdir(runtimeDir(basePath), { recursive: true });
+  const path = runtimePath(basePath, TASK_PULSES_FILE);
+  await writeFile(path + '.tmp', JSON.stringify(normalized, null, 2) + '\n', 'utf-8');
+  await rename(path + '.tmp', path);
+  return normalized;
+}
+
+/** 写入单个任务的实时阶段上报 */
+export async function recordTaskPulse(
+  basePath: string,
+  taskId: string,
+  entry: TaskPulseStateEntry,
+): Promise<TaskPulseState> {
+  const current = await loadTaskPulseState(basePath);
+  return saveTaskPulseState(basePath, {
+    byTask: {
+      ...current.byTask,
+      [taskId]: {
+        phase: entry.phase,
+        updatedAt: entry.updatedAt,
+        ...(entry.note && entry.note.trim().length > 0 ? { note: entry.note.trim() } : {}),
+      },
+    },
+  });
+}
+
+/** 清除单个任务的实时阶段上报 */
+export async function clearTaskPulse(basePath: string, taskId: string): Promise<TaskPulseState> {
+  const current = await loadTaskPulseState(basePath);
+  if (!current.byTask[taskId]) return current;
+  const next = { ...current.byTask };
+  delete next[taskId];
+  return saveTaskPulseState(basePath, { byTask: next });
+}
+
+/** 将持久化的任务阶段上报合并回 ProgressData，供 status/formatter 层消费 */
+export function mergeTaskPulsesIntoProgress(data: ProgressData, pulseState: TaskPulseState): ProgressData {
+  return {
+    ...data,
+    tasks: data.tasks.map((task) => {
+      const pulse = pulseState.byTask[task.id];
+      if (!pulse) return task;
+      return {
+        ...task,
+        phase: pulse.phase,
+        phaseUpdatedAt: pulse.updatedAt,
+        ...(pulse.note ? { phaseNote: pulse.note } : {}),
+      };
+    }),
+  };
 }
 
 /** 持久化 setup/init 阶段的 explainable FlowPilot-owned 文件 */

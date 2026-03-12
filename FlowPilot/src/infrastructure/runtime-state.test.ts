@@ -9,16 +9,21 @@ import {
   isRuntimeLockStale,
   loadActivationState,
   loadDirtyBaseline,
+  loadTaskPulseState,
   parseRuntimeLock,
   recordTaskActivations,
   saveDirtyBaseline,
+  saveTaskPulseState,
   loadOwnedFiles,
   loadSetupOwnedFiles,
   recordOwnedFiles,
+  recordTaskPulse,
   saveSetupOwnedFiles,
+  clearTaskPulse,
   collectOwnedFiles,
   loadSetupInjectionManifest,
   mergeSetupInjectionManifest,
+  mergeTaskPulsesIntoProgress,
 } from './runtime-state';
 
 let dir: string;
@@ -221,6 +226,113 @@ describe('runtime-state shared metadata', () => {
       files: ['.gitignore', 'CLAUDE.md'],
     });
     await expect(loadOwnedFiles(dir)).resolves.toEqual({ byTask: {} });
+  });
+
+  it('recordTaskPulse persists normalized live phase updates by task', async () => {
+    const first = await recordTaskPulse(dir, '001', {
+      phase: 'analysis',
+      updatedAt: '2026-03-12T10:00:00.000Z',
+      note: '  正在阅读 README  ',
+    });
+    await recordTaskPulse(dir, '002', {
+      phase: 'blocked',
+      updatedAt: '2026-03-12T10:01:00.000Z',
+    });
+
+    expect(first).toEqual({
+      byTask: {
+        '001': {
+          phase: 'analysis',
+          updatedAt: '2026-03-12T10:00:00.000Z',
+          note: '正在阅读 README',
+        },
+      },
+    });
+    await expect(loadTaskPulseState(dir)).resolves.toEqual({
+      byTask: {
+        '001': {
+          phase: 'analysis',
+          updatedAt: '2026-03-12T10:00:00.000Z',
+          note: '正在阅读 README',
+        },
+        '002': {
+          phase: 'blocked',
+          updatedAt: '2026-03-12T10:01:00.000Z',
+        },
+      },
+    });
+  });
+
+  it('clearTaskPulse removes a single live phase entry and preserves others', async () => {
+    await saveTaskPulseState(dir, {
+      byTask: {
+        '001': {
+          phase: 'implementation',
+          updatedAt: '2026-03-12T10:00:00.000Z',
+          note: '正在改 service',
+        },
+        '002': {
+          phase: 'verification',
+          updatedAt: '2026-03-12T10:05:00.000Z',
+        },
+      },
+    });
+
+    const next = await clearTaskPulse(dir, '001');
+    expect(next).toEqual({
+      byTask: {
+        '002': {
+          phase: 'verification',
+          updatedAt: '2026-03-12T10:05:00.000Z',
+        },
+      },
+    });
+    await expect(loadTaskPulseState(dir)).resolves.toEqual(next);
+  });
+
+  it('mergeTaskPulsesIntoProgress overlays persisted live state onto matching tasks only', () => {
+    const merged = mergeTaskPulsesIntoProgress({
+      name: 'demo',
+      status: 'running',
+      current: '001',
+      tasks: [
+        {
+          id: '001',
+          title: '分析需求',
+          description: '',
+          type: 'backend',
+          status: 'active',
+          deps: [],
+          summary: '',
+          retries: 0,
+        },
+        {
+          id: '002',
+          title: '写代码',
+          description: '',
+          type: 'backend',
+          status: 'pending',
+          deps: [],
+          summary: '',
+          retries: 0,
+        },
+      ],
+    }, {
+      byTask: {
+        '001': {
+          phase: 'analysis',
+          updatedAt: '2026-03-12T10:00:00.000Z',
+          note: '正在阅读 README',
+        },
+      },
+    });
+
+    expect(merged.tasks[0]).toMatchObject({
+      phase: 'analysis',
+      phaseUpdatedAt: '2026-03-12T10:00:00.000Z',
+      phaseNote: '正在阅读 README',
+    });
+    expect(merged.tasks[1]).not.toHaveProperty('phase');
   });
 
   it('recordTaskActivations persists activation metadata for later readers', async () => {
