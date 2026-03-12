@@ -3,7 +3,7 @@
  * @description 仓储接口 - 持久化契约
  */
 
-import type { ProgressData, SetupClient, WorkflowStats, EvolutionEntry } from './types';
+import type { ProgressData, SetupClient, WorkflowStats, EvolutionEntry, TaskPhase } from './types';
 
 /** 单个验证步骤状态 */
 export type VerifyStepStatus = 'passed' | 'skipped' | 'failed';
@@ -25,6 +25,13 @@ export interface VerifyResult {
   scripts: string[];
   steps?: VerifyStepResult[];
   error?: string;
+}
+
+/** 子代理实时阶段上报 */
+export interface TaskPulseUpdate {
+  phase: TaskPhase;
+  updatedAt?: string;
+  note?: string;
 }
 
 /** 自动 git 提交跳过原因 */
@@ -53,6 +60,10 @@ export interface WorkflowRepository {
   /** 保存任务树定义 */
   saveTasks(content: string): Promise<void>;
   loadTasks(): Promise<string | null>;
+  /** 保存/加载任务实时阶段上报 */
+  saveTaskPulse(taskId: string, update: TaskPulseUpdate): Promise<void>;
+  loadTaskPulses(): Promise<Record<string, TaskPulseUpdate>>;
+  clearTaskPulse(taskId: string): Promise<void>;
   /** 确保 instruction file（新项目默认 AGENTS.md，兼容旧的 CLAUDE.md）包含工作流协议 */
   ensureClaudeMd(client?: SetupClient): Promise<boolean>;
   /** 为 snow-cli 额外生成 ROLE.md，内容与主 instruction file 协议一致 */

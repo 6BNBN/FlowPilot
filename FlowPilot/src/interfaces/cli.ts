@@ -9,11 +9,31 @@ import type { WorkflowService } from '../application/workflow-service';
 import { formatStatus, formatTask, formatBatch } from './formatter';
 import { promptSetupClient, readStdinIfPiped } from './stdin';
 import { enableVerbose } from '../infrastructure/logger';
-import type { SetupClient } from '../domain/types';
+import type { SetupClient, TaskPhase } from '../domain/types';
 
 interface CliDeps {
   readStdinIfPiped?: typeof readStdinIfPiped;
   promptSetupClient?: () => Promise<SetupClient>;
+}
+
+function normalizePulsePhase(raw: string | undefined): TaskPhase {
+  const value = (raw ?? '').trim().toLowerCase();
+  switch (value) {
+    case 'analysis':
+    case '分析':
+      return 'analysis';
+    case 'implementation':
+    case '实现':
+      return 'implementation';
+    case 'verification':
+    case '验证':
+      return 'verification';
+    case 'blocked':
+    case '阻塞':
+      return 'blocked';
+    default:
+      throw new Error('需要合法的阶段：analysis|implementation|verification|blocked');
+  }
 }
 
 export class CLI {
@@ -55,7 +75,7 @@ export class CLI {
           const client = await (this.deps.promptSetupClient ?? promptSetupClient)();
           out = await s.setup(client);
         }
-        return out + '\n\n提示: 建议先通过 /plugin 安装插件 superpowers、frontend-design、feature-dev、code-review、context7，未安装则子Agent无法使用专业技能，功能会降级';
+        return `${out}\n\n**提示**\n- 建议先通过 /plugin 安装插件 superpowers、frontend-design、feature-dev、code-review、context7\n- 未安装时，子Agent无法使用专业技能，体验会降级`;
       }
 
       case 'next': {
@@ -95,6 +115,23 @@ export class CLI {
           detail = await (this.deps.readStdinIfPiped ?? readStdinIfPiped)();
         }
         return await s.checkpoint(id, detail.trim(), files);
+      }
+
+      case 'pulse': {
+        const id = rest[0];
+        if (!id) throw new Error('需要任务ID');
+        const phaseIdx = rest.indexOf('--phase');
+        const noteIdx = rest.indexOf('--note');
+        const phaseSource = phaseIdx >= 0 ? rest[phaseIdx + 1] : rest[1];
+        const phase = normalizePulsePhase(phaseSource);
+        let note = '';
+        if (noteIdx >= 0) {
+          note = rest.slice(noteIdx + 1).join(' ').trim();
+        } else {
+          const startIdx = phaseIdx >= 0 ? phaseIdx + 2 : 2;
+          note = rest.slice(startIdx).join(' ').trim();
+        }
+        return await s.pulse(id, phase, note);
       }
 
       case 'adopt': {
@@ -192,6 +229,7 @@ const USAGE = `用法: node flow.js [--verbose] <command>
   init [--force]       初始化工作流 (stdin传入任务markdown，无stdin则显示客户端选项并接管项目)
   next [--batch]       获取下一个待执行任务 (--batch 返回所有可并行任务)
   checkpoint <id>      记录任务完成 [--file <path> | stdin | 内联文本] [--files f1 f2 ...]
+  pulse <id> <phase>   记录任务阶段进展 [--phase <phase>] [--note <text>]
   adopt <id>           接管中断后待接管变更并补 checkpoint [--file <path> | stdin | 内联文本] [--files f1 f2 ...]
   restart <id>         在确认并处理列出的本任务变更后允许任务从头重做；归属未明变更需人工确认，禁止整文件 git restore
   skip <id>            手动跳过任务
