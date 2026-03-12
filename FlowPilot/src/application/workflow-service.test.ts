@@ -1009,6 +1009,32 @@ describe('WorkflowService 集成测试', () => {
     expect((await svc.status())?.status).toBe('finishing');
   });
 
+  it('finish在 git 仓库中无待提交文件时会创建显式最终收尾提交并清理工作流', async () => {
+    await initGitRepo(dir);
+    const repo = new FsWorkflowRepository(dir);
+    mockChangedFiles(repo, []);
+    const clearAllSpy = vi.spyOn(repo, 'clearAll');
+    const repoCommitSpy = vi.spyOn(repo, 'commit');
+    vi.spyOn(repo, 'verify').mockReturnValue({ passed: true, scripts: ['npm test'] });
+    svc = new WorkflowService(repo, parseTasksMarkdown);
+    await completeWorkflow(svc);
+    await svc.review();
+
+    const beforeHead = runGit(['rev-parse', 'HEAD'], dir);
+    const msg = await svc.finish();
+    const afterHead = runGit(['rev-parse', 'HEAD'], dir);
+    const headMessage = runGit(['show', '--quiet', '--format=%B', 'HEAD'], dir);
+
+    expect(msg).toContain('已提交最终commit');
+    expect(msg).toContain('工作流回到待命状态');
+    expect(msg).not.toContain('未提交最终commit');
+    expect(afterHead).not.toBe(beforeHead);
+    expect(headMessage).toContain('task-finish: 集成测试');
+    expect(repoCommitSpy).not.toHaveBeenCalledWith('finish', expect.any(String), expect.any(String), []);
+    expect(clearAllSpy).toHaveBeenCalled();
+    expect(await svc.status()).toBeNull();
+  });
+
   it('finish在 cleanup 后若 AGENTS.md 残留用户改动则拒绝最终提交', async () => {
     const repo = new FsWorkflowRepository(dir);
     const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
