@@ -76,13 +76,9 @@ describe('operational readiness smoke tests', () => {
     expect(finishOutput).toContain('验证结果: 未发现可执行的验证命令');
     expect(finishOutput).toContain('1 done');
     expect(finishOutput).toContain('未提交最终commit');
-    expect(finishOutput).toContain('工作流回到待命状态');
-    expect(finishOutput).toContain('等待下一个需求');
+    expect(finishOutput).toContain('最终commit尚未完成，工作流仍停留在收尾阶段');
 
-    await expect(access(join(repoDir, '.workflow'))).rejects.toThrow();
-    await expect(access(join(repoDir, '.claude'))).rejects.toThrow();
-    await expect(access(join(repoDir, '.claude', 'settings.json'))).rejects.toThrow();
-    await expect(access(join(repoDir, 'AGENTS.md'))).rejects.toThrow();
+    expect((await stat(join(repoDir, '.workflow'))).isDirectory()).toBe(true);
 
     expect(await readFile(join(repoDir, '.gitignore'), 'utf-8')).toBe('.workflow/\n.flowpilot/\n.claude/settings.json\n.claude/worktrees/\n');
 
@@ -90,9 +86,7 @@ describe('operational readiness smoke tests', () => {
     expect(status).toEqual(['?? .gitignore']);
 
     const flowpilotEntries = (await readdir(join(repoDir, '.flowpilot'))).sort();
-    expect(flowpilotEntries).toContain('history');
-    expect(flowpilotEntries).not.toContain('.workflow');
-    expect((await readdir(join(repoDir, '.flowpilot', 'history'))).length).toBe(1);
+    expect(flowpilotEntries).not.toContain('history');
 
     const commitCount = runGit(repoDir, ['rev-list', '--count', 'HEAD']);
     expect(commitCount).toBe('1');
