@@ -997,6 +997,21 @@ async function clearTaskPulse(basePath2, taskId) {
   delete next[taskId];
   return saveTaskPulseState(basePath2, { byTask: next });
 }
+function mergeTaskPulsesIntoProgress(data, pulseState) {
+  return {
+    ...data,
+    tasks: data.tasks.map((task) => {
+      const pulse = pulseState.byTask[task.id];
+      if (!pulse) return task;
+      return {
+        ...task,
+        phase: pulse.phase,
+        phaseUpdatedAt: pulse.updatedAt,
+        ...pulse.note ? { phaseNote: pulse.note } : {}
+      };
+    })
+  };
+}
 async function saveSetupOwnedFiles(basePath2, files) {
   const next = normalizeSetupOwnedState({ files });
   await (0, import_promises.mkdir)(runtimeDir(basePath2), { recursive: true });
@@ -1478,7 +1493,9 @@ var FsWorkflowRepository = class {
   async loadProgress() {
     try {
       const raw = await (0, import_promises2.readFile)((0, import_path2.join)(this.root, "progress.md"), "utf-8");
-      return parseProgressMarkdown(raw);
+      const data = parseProgressMarkdown(raw);
+      const pulseState = await loadTaskPulseState(this.base);
+      return mergeTaskPulsesIntoProgress(data, pulseState);
     } catch {
       return null;
     }
