@@ -10,7 +10,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const FLOW_CLI = resolve(dirname(fileURLToPath(import.meta.url)), '../../dist/flow.js');
+const DIST_FLOW_CLI = resolve(dirname(fileURLToPath(import.meta.url)), '../../dist/flow.js');
+const ROOT_FLOW_CLI = resolve(dirname(fileURLToPath(import.meta.url)), '../../../flow.js');
 const TASK_MARKDOWN = `# Clean Repo Smoke\n\n1. [backend] add tracked file\n  create one tracked file in a clean repo\n`;
 const SUBMODULE_TASK_MARKDOWN = `# Submodule Smoke\n\n1. [backend] advance submodule gitlink\n  advance a submodule commit and checkpoint the gitlink path\n`;
 
@@ -28,8 +29,8 @@ function initGitRepo(repoDir: string): void {
   execFileSync('git', ['config', 'user.email', 'flowpilot@example.com'], { cwd: repoDir, stdio: 'pipe' });
 }
 
-function runFlow(repoDir: string, args: string[], input?: string): string {
-  return execFileSync('node', [FLOW_CLI, ...args], {
+function runFlow(repoDir: string, args: string[], input?: string, cliPath: string = DIST_FLOW_CLI): string {
+  return execFileSync('node', [cliPath, ...args], {
     cwd: repoDir,
     input,
     encoding: 'utf-8',
@@ -51,10 +52,10 @@ describe('operational readiness smoke tests', () => {
 
     initGitRepo(repoDir);
 
-    const initOutput = runFlow(repoDir, ['init'], TASK_MARKDOWN);
+    const initOutput = runFlow(repoDir, ['init'], TASK_MARKDOWN, ROOT_FLOW_CLI);
     expect(initOutput).toContain('已初始化工作流: Clean Repo Smoke (1 个任务)');
 
-    const nextOutput = runFlow(repoDir, ['next']);
+    const nextOutput = runFlow(repoDir, ['next'], undefined, ROOT_FLOW_CLI);
     expect(nextOutput).toContain('--- 任务 001 ---');
 
     await writeFile(join(repoDir, 'app.txt'), 'hello smoke\n', 'utf-8');
@@ -63,16 +64,17 @@ describe('operational readiness smoke tests', () => {
       repoDir,
       ['checkpoint', '001', '--files', 'app.txt'],
       '[REMEMBER] clean repo smoke writes exactly one tracked file',
+      ROOT_FLOW_CLI,
     );
 
     expect(checkpointOutput).toContain('任务 001 完成 (1/1)');
     expect(checkpointOutput).toContain('全部任务已完成，请执行 node flow.js finish 进行收尾');
     expect(checkpointOutput).toContain('[已自动提交]');
 
-    const reviewOutput = runFlow(repoDir, ['review']);
+    const reviewOutput = runFlow(repoDir, ['review'], undefined, ROOT_FLOW_CLI);
     expect(reviewOutput).toContain('代码审查已通过，请执行 node flow.js finish 完成收尾');
 
-    const finishOutput = runFlow(repoDir, ['finish']);
+    const finishOutput = runFlow(repoDir, ['finish'], undefined, ROOT_FLOW_CLI);
     expect(finishOutput).toContain('验证结果: 未发现可执行的验证命令');
     expect(finishOutput).toContain('1 done');
     expect(finishOutput).toContain('未提交最终commit');
@@ -108,7 +110,7 @@ describe('operational readiness smoke tests', () => {
     execFileSync('git', ['commit', '-m', 'init baseline'], { cwd: repoDir, stdio: 'pipe' });
     await writeFile(join(repoDir, 'baseline.txt'), 'baseline\ndirty before init\n', 'utf-8');
 
-    const initOutput = runFlow(repoDir, ['init'], TASK_MARKDOWN);
+    const initOutput = runFlow(repoDir, ['init'], TASK_MARKDOWN, ROOT_FLOW_CLI);
     expect(initOutput).toContain('已初始化工作流: Clean Repo Smoke (1 个任务)');
 
     runFlow(repoDir, ['next']);
@@ -150,7 +152,7 @@ describe('operational readiness smoke tests', () => {
     const initOutput = runFlow(repoDir, ['init'], TASK_MARKDOWN);
     expect(initOutput).toContain('已初始化工作流: Clean Repo Smoke (1 个任务)');
 
-    const nextOutput = runFlow(repoDir, ['next']);
+    const nextOutput = runFlow(repoDir, ['next'], undefined, ROOT_FLOW_CLI);
     expect(nextOutput).toContain('--- 任务 001 ---');
 
     await writeFile(join(repoDir, 'residue.txt'), 'left behind by interrupted task\n', 'utf-8');
