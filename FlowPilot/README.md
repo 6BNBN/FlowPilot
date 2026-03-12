@@ -77,6 +77,16 @@ codex --yolo
 
 ---
 
+🔥 **子代理执行可视化增强** — 协议层新增子代理进度上报机制（建议每 30 秒更新 phase），formatter 实时显示任务激活时长（⏱️ X分X秒），超过 5 分钟显示超时预警（⚠️ 超时）
+
+🔥 **Codex 并发上限调整为 50** — 通过分析 Codex CLI 源码，发现默认并发上限为 6，需在 `~/.codex/config.toml` 中配置：
+  ```toml
+  [agents]
+  max_threads = 50
+  ```
+
+---
+
 ## 为什么用 FlowPilot
 
 传统 CC 开发：你是项目经理——拆任务、分配、跟进、验收，全程盯着。
@@ -287,6 +297,9 @@ Finalization 阶段（可选）：
 - `Codex`
   - 在 `~/.codex/config.toml` 中加入：
     ```toml
+    [agents]
+    max_threads = 50          # 子代理并发上限，默认 6
+    
     [features]
     multi_agent = true
     ```

@@ -148,7 +148,7 @@ describe('WorkflowService 集成测试', () => {
     expect(msg).toContain('已暂停调度');
     expect(msg).toContain('node flow.js adopt 001');
     expect(msg).toContain('归属未明');
-    expect(msg).toContain('不要整文件 git restore');
+    expect(msg).toContain('不会自动恢复这些文件');
     expect(msg).toContain('src/feature.ts');
   });
 
@@ -299,7 +299,7 @@ describe('WorkflowService 集成测试', () => {
     expect(msg).toContain('已暂停调度');
     expect(msg).toContain('manual-delete.txt');
     expect(msg).toContain('用户手动修改/删除');
-    expect(msg).toContain('不要整文件 git restore');
+    expect(msg).toContain('不会自动恢复这些文件');
   });
 
   it('resume在 baseline 缺失但存在归属未明变更时仍进入 reconciling', async () => {
@@ -1027,7 +1027,7 @@ describe('WorkflowService 集成测试', () => {
     const headMessage = runGit(['show', '--quiet', '--format=%B', 'HEAD'], dir);
 
     expect(msg).toContain('已提交最终commit');
-    expect(msg).toContain('工作流回到待命状态');
+    expect(msg).toContain('已回到待命状态');
     expect(msg).not.toContain('未提交最终commit');
     expect(afterHead).not.toBe(beforeHead);
     expect(headMessage).toContain('task-finish: 集成测试');
@@ -1054,7 +1054,7 @@ describe('WorkflowService 集成测试', () => {
 
     expect(msg).not.toContain('拒绝最终提交');
     expect(msg).toContain('已提交最终commit');
-    expect(msg).toContain('工作流回到待命状态');
+    expect(msg).toContain('已回到待命状态');
     expect(commitSpy).not.toHaveBeenCalledWith('finish', expect.any(String), expect.any(String), expect.anything());
     expect(await readFile(join(dir, 'AGENTS.md'), 'utf-8')).toContain('User residue');
     expect(await svc.status()).toBeNull();
@@ -1102,7 +1102,7 @@ describe('WorkflowService 集成测试', () => {
 
     expect(msg).not.toContain('拒绝最终提交');
     expect(msg).toContain('已提交最终commit');
-    expect(msg).toContain('工作流回到待命状态');
+    expect(msg).toContain('已回到待命状态');
     expect(await readFile(join(dir, '.claude', 'settings.json'), 'utf-8')).toBe(preWorkflowDirtyContent);
     expect(await svc.status()).toBeNull();
   });

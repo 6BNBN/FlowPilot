@@ -56,7 +56,7 @@ describe('operational readiness smoke tests', () => {
     expect(initOutput).toContain('已初始化工作流: Clean Repo Smoke (1 个任务)');
 
     const nextOutput = runFlow(repoDir, ['next'], undefined, ROOT_FLOW_CLI);
-    expect(nextOutput).toContain('--- 任务 001 ---');
+    expect(nextOutput).toContain('**═══ 任务 001 ═══**');
 
     await writeFile(join(repoDir, 'app.txt'), 'hello smoke\n', 'utf-8');
 
@@ -72,13 +72,13 @@ describe('operational readiness smoke tests', () => {
     expect(checkpointOutput).toContain('[已自动提交]');
 
     const reviewOutput = runFlow(repoDir, ['review'], undefined, ROOT_FLOW_CLI);
-    expect(reviewOutput).toContain('代码审查已通过，请执行 node flow.js finish 完成收尾');
+    expect(reviewOutput).toContain('代码审查已通过\n\n**═══ 下一步 ═══**\n👉 运行 `node flow.js finish` 完成收尾');
 
     const finishOutput = runFlow(repoDir, ['finish'], undefined, ROOT_FLOW_CLI);
     expect(finishOutput).toContain('验证结果: 未发现可执行的验证命令');
     expect(finishOutput).toContain('1 done');
     expect(finishOutput).toContain('已提交最终commit');
-    expect(finishOutput).toContain('工作流回到待命状态');
+    expect(finishOutput).toContain('已回到待命状态');
     await expect(access(join(repoDir, '.workflow'))).rejects.toThrow();
 
     expect(await readFile(join(repoDir, '.gitignore'), 'utf-8')).toBe('.workflow/\n.flowpilot/\n.claude/settings.json\n.claude/worktrees/\n');
@@ -123,7 +123,7 @@ describe('operational readiness smoke tests', () => {
     expect(checkpointOutput).toContain('[已自动提交]');
 
     const reviewOutput = runFlow(repoDir, ['review']);
-    expect(reviewOutput).toContain('代码审查已通过，请执行 node flow.js finish 完成收尾');
+    expect(reviewOutput).toContain('代码审查已通过\n\n**═══ 下一步 ═══**\n👉 运行 `node flow.js finish` 完成收尾');
 
     await writeFile(join(repoDir, 'rogue.txt'), 'outside workflow boundary\n', 'utf-8');
 
@@ -152,19 +152,19 @@ describe('operational readiness smoke tests', () => {
     expect(initOutput).toContain('已初始化工作流: Clean Repo Smoke (1 个任务)');
 
     const nextOutput = runFlow(repoDir, ['next'], undefined, ROOT_FLOW_CLI);
-    expect(nextOutput).toContain('--- 任务 001 ---');
+    expect(nextOutput).toContain('**═══ 任务 001 ═══**');
 
     await writeFile(join(repoDir, 'residue.txt'), 'left behind by interrupted task\n', 'utf-8');
 
     const resumeOutput = runFlow(repoDir, ['resume']);
-    expect(resumeOutput).toContain('恢复工作流: Clean Repo Smoke');
+    expect(resumeOutput).toContain('**═══ 恢复工作流 ═══**\n📂 Clean Repo Smoke');
     expect(resumeOutput).toContain('进度: 0/1');
-    expect(resumeOutput).toContain('已暂停继续调度');
+    expect(resumeOutput).toContain('已暂停调度');
     expect(resumeOutput).toContain('node flow.js adopt 001');
     expect(resumeOutput).toContain('工作流启动前已有 1 个未归档变更仍然保留:');
     expect(resumeOutput).toContain('- baseline.txt');
     expect(resumeOutput).toContain('归属未明');
-    expect(resumeOutput).toContain('不要整文件 git restore');
+    expect(resumeOutput).toContain('不会自动恢复这些文件');
     expect(resumeOutput).toContain('- residue.txt');
 
     expect(() => runFlow(repoDir, ['next'])).toThrow(/adopt|restart|skip/);
@@ -177,8 +177,8 @@ describe('operational readiness smoke tests', () => {
     expect(adoptOutput).toContain('任务 001 完成');
 
     const statusOutput = runFlow(repoDir, ['status']);
-    expect(statusOutput).toContain('状态: running | 进度: 1/1');
-    expect(statusOutput).toContain('[x] 001 [backend] add tracked file');
+    expect(statusOutput).toContain('Clean Repo Smoke · running');
+    expect(statusOutput).toContain('✓ 001 [backend] add tracked file');
 
     const gitStatus = runGit(repoDir, ['status', '--short']);
     expect(gitStatus).toContain('M baseline.txt');
@@ -210,7 +210,7 @@ describe('operational readiness smoke tests', () => {
     expect(initOutput).toContain('已初始化工作流: Submodule Smoke (1 个任务)');
 
     const nextOutput = runFlow(rootDir, ['next']);
-    expect(nextOutput).toContain('--- 任务 001 ---');
+    expect(nextOutput).toContain('**═══ 任务 001 ═══**');
 
     initGitRepo(submodulePath);
     await writeFile(join(submodulePath, trackedFile), 'base\nadvanced\n', 'utf-8');

@@ -59,7 +59,7 @@ describe('WorkflowService finish verification messaging', () => {
     expect(msg).toContain('验证结果:');
     expect(msg).toContain('通过: npm run build');
     expect(msg).toContain('跳过: npm run test -- --run（未找到测试文件）');
-    expect(msg).toContain('请派子Agent执行 code-review');
+    expect(msg).toContain('1. 派子Agent执行 code-review');
     expect(msg).not.toContain('验证通过: npm run build, npm run test -- --run');
   });
 
