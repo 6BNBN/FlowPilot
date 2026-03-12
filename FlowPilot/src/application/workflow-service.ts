@@ -848,52 +848,62 @@ export class WorkflowService {
 
     if (finishBoundary.ok === 'degraded') {
       await this.persistFinalSummary(finalSummary);
-      this.repo.cleanTags();
-      await this.repo.clearAll();
-      return `${verifySummary}\n${stats}\n${finalSummary}\n${finishBoundary.message}\n未提交最终commit：未找到 dirty baseline，保守跳过 auto-commit\n工作流回到待命状态\n等待下一个需求...`;
+      return [
+        verifySummary,
+        stats,
+        finalSummary,
+        finishBoundary.message,
+        '未提交最终commit：未找到 dirty baseline，保守跳过 auto-commit',
+        '工作流仍停留在收尾阶段，请先处理最终提交边界，再重新执行 node flow.js finish',
+      ].join('\n');
     }
 
     const titles = done.map(t => `- ${t.id}: ${t.title}`).join('\n');
-    await runLifecycleHook('onWorkflowFinish', this.repo.projectRoot(), { WORKFLOW_NAME: data.name });
-
-    // 保存工作流历史统计到 .flowpilot/history/（永久存储，不随 clearAll 清理）
-    const wfStats = collectStats(data);
-    await this.repo.saveHistory(wfStats);
-
-    // 进化循环：Reflect → Experiment
-    const configBeforeEvolution = await this.repo.loadConfig();
-    const reflectReport = await reflect(wfStats, this.repo.projectRoot());
-    const experimentRan = reflectReport.experiments.length > 0;
-    if (experimentRan) {
-      await experiment(reflectReport, this.repo.projectRoot());
-    }
-
-    // 保存进化快照（config 变更前后对比）
-    const configAfterEvolution = await this.repo.loadConfig();
-    const changedConfigKeys = this.diffConfigKeys(configBeforeEvolution, configAfterEvolution);
-    if (changedConfigKeys.length > 0) {
-      await this.repo.saveEvolution({
-        timestamp: new Date().toISOString(),
-        workflowName: data.name,
-        configBefore: configBeforeEvolution,
-        configAfter: configAfterEvolution,
-        suggestions: [],
-      });
-    }
-    const evolutionSummary = this.formatEvolutionSummary({
-      reflectRan: true,
-      experimentRan,
-      changedConfigKeys,
-    });
-
-    this.repo.cleanTags();
     const commitResult = this.repo.commit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`, finishBoundary.files);
-    if (commitResult.status !== 'failed') {
+    if (commitResult.status === 'committed') {
       await this.persistFinalSummary(finalSummary);
+      await runLifecycleHook('onWorkflowFinish', this.repo.projectRoot(), { WORKFLOW_NAME: data.name });
+
+      // 保存工作流历史统计到 .flowpilot/history/（永久存储，不随 clearAll 清理）
+      const wfStats = collectStats(data);
+      await this.repo.saveHistory(wfStats);
+
+      // 进化循环：Reflect → Experiment
+      const configBeforeEvolution = await this.repo.loadConfig();
+      const reflectReport = await reflect(wfStats, this.repo.projectRoot());
+      const experimentRan = reflectReport.experiments.length > 0;
+      if (experimentRan) {
+        await experiment(reflectReport, this.repo.projectRoot());
+      }
+
+      // 保存进化快照（config 变更前后对比）
+      const configAfterEvolution = await this.repo.loadConfig();
+      const changedConfigKeys = this.diffConfigKeys(configBeforeEvolution, configAfterEvolution);
+      if (changedConfigKeys.length > 0) {
+        await this.repo.saveEvolution({
+          timestamp: new Date().toISOString(),
+          workflowName: data.name,
+          configBefore: configBeforeEvolution,
+          configAfter: configAfterEvolution,
+          suggestions: [],
+        });
+      }
+      const evolutionSummary = this.formatEvolutionSummary({
+        reflectRan: true,
+        experimentRan,
+        changedConfigKeys,
+      });
+
+      this.repo.cleanTags();
       await this.repo.clearAll();
+      return `${verifySummary}\n${stats}\n${finalSummary}\n${evolutionSummary}${this.formatCommitMessage(commitResult, 'finish')}\n工作流回到待命状态\n等待下一个需求...`;
     }
 
-    return `${verifySummary}\n${stats}\n${finalSummary}\n${evolutionSummary}${this.formatCommitMessage(commitResult, 'finish')}\n工作流回到待命状态\n等待下一个需求...`;
+    await this.persistFinalSummary(finalSummary);
+    const nextStep = commitResult.status === 'failed'
+      ? '最终commit失败，工作流仍停留在收尾阶段；请修复后重新执行 node flow.js finish'
+      : '最终commit尚未完成，工作流仍停留在收尾阶段；请处理提交边界后重新执行 node flow.js finish';
+    return `${verifySummary}\n${stats}\n${finalSummary}${this.formatCommitMessage(commitResult, 'finish')}\n${nextStep}`;
   }
 
   /** 计算 config 变更的键列表（浅比较，键名排序） */
