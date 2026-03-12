@@ -586,7 +586,8 @@ describe('WorkflowService 集成测试', () => {
   it('setup 选择 Claude Code 时会生成 hooks', async () => {
     const msg = await svc.setup('claude');
     expect(msg).toContain('.claude/settings.json 已更新');
-    expect(await readFile(join(dir, 'AGENTS.md'), 'utf-8')).toContain('flowpilot:start');
+    expect(await readFile(join(dir, 'CLAUDE.md'), 'utf-8')).toContain('flowpilot:start');
+    await expect(readFile(join(dir, 'AGENTS.md'), 'utf-8')).rejects.toThrow();
     expect(await readFile(join(dir, '.claude', 'settings.json'), 'utf-8')).toContain('TaskCreate');
   });
 

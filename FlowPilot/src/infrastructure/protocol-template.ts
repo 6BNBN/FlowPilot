@@ -160,6 +160,16 @@ Each sub-agent prompt MUST contain these sections in order:
 3. **Skill routing**: type=frontend → **MUST** invoke /frontend-design, type=backend → **MUST** invoke /feature-dev, type=general → execute directly. **For ALL types, you MUST also check available skills and MCP tools; use any that match the task alongside the primary skill.**
 4. **Unfamiliar APIs → MUST query context7 MCP first. Never guess.**
 
+### Sub-Agent Live Progress
+- 子代理在长任务中**必须**持续汇报阶段性进展，而不是只在最终 checkpoint 时回复。
+- 推荐至少覆盖以下阶段：
+  - \`analysis\`：正在阅读代码 / 文档 / 定位问题
+  - \`implementation\`：正在修改实现
+  - \`verification\`：正在运行测试 / build / smoke
+  - \`blocked\`：遇到卡点、环境问题或边界不清
+- 若平台或 CLI 提供进度上报命令（例如 \`node flow.js pulse ...\`），**必须优先**使用；否则至少在回复中明确阶段、最近活动和阻塞原因。
+- 若单个阶段持续时间过长且无新 checkpoint，必须主动上报“仍在执行”或“已阻塞”，避免主代理只能看到等待面板。
+
 ### Sub-Agent Checkpoint (Iron Rule #4 — most common violation)
 Sub-agent's LAST Bash command before replying MUST be:
 \`\`\`

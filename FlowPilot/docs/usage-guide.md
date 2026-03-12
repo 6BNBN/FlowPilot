@@ -22,7 +22,7 @@ claude --dangerously-skip-permissions
 ```
 
 初始化时会直接显示客户端选项：
-- `Claude Code`：生成 `AGENTS.md` + `.claude/settings.json`
+- `Claude Code`：生成 `CLAUDE.md` + `.claude/settings.json`
 - `Codex`：生成 `AGENTS.md`，并附加 Codex 平台增强规则（并行调度 + 子任务契约）
 - `Cursor` / `Other`：生成通用版 `AGENTS.md`
 - `snow-cli`：生成 `AGENTS.md` + `ROLE.md`
@@ -70,11 +70,12 @@ node flow.js init
 
 这会自动生成：
 - 会先显示客户端选项，并按选择生成：
-  - `AGENTS.md` — 新项目默认 instruction file（嵌入调度协议）
-  - `CLAUDE.md` — 仅兼容旧项目，已有时继续复用
+  - `CLAUDE.md` — `Claude Code` 模式默认 instruction file（旧项目也继续兼容）
+  - `AGENTS.md` — `Codex / Cursor / Other` 模式默认 instruction file
   - `ROLE.md` — 仅在选择 `snow-cli` 时额外生成，内容与 `AGENTS.md` 一致
   - `.claude/settings.json` — 仅在选择 `Claude Code` 时生成
 - 生成的 instruction file 会将终端输出风格作为硬约束，并默认强化依赖分析、并行调度与危险操作确认；其中 `Codex` 额外补强子任务下发契约（代理名称 / 任务定义 / 执行动作 / 预期结果）
+- `status / next / finish / review / init` 也会使用更友好的终端风格：强分组标题、状态图标、下一步提示，以及更直观的实时状态卡片
 - `Codex` 的增强规则还会显式要求按“任务分析 → 并行调度与子任务下发 → 结果汇总 → 递归迭代”推进复杂任务
 - `.workflow/` 目录 — 本地临时运行态
 - `.gitignore` 本地状态忽略规则（若缺失）— 默认忽略 `.workflow/`、`.flowpilot/`、`.claude/settings.json`、`.claude/worktrees/`
@@ -154,6 +155,31 @@ CC：恢复工作流: 博客系统 | 进度: 7/12 | 检测到中断任务 008 �
 
 > 注意：正常使用时你不需要手动执行这些命令，CC 会按协议自动调用。
 
+### `status` 现在会显示什么
+
+`node flow.js status` 不再只是“任务标题 + 状态码”，而会优先把用户最关心的信息前置出来：
+
+```text
+**当前状态**
+完成 2/4 | 1 进行中 | 1 阻塞
+
+**任务进度**
+[x] 001 修复入口
+[>] 002 实现中 | 8s 前更新 | 正在跑测试
+[!] 003 阻塞中 | 等待人工确认
+[ ] 004 待执行
+
+**下一步**
+- 先处理 003 的阻塞
+- 然后继续 finish
+```
+
+如果子代理持续上报阶段，FlowPilot 会进一步展示：
+- `分析中 / 实现中 / 验证中 / 阻塞中`
+- 最近活动时间
+- 最近一句进展摘要
+- 基于 heartbeat 的疑似卡住提示
+
 ### `finish` 现在具体会做什么
 
 `node flow.js finish` 的收尾顺序现在更明确：
@@ -197,7 +223,7 @@ CC：恢复工作流: 博客系统 | 进度: 7/12 | 检测到中断任务 008 �
 ```
 你的项目/
 ├── flow.js                    # 工具本体（你复制过来的）
-├── AGENTS.md                  # 新项目默认 instruction file
+├── CLAUDE.md / AGENTS.md      # 按客户端选择生成的 instruction file
 ├── ROLE.md                    # 仅 snow-cli 模式额外生成
 └── .workflow/
     ├── progress.md            # 任务状态表（核心记忆）
@@ -214,7 +240,7 @@ CC：恢复工作流: 博客系统 | 进度: 7/12 | 检测到中断任务 008 �
 ```
 用户描述开发需求
     ↓
-客户端读取 instruction file（新项目默认 AGENTS.md，旧项目兼容 CLAUDE.md）→ 发现嵌入协议 → 进入调度模式
+客户端读取 instruction file（`Claude Code` 默认 `CLAUDE.md`，`Codex / Cursor / Other` 默认 `AGENTS.md`，旧项目兼容原有文件）→ 发现嵌入协议 → 进入调度模式
     ↓
 flow resume → 检查是否有未完成工作流
     ↓
@@ -636,8 +662,9 @@ Windows 直接运行对应目录里的 `.bat` / `.ps1` 脚本即可。
 
 - `flow.js`（你复制进项目的单文件工具）
 - instruction file：
-  - 新项目通常是 `AGENTS.md`
-  - 兼容旧项目时可能是 `CLAUDE.md`
+  - `Claude Code` 模式通常是 `CLAUDE.md`
+  - `Codex / Cursor / Other` 模式通常是 `AGENTS.md`
+  - 兼容旧项目时会继续复用原有 instruction file
   - `snow-cli` 模式下还可能有 `ROLE.md`
 - `.claude/settings.json`（如果是 FlowPilot 在 `Claude Code` 模式下生成的）
 - `.workflow/`（本地临时运行态）

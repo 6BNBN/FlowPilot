@@ -9,7 +9,7 @@ When you come back, the code is written, tests have passed, and git commits are 
 
 > Update: FlowPilot now supports `Claude Code`, `Codex`, `Cursor`, `snow-cli`, and other clients. During `init`, you can directly choose the target client and generate the matching instruction file / setup extras.
 
-> Update: The built-in `AGENTS.md` / client-specific templates now include **response-style shaping**. They rein in the overly verbose default output common in GPT-style clients and make it closer to Claude-style communication: **conclusion first, details after, concise, direct, terminal-friendly** — while still enforcing parallelism, safety confirmation, and engineering discipline.
+> Update: The built-in instruction files / client-specific templates now include **response-style shaping**. They rein in the overly verbose default output common in GPT-style clients and make it closer to Claude-style communication: **conclusion first, details after, concise, direct, terminal-friendly** — while still enforcing parallelism, safety confirmation, and engineering discipline. FlowPilot's own terminal output is also moving toward stronger grouping, clearer status markers, and more explicit next-step hints.
 
 > Multi-client full-auto parallel switches:
 > - `Claude Code`: enable Agent Teams
@@ -252,14 +252,14 @@ Client-side parallel / auto-run switches:
   - No single standard exists; self-test multi-agent / auto-run behavior first
 
 In setup mode, `node flow.js init` now shows direct client options:
-- `Claude Code`: generates `AGENTS.md` + `.claude/settings.json`
+- `Claude Code`: generates `CLAUDE.md` + `.claude/settings.json`
 - `Codex`: generates `AGENTS.md` with extra Codex-specific enhancement rules
 - `Cursor` / `Other`: generate the generic `AGENTS.md`
 - `snow-cli`: generates `AGENTS.md` + `ROLE.md` with identical content
 
 Missing plugins are still reported in the output.
 
-Setup/init changes to the instruction file (new projects default to `AGENTS.md`, existing `CLAUDE.md` projects remain compatible), `.claude/settings.json`, and `.gitignore` follow ownership-based cleanup: FlowPilot only removes what it created or injected, and `flow finish` refuses the final commit if user residue still remains afterward.
+Setup/init changes to the instruction file (`Claude Code` now defaults to `CLAUDE.md`, `Codex / Cursor / Other` default to `AGENTS.md`, and legacy projects keep their existing file), `.claude/settings.json`, and `.gitignore` follow ownership-based cleanup: FlowPilot only removes what it created or injected, and `flow finish` refuses the final commit if user residue still remains afterward.
 
 By default, FlowPilot also ensures these local-only paths are ignored in the repo `.gitignore`: `.workflow/` (local transient runtime state), `.flowpilot/` (local persistent product state), `.claude/settings.json` (local integration state), and `.claude/worktrees/` (local worktree directory). It does not ignore the entire `.claude/` directory.
 
@@ -277,7 +277,7 @@ npm run test:run
 cp dist/flow.js /your/project/
 cd /your/project
 
-# Initialize (shows client options; new projects default to AGENTS.md)
+# Initialize (shows client options and generates the matching instruction file)
 node flow.js init
 
 # Launch CC in fully automated mode, describe your requirements, everything else is automatic
@@ -412,7 +412,7 @@ Companion npm scripts:
 ```
 node flow.js init
        ↓
-  Protocol embedded in the instruction file (AGENTS.md by default for new projects, CLAUDE.md for legacy repos) + client-specific setup extras when selected
+  Protocol embedded in the instruction file (`CLAUDE.md` by default for Claude Code, `AGENTS.md` for Codex / Cursor / Other, legacy repos keep their existing file) + client-specific setup extras when selected
        ↓
   User describes requirements / provides dev docs
        ↓                          ← Everything below is fully automated, no human intervention
@@ -520,8 +520,9 @@ If you no longer want FlowPilot in a project, remove the files it copied in or g
 
 - `flow.js` (the single-file tool you copied into the project)
 - the instruction file:
-  - usually `AGENTS.md` for new projects
-  - possibly `CLAUDE.md` for legacy-compatible setups
+  - usually `CLAUDE.md` in `Claude Code` mode
+  - usually `AGENTS.md` in `Codex / Cursor / Other` mode
+  - the existing instruction file is reused for legacy-compatible setups
   - `ROLE.md` as well in `snow-cli` mode
 - `.claude/settings.json` (if FlowPilot generated it in `Claude Code` mode)
 - `.workflow/` (local transient runtime state)

@@ -156,6 +156,17 @@ node flow.js status
 
 或者直接问 CC："现在进度怎么样了？"
 
+`status` 现在会更强调用户一眼想看懂的事情：
+- 哪些已完成
+- 哪些正在进行
+- 哪些阻塞
+- 下一步该做什么
+
+如果子代理持续上报阶段，`status` 还会显示更直观的实时状态卡片，例如：
+- `分析中 / 实现中 / 验证中 / 阻塞中`
+- 最近活动时间
+- 最近一句进展摘要
+
 ## finish 会在什么时候拒绝最终提交
 
 `node flow.js finish` 只有在验证通过、已经执行过 `node flow.js review`，并且工作区边界可证明安全时才会做最终提交。
@@ -214,8 +225,9 @@ Windows 可直接使用目录中的 `.bat` / `.ps1` 脚本。
 
 - `flow.js`（你复制进项目的单文件工具）
 - instruction file：
-  - 新项目通常是 `AGENTS.md`
-  - 兼容旧项目时可能是 `CLAUDE.md`
+  - `Claude Code` 模式通常是 `CLAUDE.md`
+  - `Codex / Cursor / Other` 模式通常是 `AGENTS.md`
+  - 兼容旧项目时会继续复用原有 instruction file
   - `snow-cli` 模式下还可能有 `ROLE.md`
 - `.claude/settings.json`（如果是 FlowPilot 在 `Claude Code` 模式下生成的）
 - `.workflow/`（本地临时运行态）

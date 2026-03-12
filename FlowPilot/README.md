@@ -9,7 +9,7 @@
 
 > 新增说明：现已兼容 `Claude Code`、`Codex`、`Cursor`、`snow-cli` 和其他客户端；`init` 时可直接选择目标客户端并生成对应的 instruction file / 配置。
 
-> 新增说明：内置 `AGENTS.md` / 客户端增强模板现已将**输出风格作为硬约束**，要求回答遵循：**先结论、后细节、简洁直给、终端友好**；同时补强了依赖分析、并行调度、危险操作确认等执行约束。
+> 新增说明：内置 instruction file / 客户端增强模板现已将**输出风格作为硬约束**，要求回答遵循：**先结论、后细节、简洁直给、终端友好**；同时补强了依赖分析、并行调度、危险操作确认等执行约束，FlowPilot 自己的终端输出也会强化分组、状态图标与下一步提示。
 
 > 多客户端全自动并行开关：
 > - `Claude Code`：开启 Agent Teams
@@ -37,7 +37,7 @@ claude --dangerously-skip-permissions
 ```
 
 初始化时会直接显示客户端选项：
-- `Claude Code`：生成 `AGENTS.md` + `.claude/settings.json`
+- `Claude Code`：生成 `CLAUDE.md` + `.claude/settings.json`
 - `Codex`：生成 `AGENTS.md`，并附加 Codex 平台增强规则（并行调度 + 子任务契约）
 - `Cursor` / `Other`：生成通用版 `AGENTS.md`
 - `snow-cli`：生成 `AGENTS.md` + `ROLE.md`
@@ -297,14 +297,14 @@ Finalization 阶段（可选）：
   - 没有统一标准，请先按各自文档自测多代理 / 自动运行能力
 
 `node flow.js init` 在接管模式下会直接显示客户端选项：
-- `Claude Code`：生成 `AGENTS.md` + `.claude/settings.json`
+- `Claude Code`：生成 `CLAUDE.md` + `.claude/settings.json`
 - `Codex`：生成 `AGENTS.md`，并附加 Codex 平台增强规则（如多代理并行调度约定）
 - `Cursor` / `Other`：生成通用版 `AGENTS.md`
 - `snow-cli`：生成 `AGENTS.md` + `ROLE.md`（两者内容保持一致）
 
 缺失插件会在输出中提醒。
 
-setup/init 写入的 instruction file（新项目默认 `AGENTS.md`，兼容旧的 `CLAUDE.md`）、`.claude/settings.json`、`.gitignore` 遵循 ownership-based cleanup：FlowPilot 只清理自己创建或注入的部分，cleanup 后若仍有用户残留改动，`flow finish` 会拒绝最终提交。
+setup/init 写入的 instruction file（`Claude Code` 默认 `CLAUDE.md`，`Codex / Cursor / Other` 默认 `AGENTS.md`，旧项目继续兼容已有文件）、`.claude/settings.json`、`.gitignore` 遵循 ownership-based cleanup：FlowPilot 只清理自己创建或注入的部分，cleanup 后若仍有用户残留改动，`flow finish` 会拒绝最终提交。
 
 默认情况下，FlowPilot 还会在项目 `.gitignore` 中确保以下本地状态被忽略：`.workflow/`（本地临时运行态）、`.flowpilot/`（本地持久化产品状态）、`.claude/settings.json`（本地集成配置）、`.claude/worktrees/`（本地工作树目录）。不会忽略整个 `.claude/` 目录。
 
@@ -322,7 +322,7 @@ npm run test:run
 cp dist/flow.js /your/project/
 cd /your/project
 
-# 初始化（显示客户端选项；新项目默认生成 AGENTS.md）
+# 初始化（显示客户端选项；按客户端生成对应 instruction file）
 node flow.js init
 
 # 全自动模式启动 CC，直接描述需求，剩下的全自动
@@ -448,7 +448,7 @@ node flow.js evolve               # 接收 CC sub-agent 反思结果并应用进
 ```
 node flow.js init
        ↓
-  协议嵌入 instruction file（新项目默认 AGENTS.md，旧项目兼容 CLAUDE.md）+ 按客户端选择注入额外配置
+  协议嵌入 instruction file（`Claude Code` 默认 `CLAUDE.md`，`Codex / Cursor / Other` 默认 `AGENTS.md`，旧项目兼容原有文件）+ 按客户端选择注入额外配置
        ↓
   用户描述需求 / 丢入开发文档
        ↓                          ← 以下全自动，无需人工介入
@@ -565,8 +565,9 @@ Copyright (c) 2025-2026 FlowPilot Contributors
 
 - `flow.js`（你复制进项目的单文件工具）
 - instruction file：
-  - 新项目通常是 `AGENTS.md`
-  - 兼容旧项目时可能是 `CLAUDE.md`
+  - `Claude Code` 模式通常是 `CLAUDE.md`
+  - `Codex / Cursor / Other` 模式通常是 `AGENTS.md`
+  - 兼容旧项目时会继续复用原有 instruction file
   - `snow-cli` 模式下还可能有 `ROLE.md`
 - `.claude/settings.json`（如果是 FlowPilot 在 `Claude Code` 模式下生成的）
 - `.workflow/`（本地临时运行态）

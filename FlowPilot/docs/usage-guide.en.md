@@ -42,10 +42,11 @@ node flow.js init
 
 This auto-generates:
 - It first shows client options, then generates according to the selected client:
-  - `AGENTS.md` — default instruction file for new projects
-  - `CLAUDE.md` — reused only for legacy projects that already have it
+  - `CLAUDE.md` — default instruction file in `Claude Code` mode (legacy projects remain compatible)
+  - `AGENTS.md` — default instruction file in `Codex / Cursor / Other` mode
   - `ROLE.md` — additionally generated only for `snow-cli`, with the same content as `AGENTS.md`
   - `.claude/settings.json` — generated only for `Claude Code`
+- `status / next / finish / review / init` also adopt a friendlier terminal style with stronger grouping, status markers, next-step hints, and richer live status cards
 - `.workflow/` directory — local transient runtime state
 - local-state `.gitignore` rules when missing — by default `.workflow/`, `.flowpilot/`, `.claude/settings.json`, and `.claude/worktrees/`
 
@@ -124,6 +125,31 @@ If the worktree still has unarchived changes, `resume` also reports the real bou
 
 > Note: During normal use you don't need to run these commands manually — CC calls them automatically per protocol.
 
+### What `status` Shows Now
+
+`node flow.js status` is no longer just a flat list of task ids. It aims to surface the user's real question first:
+
+```text
+**Current Status**
+Done 2/4 | 1 active | 1 blocked
+
+**Task Progress**
+[x] 001 Fix entrypoint
+[>] 002 Implementing | updated 8s ago | running tests
+[!] 003 Blocked | waiting for manual confirmation
+[ ] 004 Pending
+
+**Next**
+- Resolve the blocker in 003
+- Then continue finish
+```
+
+When sub-agents continuously report their stage, FlowPilot can also show:
+- `Analyzing / Implementing / Verifying / Blocked`
+- last activity time
+- a short recent progress note
+- heartbeat-based stuck warnings
+
 ### What `finish` Does Now
 
 `node flow.js finish` now has a clearer shutdown order:
@@ -167,7 +193,7 @@ Format rules:
 ```
 your-project/
 ├── flow.js                    # The tool itself (copied by you)
-├── AGENTS.md                  # Default instruction file for new projects
+├── CLAUDE.md / AGENTS.md      # Client-selected instruction file
 ├── ROLE.md                    # Extra file for snow-cli only
 └── .workflow/
     ├── progress.md            # Task status table (core memory)
@@ -184,7 +210,7 @@ your-project/
 ```
 User describes development requirements
     ↓
-The client reads the instruction file (AGENTS.md by default, CLAUDE.md for legacy repos) → Finds embedded protocol → Enters dispatch mode
+The client reads the instruction file (`CLAUDE.md` by default for Claude Code, `AGENTS.md` for Codex / Cursor / Other, legacy repos keep their existing file) → Finds embedded protocol → Enters dispatch mode
     ↓
 flow resume → Check for unfinished workflow
     ↓
@@ -453,8 +479,9 @@ If you no longer want FlowPilot in a project, remove the files it copied in or g
 
 - `flow.js` (the single-file tool you copied into the project)
 - the instruction file:
-  - usually `AGENTS.md` for new projects
-  - possibly `CLAUDE.md` for legacy-compatible setups
+  - usually `CLAUDE.md` in `Claude Code` mode
+  - usually `AGENTS.md` in `Codex / Cursor / Other` mode
+  - the existing instruction file is reused for legacy-compatible setups
   - `ROLE.md` as well in `snow-cli` mode
 - `.claude/settings.json` (if FlowPilot generated it in `Claude Code` mode)
 - `.workflow/` (local transient runtime state)

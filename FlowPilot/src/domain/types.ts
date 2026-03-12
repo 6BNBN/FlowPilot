@@ -9,6 +9,9 @@ export type TaskType = 'frontend' | 'backend' | 'general';
 /** setup 目标客户端 */
 export type SetupClient = 'claude' | 'codex' | 'cursor' | 'snow-cli' | 'other';
 
+/** 任务实时阶段 */
+export type TaskPhase = 'analysis' | 'implementation' | 'verification' | 'blocked';
+
 /** 任务状态 */
 export type TaskStatus = 'pending' | 'active' | 'done' | 'skipped' | 'failed';
 
@@ -29,6 +32,12 @@ export interface TaskEntry {
   summary: string;
   /** 失败重试次数 */
   retries: number;
+  /** 子代理最近一次上报的实时阶段 */
+  phase?: TaskPhase;
+  /** 子代理最近一次上报的阶段时间 */
+  phaseUpdatedAt?: string;
+  /** 子代理最近一次上报的一句话进展 */
+  phaseNote?: string;
 }
 
 /** 工作流全局状态 */

@@ -519,6 +519,16 @@ Each sub-agent prompt MUST contain these sections in order:
 3. **Skill routing**: type=frontend \u2192 **MUST** invoke /frontend-design, type=backend \u2192 **MUST** invoke /feature-dev, type=general \u2192 execute directly. **For ALL types, you MUST also check available skills and MCP tools; use any that match the task alongside the primary skill.**
 4. **Unfamiliar APIs \u2192 MUST query context7 MCP first. Never guess.**
 
+### Sub-Agent Live Progress
+- \u5B50\u4EE3\u7406\u5728\u957F\u4EFB\u52A1\u4E2D**\u5FC5\u987B**\u6301\u7EED\u6C47\u62A5\u9636\u6BB5\u6027\u8FDB\u5C55\uFF0C\u800C\u4E0D\u662F\u53EA\u5728\u6700\u7EC8 checkpoint \u65F6\u56DE\u590D\u3002
+- \u63A8\u8350\u81F3\u5C11\u8986\u76D6\u4EE5\u4E0B\u9636\u6BB5\uFF1A
+  - \`analysis\`\uFF1A\u6B63\u5728\u9605\u8BFB\u4EE3\u7801 / \u6587\u6863 / \u5B9A\u4F4D\u95EE\u9898
+  - \`implementation\`\uFF1A\u6B63\u5728\u4FEE\u6539\u5B9E\u73B0
+  - \`verification\`\uFF1A\u6B63\u5728\u8FD0\u884C\u6D4B\u8BD5 / build / smoke
+  - \`blocked\`\uFF1A\u9047\u5230\u5361\u70B9\u3001\u73AF\u5883\u95EE\u9898\u6216\u8FB9\u754C\u4E0D\u6E05
+- \u82E5\u5E73\u53F0\u6216 CLI \u63D0\u4F9B\u8FDB\u5EA6\u4E0A\u62A5\u547D\u4EE4\uFF08\u4F8B\u5982 \`node flow.js pulse ...\`\uFF09\uFF0C**\u5FC5\u987B\u4F18\u5148**\u4F7F\u7528\uFF1B\u5426\u5219\u81F3\u5C11\u5728\u56DE\u590D\u4E2D\u660E\u786E\u9636\u6BB5\u3001\u6700\u8FD1\u6D3B\u52A8\u548C\u963B\u585E\u539F\u56E0\u3002
+- \u82E5\u5355\u4E2A\u9636\u6BB5\u6301\u7EED\u65F6\u95F4\u8FC7\u957F\u4E14\u65E0\u65B0 checkpoint\uFF0C\u5FC5\u987B\u4E3B\u52A8\u4E0A\u62A5\u201C\u4ECD\u5728\u6267\u884C\u201D\u6216\u201C\u5DF2\u963B\u585E\u201D\uFF0C\u907F\u514D\u4E3B\u4EE3\u7406\u53EA\u80FD\u770B\u5230\u7B49\u5F85\u9762\u677F\u3002
+
 ### Sub-Agent Checkpoint (Iron Rule #4 \u2014 most common violation)
 Sub-agent's LAST Bash command before replying MUST be:
 \`\`\`
@@ -574,6 +584,7 @@ var DIRTY_BASELINE_FILE = "dirty-baseline.json";
 var OWNED_FILES_FILE = "owned-files.json";
 var SETUP_OWNED_FILES_FILE = "setup-owned.json";
 var RECONCILE_STATE_FILE = "reconcile-state.json";
+var TASK_PULSES_FILE = "task-pulses.json";
 var INJECTIONS_FILE = "injections.json";
 var RUNTIME_PATH_PREFIXES = [".flowpilot/", ".workflow/"];
 var RUNTIME_FILES = /* @__PURE__ */ new Set([".claude/settings.json"]);
@@ -615,6 +626,15 @@ function isSetupOwnedState(value) {
 function isReconcileState(value) {
   return isRecord(value) && Array.isArray(value.taskIds);
 }
+function isTaskPulsePhase(value) {
+  return value === "analysis" || value === "implementation" || value === "verification" || value === "blocked";
+}
+function isTaskPulseStateEntry(value) {
+  return isRecord(value) && isTaskPulsePhase(value.phase) && isValidCreatedAt(value.updatedAt) && (value.note === void 0 || typeof value.note === "string");
+}
+function isTaskPulseState(value) {
+  return isRecord(value) && isRecord(value.byTask) && Object.values(value.byTask).every(isTaskPulseStateEntry);
+}
 function isHookEntry(value) {
   if (!isRecord(value) || typeof value.matcher !== "string" || !Array.isArray(value.hooks)) {
     return false;
@@ -646,6 +666,20 @@ function normalizeReconcileState(state) {
     taskIds: [...new Set(
       state.taskIds.filter((taskId) => typeof taskId === "string").map((taskId) => taskId.trim()).filter((taskId) => taskId.length > 0)
     )]
+  };
+}
+function normalizeTaskPulseState(state) {
+  return {
+    byTask: Object.fromEntries(
+      Object.entries(state.byTask).filter(([taskId]) => taskId.trim().length > 0).filter(([, entry]) => isTaskPulseStateEntry(entry)).map(([taskId, entry]) => [
+        taskId.trim(),
+        {
+          phase: entry.phase,
+          updatedAt: entry.updatedAt,
+          ...entry.note && entry.note.trim().length > 0 ? { note: entry.note.trim() } : {}
+        }
+      ])
+    )
   };
 }
 function normalizeOwnedFilesState(state) {
@@ -926,6 +960,43 @@ async function loadSetupOwnedFiles(basePath2) {
     return { files: [] };
   }
 }
+async function loadTaskPulseState(basePath2) {
+  try {
+    const parsed = JSON.parse(await (0, import_promises.readFile)(runtimePath(basePath2, TASK_PULSES_FILE), "utf-8"));
+    if (!isTaskPulseState(parsed)) return { byTask: {} };
+    return normalizeTaskPulseState(parsed);
+  } catch {
+    return { byTask: {} };
+  }
+}
+async function saveTaskPulseState(basePath2, state) {
+  const normalized = normalizeTaskPulseState(state);
+  await (0, import_promises.mkdir)(runtimeDir(basePath2), { recursive: true });
+  const path = runtimePath(basePath2, TASK_PULSES_FILE);
+  await (0, import_promises.writeFile)(path + ".tmp", JSON.stringify(normalized, null, 2) + "\n", "utf-8");
+  await (0, import_promises.rename)(path + ".tmp", path);
+  return normalized;
+}
+async function recordTaskPulse(basePath2, taskId, entry) {
+  const current = await loadTaskPulseState(basePath2);
+  return saveTaskPulseState(basePath2, {
+    byTask: {
+      ...current.byTask,
+      [taskId]: {
+        phase: entry.phase,
+        updatedAt: entry.updatedAt,
+        ...entry.note && entry.note.trim().length > 0 ? { note: entry.note.trim() } : {}
+      }
+    }
+  });
+}
+async function clearTaskPulse(basePath2, taskId) {
+  const current = await loadTaskPulseState(basePath2);
+  if (!current.byTask[taskId]) return current;
+  const next = { ...current.byTask };
+  delete next[taskId];
+  return saveTaskPulseState(basePath2, { byTask: next });
+}
 async function saveSetupOwnedFiles(basePath2, files) {
   const next = normalizeSetupOwnedState({ files });
   await (0, import_promises.mkdir)(runtimeDir(basePath2), { recursive: true });
@@ -1026,9 +1097,12 @@ function parseProgressMarkdown(raw) {
     if (line.startsWith("\u5F53\u524D: ")) current = line.slice(4).trim();
     if (current === "\u65E0") current = null;
     if (line.startsWith("\u5F00\u59CB: ")) startTime = line.slice(4).trim();
-    const matchedTask = line.match(/^\|\s*(\d{3,})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$/);
+    const matchedTask = line.match(/^\|\s*(\d{3,})\s*\|\s*(.+?)\s*\|\s*(\w+)\s*\|\s*([^|]*?)\s*\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*(?:\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*)?\|$/);
     if (matchedTask) {
       const depsRaw = matchedTask[4].trim();
+      const phase = matchedTask[9] === "-" || matchedTask[9] === void 0 ? void 0 : matchedTask[9];
+      const phaseUpdatedAt = matchedTask[10] === "-" || matchedTask[10] === void 0 ? void 0 : matchedTask[10];
+      const phaseNote = matchedTask[11] === "-" || matchedTask[11] === void 0 ? void 0 : matchedTask[11];
       tasks.push({
         id: matchedTask[1],
         title: matchedTask[2],
@@ -1037,7 +1111,10 @@ function parseProgressMarkdown(raw) {
         status: VALID_TASK_STATUS.has(matchedTask[5]) ? matchedTask[5] : "pending",
         retries: parseInt(matchedTask[6], 10),
         summary: matchedTask[7] === "-" ? "" : matchedTask[7],
-        description: matchedTask[8] === "-" ? "" : matchedTask[8]
+        description: matchedTask[8] === "-" ? "" : matchedTask[8],
+        ...phase ? { phase } : {},
+        ...phaseUpdatedAt ? { phaseUpdatedAt } : {},
+        ...phaseNote ? { phaseNote } : {}
       });
     }
   }
@@ -1117,7 +1194,7 @@ function cleanupClaudeContent(content, manifest) {
   }
   return normalized === content ? { effect: "noop" } : { effect: "write", content: normalized };
 }
-async function resolveInstructionFile(basePath2) {
+async function resolveInstructionFile(basePath2, client = "other") {
   const primaryPath = (0, import_path2.join)(basePath2, PRIMARY_INSTRUCTION_FILE);
   try {
     await (0, import_promises2.access)(primaryPath);
@@ -1129,6 +1206,9 @@ async function resolveInstructionFile(basePath2) {
     await (0, import_promises2.access)(legacyPath);
     return { absPath: legacyPath, relPath: LEGACY_INSTRUCTION_FILE };
   } catch {
+  }
+  if (client === "claude") {
+    return { absPath: legacyPath, relPath: LEGACY_INSTRUCTION_FILE };
   }
   return { absPath: primaryPath, relPath: PRIMARY_INSTRUCTION_FILE };
 }
@@ -1383,13 +1463,13 @@ var FsWorkflowRepository = class {
       `\u5F53\u524D: ${data.current ?? "\u65E0"}`,
       ...data.startTime ? [`\u5F00\u59CB: ${data.startTime}`] : [],
       "",
-      "| ID | \u6807\u9898 | \u7C7B\u578B | \u4F9D\u8D56 | \u72B6\u6001 | \u91CD\u8BD5 | \u6458\u8981 | \u63CF\u8FF0 |",
-      "|----|------|------|------|------|------|------|------|"
+      "| ID | \u6807\u9898 | \u7C7B\u578B | \u4F9D\u8D56 | \u72B6\u6001 | \u91CD\u8BD5 | \u6458\u8981 | \u63CF\u8FF0 | \u9636\u6BB5 | \u6700\u8FD1\u66F4\u65B0 | \u9636\u6BB5\u8FDB\u5C55 |",
+      "|----|------|------|------|------|------|------|------|------|----------|----------|"
     ];
     for (const t of data.tasks) {
       const deps = t.deps.length ? t.deps.join(",") : "-";
       const esc = (s) => (s || "-").replace(/\|/g, "\u2223").replace(/\n/g, " ");
-      lines.push(`| ${t.id} | ${esc(t.title)} | ${t.type} | ${deps} | ${t.status} | ${t.retries} | ${esc(t.summary)} | ${esc(t.description)} |`);
+      lines.push(`| ${t.id} | ${esc(t.title)} | ${t.type} | ${deps} | ${t.status} | ${t.retries} | ${esc(t.summary)} | ${esc(t.description)} | ${esc(t.phase ?? "")} | ${esc(t.phaseUpdatedAt ?? "")} | ${esc(t.phaseNote ?? "")} |`);
     }
     const p = (0, import_path2.join)(this.root, "progress.md");
     await (0, import_promises2.writeFile)(p + ".tmp", lines.join("\n") + "\n", "utf-8");
@@ -1449,8 +1529,22 @@ var FsWorkflowRepository = class {
       return null;
     }
   }
+  async saveTaskPulse(taskId, update) {
+    await recordTaskPulse(this.base, taskId, {
+      phase: update.phase,
+      updatedAt: update.updatedAt ?? (/* @__PURE__ */ new Date()).toISOString(),
+      ...update.note ? { note: update.note } : {}
+    });
+  }
+  async loadTaskPulses() {
+    const state = await loadTaskPulseState(this.base);
+    return { ...state.byTask };
+  }
+  async clearTaskPulse(taskId) {
+    await clearTaskPulse(this.base, taskId);
+  }
   async ensureClaudeMd(client = "other") {
-    const { relPath } = await resolveInstructionFile(this.base);
+    const { relPath } = await resolveInstructionFile(this.base, client);
     return ensureInstructionDocument(this.base, relPath, client);
   }
   async ensureRoleMd(client = "other") {
@@ -3642,14 +3736,23 @@ async function runHeartbeat(basePath2, config) {
     if (data.status === "running") {
       const activeIds = data.tasks.filter((task) => task.status === "active").map((task) => task.id);
       if (activeIds.length) {
-        const [window, activationState] = await Promise.all([
+        const [window, activationState, pulseState] = await Promise.all([
           loadWindow(basePath2),
-          loadActivationState(basePath2)
+          loadActivationState(basePath2),
+          loadTaskPulseState(basePath2)
         ]);
         const lastCheckpointTimeMs = window.length ? new Date(window[window.length - 1].timestamp).getTime() : 0;
         const timedOutIds = getTimedOutTaskIds(activeIds, activationState, lastCheckpointTimeMs);
         if (timedOutIds.length) {
           warnings.push(`[TIMEOUT] \u4EFB\u52A1 ${timedOutIds.join(",")} \u8D85\u8FC730\u5206\u949F\u65E0checkpoint`);
+        }
+        const stalePulseIds = activeIds.filter((id) => {
+          const updatedAt = pulseState.byTask[id]?.updatedAt;
+          if (!updatedAt) return false;
+          return Date.now() - new Date(updatedAt).getTime() > TASK_TIMEOUT_MS;
+        });
+        if (stalePulseIds.length) {
+          warnings.push(`[STALL] \u4EFB\u52A1 ${stalePulseIds.join(",")} \u8D85\u8FC730\u5206\u949F\u65E0\u9636\u6BB5\u4E0A\u62A5`);
         }
       }
     }
@@ -3799,40 +3902,89 @@ var ICON = {
   skipped: "[-]",
   failed: "[!]"
 };
-function formatStatus(data) {
+function section(title, lines) {
+  const body = lines.filter((line) => Boolean(line && line.trim()));
+  return body.length ? `**${title}**
+${body.join("\n")}` : `**${title}**`;
+}
+function workflowName2(name) {
+  return name?.trim() ? name : "\u672A\u547D\u540D\u5DE5\u4F5C\u6D41";
+}
+function summarizeCounts(data) {
   const done = data.tasks.filter((t) => t.status === "done").length;
-  const lines = [
-    `=== ${data.name} ===`,
-    `\u72B6\u6001: ${data.status} | \u8FDB\u5EA6: ${done}/${data.tasks.length}`,
-    ""
-  ];
-  for (const t of data.tasks) {
-    lines.push(`${ICON[t.status] ?? "[ ]"} ${t.id} [${t.type}] ${t.title}${t.summary ? " - " + t.summary : ""}`);
+  const active = data.tasks.filter((t) => t.status === "active").length;
+  const pending = data.tasks.filter((t) => t.status === "pending").length;
+  const skipped2 = data.tasks.filter((t) => t.status === "skipped").length;
+  const failed = data.tasks.filter((t) => t.status === "failed").length;
+  const extras = [
+    active ? `${active} \u8FDB\u884C\u4E2D` : "",
+    pending ? `${pending} \u5F85\u6267\u884C` : "",
+    skipped2 ? `${skipped2} \u8DF3\u8FC7` : "",
+    failed ? `${failed} \u5931\u8D25` : ""
+  ].filter(Boolean).join(" | ");
+  return `${done}/${data.tasks.length} \u5DF2\u5B8C\u6210${extras ? ` | ${extras}` : ""}`;
+}
+function readLiveValue(task, keys) {
+  for (const key of keys) {
+    const value = task[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
   }
+  return void 0;
+}
+function formatTaskMeta(task) {
+  const stage = readLiveValue(task, ["stage", "phase", "liveStage"]);
+  const recent = readLiveValue(task, ["recentActivity", "lastActivityText", "activityAge"]);
+  const progress = readLiveValue(task, ["progressText", "latestProgress", "activitySummary"]);
+  const parts = [
+    stage ? `\u9636\u6BB5: ${stage}` : "",
+    recent ? `\u6700\u8FD1\u6D3B\u52A8: ${recent}` : "",
+    progress ? `\u8FDB\u5C55: ${progress}` : ""
+  ].filter(Boolean);
+  return parts.length ? `   ${parts.join(" | ")}` : null;
+}
+function formatTaskLine(task) {
+  const lines = [`${ICON[task.status] ?? "[ ]"} ${task.id} [${task.type}] ${task.title}${task.summary ? ` - ${task.summary}` : ""}`];
+  const meta = formatTaskMeta(task);
+  if (meta) lines.push(meta);
+  return lines;
+}
+function formatStatus(data) {
+  const lines = [
+    section("\u5F53\u524D\u72B6\u6001", [
+      `\u5DE5\u4F5C\u6D41: ${workflowName2(data.name)}`,
+      `\u72B6\u6001: ${data.status}`,
+      `\u8FDB\u5EA6: ${summarizeCounts(data)}`
+    ]),
+    "",
+    section("\u4EFB\u52A1\u8FDB\u5EA6", data.tasks.flatMap((task) => formatTaskLine(task)))
+  ];
   return lines.join("\n");
 }
 function formatTask(task, context) {
   const lines = [
-    `--- \u4EFB\u52A1 ${task.id} ---`,
-    `\u6807\u9898: ${task.title}`,
-    `\u7C7B\u578B: ${task.type}`,
-    `\u4F9D\u8D56: ${task.deps.length ? task.deps.join(", ") : "\u65E0"}`
+    section(`\u4EFB\u52A1 ${task.id}`, [
+      `\u6807\u9898: ${task.title}`,
+      `\u7C7B\u578B: ${task.type}`,
+      `\u4F9D\u8D56: ${task.deps.length ? task.deps.join(", ") : "\u65E0"}`,
+      task.description ? `\u63CF\u8FF0: ${task.description}` : null
+    ]),
+    "",
+    section("Checkpoint \u6307\u4EE4", [
+      `\u5B8C\u6210\u65F6: echo '\u4E00\u53E5\u8BDD\u6458\u8981' | node flow.js checkpoint ${task.id} --files <changed-file-1> <changed-file-2>`,
+      `\u5931\u8D25\u65F6: echo 'FAILED' | node flow.js checkpoint ${task.id}`
+    ])
   ];
-  if (task.description) {
-    lines.push(`\u63CF\u8FF0: ${task.description}`);
-  }
-  lines.push("", "--- checkpoint\u6307\u4EE4\uFF08\u5FC5\u987B\u5305\u542B\u5728sub-agent prompt\u4E2D\uFF09 ---");
-  lines.push(`\u5B8C\u6210\u65F6: echo '\u4E00\u53E5\u8BDD\u6458\u8981' | node flow.js checkpoint ${task.id} --files <changed-file-1> <changed-file-2>`);
-  lines.push(`\u5931\u8D25\u65F6: echo 'FAILED' | node flow.js checkpoint ${task.id}`);
   if (context) {
-    lines.push("", "--- \u4E0A\u4E0B\u6587 ---", context);
+    lines.push("", section("\u4E0A\u4E0B\u6587", [context]));
   }
   return lines.join("\n");
 }
 function formatBatch(items) {
   const lines = [
-    `=== \u5E76\u884C\u4EFB\u52A1\u6279\u6B21 (${items.length}\u4E2A) ===`,
-    "\u5FC5\u987B\u5C06\u672C\u6279\u6B21\u5168\u90E8\u4EFB\u52A1\u5728\u540C\u4E00\u6761\u6D88\u606F\u4E2D\u5E76\u884C\u6D3E\u53D1\u7ED9\u5B50Agent\u3002\u82E5\u6539\u4E3A\u4E32\u884C\u6D3E\u53D1\uFF0C\u4F1A\u76F4\u63A5\u964D\u4F4E\u541E\u5410\u91CF\u5E76\u8FDD\u53CD\u534F\u8BAE\u3002",
+    section("\u5E76\u884C\u4EFB\u52A1\u6279\u6B21", [
+      `\u672C\u8F6E\u5171 ${items.length} \u4E2A\u4EFB\u52A1`,
+      "\u8981\u6C42: \u5FC5\u987B\u5728\u540C\u4E00\u6761\u6D88\u606F\u4E2D\u5E76\u884C\u6D3E\u53D1\u5168\u90E8\u4EFB\u52A1\uFF1B\u4E0D\u8981\u4E3A\u4E86\u4FDD\u5B88\u800C\u964D\u6210\u4E32\u884C\u3002"
+    ]),
     ""
   ];
   for (const { task, context } of items) {
@@ -3845,16 +3997,16 @@ function formatFinalSummary(data) {
   const skipped2 = data.tasks.filter((t) => t.status === "skipped").length;
   const failed = data.tasks.filter((t) => t.status === "failed").length;
   const pending = data.tasks.filter((t) => t.status === "pending" || t.status === "active").length;
-  const lines = [
+  const stats = `${done} \u5B8C\u6210${skipped2 ? `, ${skipped2} \u8DF3\u8FC7` : ""}${failed ? `, ${failed} \u5931\u8D25` : ""}${pending ? `, ${pending} \u672A\u5B8C\u6210` : ""}`;
+  return [
     "\u6700\u7EC8\u603B\u7ED3:",
-    `\u5DE5\u4F5C\u6D41: ${data.name}`,
-    `\u7EDF\u8BA1: ${done} \u5B8C\u6210${skipped2 ? `, ${skipped2} \u8DF3\u8FC7` : ""}${failed ? `, ${failed} \u5931\u8D25` : ""}${pending ? `, ${pending} \u672A\u5B8C\u6210` : ""}`,
-    ""
-  ];
-  for (const task of data.tasks) {
-    lines.push(`${ICON[task.status] ?? "[ ]"} ${task.id} [${task.type}] ${task.title}${task.summary ? ` - ${task.summary}` : ""}`);
-  }
-  return lines.join("\n");
+    section("\u5B8C\u6210\u60C5\u51B5", [
+      `\u5DE5\u4F5C\u6D41: ${workflowName2(data.name)}`,
+      `\u7EDF\u8BA1: ${stats}`
+    ]),
+    "",
+    section("\u4EFB\u52A1\u5217\u8868", data.tasks.flatMap((task) => formatTaskLine(task)))
+  ].join("\n");
 }
 
 // src/application/workflow-service.ts
@@ -4279,6 +4431,26 @@ ${warns.join("\n")}` : msg;
       await this.repo.unlock();
     }
   }
+  /** pulse: 记录任务阶段进展 */
+  async pulse(id, phase, note = "") {
+    await this.repo.lock();
+    try {
+      const data = await this.requireProgress();
+      const task = data.tasks.find((t) => t.id === id);
+      if (!task) throw new Error(`\u4EFB\u52A1 ${id} \u4E0D\u5B58\u5728`);
+      if (task.status !== "active") {
+        throw new Error(`\u4EFB\u52A1 ${id} \u72B6\u6001\u4E3A ${task.status}\uFF0C\u53EA\u6709 active \u72B6\u6001\u53EF\u4EE5 pulse`);
+      }
+      await this.repo.saveTaskPulse(id, {
+        phase,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        note: note.trim() || void 0
+      });
+      return note.trim() ? `\u5DF2\u8BB0\u5F55\u4EFB\u52A1 ${id} \u9636\u6BB5 ${phase}: ${note.trim()}` : `\u5DF2\u8BB0\u5F55\u4EFB\u52A1 ${id} \u9636\u6BB5 ${phase}`;
+    } finally {
+      await this.repo.unlock();
+    }
+  }
   /** resume: 中断恢复 */
   async resume() {
     const data = await this.repo.loadProgress();
@@ -4286,8 +4458,12 @@ ${warns.join("\n")}` : msg;
     log.debug(`resume: status=${data.status}, current=${data.current}`);
     if (data.status === "idle") return "\u5DE5\u4F5C\u6D41\u5F85\u547D\u4E2D\uFF0C\u7B49\u5F85\u9700\u6C42\u8F93\u5165";
     if (data.status === "completed") return "\u5DE5\u4F5C\u6D41\u5DF2\u5168\u90E8\u5B8C\u6210";
-    if (data.status === "finishing") return `\u6062\u590D\u5DE5\u4F5C\u6D41: ${data.name}
-\u6B63\u5728\u6536\u5C3E\u9636\u6BB5\uFF0C\u8BF7\u6267\u884C node flow.js finish`;
+    if (data.status === "finishing") return `**\u5F53\u524D\u72B6\u6001**
+\u6062\u590D\u5DE5\u4F5C\u6D41: ${data.name}
+\u72B6\u6001: \u6536\u5C3E\u9636\u6BB5
+
+**\u4E0B\u4E00\u6B65**
+\u8BF7\u6267\u884C node flow.js finish`;
     if (data.status === "reconciling") {
       const doneCount2 = data.tasks.filter((t) => t.status === "done").length;
       const total2 = data.tasks.length;
@@ -4538,15 +4714,22 @@ ${warns.join("\n")}` : msg;
       lines.push(`\u68C0\u6D4B\u5230\u8FDB\u884C\u4E2D\u7684\u5DE5\u4F5C\u6D41: ${existing.name}`);
       lines.push(`\u8FDB\u5EA6: ${done}/${existing.tasks.length}`);
       if (existing.status === "finishing") {
+        lines.push("**\u5F53\u524D\u72B6\u6001**");
         lines.push("\u72B6\u6001: \u6536\u5C3E\u9636\u6BB5\uFF0C\u6267\u884C node flow.js finish \u7EE7\u7EED");
       } else {
+        lines.push("**\u5F53\u524D\u72B6\u6001**");
         lines.push("\u6267\u884C node flow.js resume \u7EE7\u7EED");
       }
     } else {
+      lines.push("**\u9879\u76EE\u72B6\u6001**");
       lines.push("\u9879\u76EE\u5DF2\u63A5\u7BA1\uFF0C\u5DE5\u4F5C\u6D41\u5DE5\u5177\u5C31\u7EEA");
       lines.push("\u7B49\u5F85\u9700\u6C42\u8F93\u5165\uFF08\u6587\u6863\u6216\u5BF9\u8BDD\u63CF\u8FF0\uFF09");
+      lines.push("");
+      lines.push("**\u4E0B\u4E00\u6B65**");
+      lines.push("\u63CF\u8FF0\u4F60\u7684\u5F00\u53D1\u4EFB\u52A1\u5373\u53EF\u542F\u52A8\u5168\u81EA\u52A8\u5F00\u53D1");
     }
     lines.push("");
+    lines.push("**\u751F\u6210\u7ED3\u679C**");
     if (wrote) {
       const instructionPath = (await loadSetupInjectionManifest(this.repo.projectRoot())).claudeMd?.path ?? "AGENTS.md";
       lines.push(`${instructionPath} \u5DF2\u66F4\u65B0: \u6DFB\u52A0\u4E86\u5DE5\u4F5C\u6D41\u534F\u8BAE`);
@@ -4557,7 +4740,11 @@ ${warns.join("\n")}` : msg;
     if (client === "claude") {
       lines.push(".claude/settings.json \u5DF2\u66F4\u65B0: \u6DFB\u52A0\u4E86 Claude Code Hooks");
     }
-    lines.push("\u63CF\u8FF0\u4F60\u7684\u5F00\u53D1\u4EFB\u52A1\u5373\u53EF\u542F\u52A8\u5168\u81EA\u52A8\u5F00\u53D1");
+    if (!lines.includes("\u63CF\u8FF0\u4F60\u7684\u5F00\u53D1\u4EFB\u52A1\u5373\u53EF\u542F\u52A8\u5168\u81EA\u52A8\u5F00\u53D1")) {
+      lines.push("");
+      lines.push("**\u4E0B\u4E00\u6B65**");
+      lines.push("\u63CF\u8FF0\u4F60\u7684\u5F00\u53D1\u4EFB\u52A1\u5373\u53EF\u542F\u52A8\u5168\u81EA\u52A8\u5F00\u53D1");
+    }
     return lines.join("\n");
   }
   /** review: 标记已通过code-review，解锁finish */
@@ -4566,7 +4753,7 @@ ${warns.join("\n")}` : msg;
     if (!isAllDone(data.tasks)) throw new Error("\u8FD8\u6709\u672A\u5B8C\u6210\u7684\u4EFB\u52A1\uFF0C\u8BF7\u5148\u5B8C\u6210\u6240\u6709\u4EFB\u52A1");
     if (data.status === "finishing") return "\u5DF2\u5904\u4E8Ereview\u901A\u8FC7\u72B6\u6001\uFF0C\u53EF\u4EE5\u6267\u884C node flow.js finish";
     await this.repo.saveProgress({ ...data, status: "finishing" });
-    return "\u4EE3\u7801\u5BA1\u67E5\u5DF2\u901A\u8FC7\uFF0C\u8BF7\u6267\u884C node flow.js finish \u5B8C\u6210\u6536\u5C3E";
+    return "**\u4EE3\u7801\u5BA1\u67E5**\n\u4EE3\u7801\u5BA1\u67E5\u5DF2\u901A\u8FC7\uFF0C\u8BF7\u6267\u884C node flow.js finish \u5B8C\u6210\u6536\u5C3E";
   }
   /** finish: 智能收尾 - 先verify，review后置 */
   async finish() {
@@ -4584,8 +4771,10 @@ ${warns.join("\n")}` : msg;
     }
     const verifySummary = this.formatVerifySummary(result);
     if (data.status !== "finishing") {
-      return `\u9A8C\u8BC1\u901A\u8FC7
+      return `**\u9A8C\u8BC1\u901A\u8FC7**
 ${verifySummary}
+
+**\u4E0B\u4E00\u6B65**
 \u8BF7\u6D3E\u5B50Agent\u6267\u884C code-review\uFF0C\u5B8C\u6210\u540E\u6267\u884C node flow.js review\uFF0C\u518D\u6267\u884C node flow.js finish`;
     }
     const done = data.tasks.filter((t) => t.status === "done");
@@ -4607,6 +4796,7 @@ ${finishBoundary.message}`;
         stats,
         finalSummary,
         finishBoundary.message,
+        "**\u4E0B\u4E00\u6B65**",
         "\u672A\u63D0\u4EA4\u6700\u7EC8commit\uFF1A\u672A\u627E\u5230 dirty baseline\uFF0C\u4FDD\u5B88\u8DF3\u8FC7 auto-commit",
         "\u5DE5\u4F5C\u6D41\u4ECD\u505C\u7559\u5728\u6536\u5C3E\u9636\u6BB5\uFF0C\u8BF7\u5148\u5904\u7406\u6700\u7EC8\u63D0\u4EA4\u8FB9\u754C\uFF0C\u518D\u91CD\u65B0\u6267\u884C node flow.js finish"
       ].join("\n");
@@ -4649,6 +4839,7 @@ ${titles}`;
 ${stats}
 ${finalSummary}
 ${evolutionSummary}${this.formatCommitMessage(commitResult, "finish")}
+**\u5B8C\u6210**
 \u5DE5\u4F5C\u6D41\u56DE\u5230\u5F85\u547D\u72B6\u6001
 \u7B49\u5F85\u4E0B\u4E00\u4E2A\u9700\u6C42...`;
     }
@@ -4657,6 +4848,7 @@ ${evolutionSummary}${this.formatCommitMessage(commitResult, "finish")}
     return `${verifySummary}
 ${stats}
 ${finalSummary}${this.formatCommitMessage(commitResult, "finish")}
+**\u4E0B\u4E00\u6B65**
 ${nextStep}`;
   }
   /** 计算 config 变更的键列表（浅比较，键名排序） */
@@ -5010,6 +5202,25 @@ async function promptSetupClient() {
 }
 
 // src/interfaces/cli.ts
+function normalizePulsePhase(raw) {
+  const value = (raw ?? "").trim().toLowerCase();
+  switch (value) {
+    case "analysis":
+    case "\u5206\u6790":
+      return "analysis";
+    case "implementation":
+    case "\u5B9E\u73B0":
+      return "implementation";
+    case "verification":
+    case "\u9A8C\u8BC1":
+      return "verification";
+    case "blocked":
+    case "\u963B\u585E":
+      return "blocked";
+    default:
+      throw new Error("\u9700\u8981\u5408\u6CD5\u7684\u9636\u6BB5\uFF1Aanalysis|implementation|verification|blocked");
+  }
+}
 var CLI = class {
   constructor(service2, deps = {}) {
     this.service = service2;
@@ -5046,7 +5257,11 @@ var CLI = class {
           const client = await (this.deps.promptSetupClient ?? promptSetupClient)();
           out = await s.setup(client);
         }
-        return out + "\n\n\u63D0\u793A: \u5EFA\u8BAE\u5148\u901A\u8FC7 /plugin \u5B89\u88C5\u63D2\u4EF6 superpowers\u3001frontend-design\u3001feature-dev\u3001code-review\u3001context7\uFF0C\u672A\u5B89\u88C5\u5219\u5B50Agent\u65E0\u6CD5\u4F7F\u7528\u4E13\u4E1A\u6280\u80FD\uFF0C\u529F\u80FD\u4F1A\u964D\u7EA7";
+        return `${out}
+
+**\u63D0\u793A**
+- \u5EFA\u8BAE\u5148\u901A\u8FC7 /plugin \u5B89\u88C5\u63D2\u4EF6 superpowers\u3001frontend-design\u3001feature-dev\u3001code-review\u3001context7
+- \u672A\u5B89\u88C5\u65F6\uFF0C\u5B50Agent\u65E0\u6CD5\u4F7F\u7528\u4E13\u4E1A\u6280\u80FD\uFF0C\u4F53\u9A8C\u4F1A\u964D\u7EA7`;
       }
       case "next": {
         if (rest.includes("--batch")) {
@@ -5081,6 +5296,22 @@ var CLI = class {
           detail = await (this.deps.readStdinIfPiped ?? readStdinIfPiped)();
         }
         return await s.checkpoint(id, detail.trim(), files);
+      }
+      case "pulse": {
+        const id = rest[0];
+        if (!id) throw new Error("\u9700\u8981\u4EFB\u52A1ID");
+        const phaseIdx = rest.indexOf("--phase");
+        const noteIdx = rest.indexOf("--note");
+        const phaseSource = phaseIdx >= 0 ? rest[phaseIdx + 1] : rest[1];
+        const phase = normalizePulsePhase(phaseSource);
+        let note = "";
+        if (noteIdx >= 0) {
+          note = rest.slice(noteIdx + 1).join(" ").trim();
+        } else {
+          const startIdx = phaseIdx >= 0 ? phaseIdx + 2 : 2;
+          note = rest.slice(startIdx).join(" ").trim();
+        }
+        return await s.pulse(id, phase, note);
       }
       case "adopt": {
         const id = rest[0];
@@ -5162,6 +5393,7 @@ var USAGE = `\u7528\u6CD5: node flow.js [--verbose] <command>
   init [--force]       \u521D\u59CB\u5316\u5DE5\u4F5C\u6D41 (stdin\u4F20\u5165\u4EFB\u52A1markdown\uFF0C\u65E0stdin\u5219\u663E\u793A\u5BA2\u6237\u7AEF\u9009\u9879\u5E76\u63A5\u7BA1\u9879\u76EE)
   next [--batch]       \u83B7\u53D6\u4E0B\u4E00\u4E2A\u5F85\u6267\u884C\u4EFB\u52A1 (--batch \u8FD4\u56DE\u6240\u6709\u53EF\u5E76\u884C\u4EFB\u52A1)
   checkpoint <id>      \u8BB0\u5F55\u4EFB\u52A1\u5B8C\u6210 [--file <path> | stdin | \u5185\u8054\u6587\u672C] [--files f1 f2 ...]
+  pulse <id> <phase>   \u8BB0\u5F55\u4EFB\u52A1\u9636\u6BB5\u8FDB\u5C55 [--phase <phase>] [--note <text>]
   adopt <id>           \u63A5\u7BA1\u4E2D\u65AD\u540E\u5F85\u63A5\u7BA1\u53D8\u66F4\u5E76\u8865 checkpoint [--file <path> | stdin | \u5185\u8054\u6587\u672C] [--files f1 f2 ...]
   restart <id>         \u5728\u786E\u8BA4\u5E76\u5904\u7406\u5217\u51FA\u7684\u672C\u4EFB\u52A1\u53D8\u66F4\u540E\u5141\u8BB8\u4EFB\u52A1\u4ECE\u5934\u91CD\u505A\uFF1B\u5F52\u5C5E\u672A\u660E\u53D8\u66F4\u9700\u4EBA\u5DE5\u786E\u8BA4\uFF0C\u7981\u6B62\u6574\u6587\u4EF6 git restore
   skip <id>            \u624B\u52A8\u8DF3\u8FC7\u4EFB\u52A1

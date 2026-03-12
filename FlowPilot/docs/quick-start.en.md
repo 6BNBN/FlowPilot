@@ -156,6 +156,17 @@ node flow.js status
 
 Or just ask CC: "How's the progress?"
 
+`status` now emphasizes what a human wants to know first:
+- what is already done
+- what is actively running
+- what is blocked
+- what the next step is
+
+When sub-agents continuously report their stage, the status output can also show richer live cards such as:
+- `Analyzing / Implementing / Verifying / Blocked`
+- last activity time
+- a short recent progress note
+
 ## When finish refuses the final commit
 
 `node flow.js finish` only creates the final commit after verification passes, `node flow.js review` has been completed, and the worktree boundary is still provably safe.
@@ -214,8 +225,9 @@ If you no longer want FlowPilot in a project, remove the files it copied in or g
 
 - `flow.js` (the single-file tool you copied into the project)
 - the instruction file:
-  - usually `AGENTS.md` for new projects
-  - possibly `CLAUDE.md` for legacy-compatible setups
+  - usually `CLAUDE.md` in `Claude Code` mode
+  - usually `AGENTS.md` in `Codex / Cursor / Other` mode
+  - the existing instruction file is reused for legacy-compatible setups
   - `ROLE.md` as well in `snow-cli` mode
 - `.claude/settings.json` (if FlowPilot generated it in `Claude Code` mode)
 - `.workflow/` (local transient runtime state)

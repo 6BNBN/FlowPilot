@@ -9,7 +9,7 @@ import { loadWindow } from './loop-detector';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { parseProgressMarkdown } from './fs-repository';
-import { loadActivationState } from './runtime-state';
+import { loadActivationState, loadTaskPulseState } from './runtime-state';
 
 export interface ActiveHoursConfig {
   activeHoursStart?: number; // 0-23
@@ -72,9 +72,10 @@ export async function runHeartbeat(basePath: string, config?: ActiveHoursConfig)
         .filter(task => task.status === 'active')
         .map(task => task.id);
       if (activeIds.length) {
-        const [window, activationState] = await Promise.all([
+        const [window, activationState, pulseState] = await Promise.all([
           loadWindow(basePath),
           loadActivationState(basePath),
+          loadTaskPulseState(basePath),
         ]);
         const lastCheckpointTimeMs = window.length
           ? new Date(window[window.length - 1].timestamp).getTime()
@@ -82,6 +83,14 @@ export async function runHeartbeat(basePath: string, config?: ActiveHoursConfig)
         const timedOutIds = getTimedOutTaskIds(activeIds, activationState, lastCheckpointTimeMs);
         if (timedOutIds.length) {
           warnings.push(`[TIMEOUT] 任务 ${timedOutIds.join(',')} 超过30分钟无checkpoint`);
+        }
+        const stalePulseIds = activeIds.filter((id) => {
+          const updatedAt = pulseState.byTask[id]?.updatedAt;
+          if (!updatedAt) return false;
+          return Date.now() - new Date(updatedAt).getTime() > TASK_TIMEOUT_MS;
+        });
+        if (stalePulseIds.length) {
+          warnings.push(`[STALL] 任务 ${stalePulseIds.join(',')} 超过30分钟无阶段上报`);
         }
       }
     }
