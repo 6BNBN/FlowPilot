@@ -17,6 +17,7 @@ import { detect as detectLoop, type LoopDetection } from '../infrastructure/loop
 import { startHeartbeat, runHeartbeat } from '../infrastructure/heartbeat';
 import { classifyResumeDirtyFiles, clearReconcileState, collectOwnedFiles, compareDirtyFilesAgainstBaseline, getTaskActivationAge, loadDirtyBaseline, loadOwnedFiles, loadReconcileState, loadSetupInjectionManifest, loadSetupOwnedFiles, recordOwnedFiles, recordTaskActivations, saveDirtyBaseline, saveReconcileState, saveSetupOwnedFiles } from '../infrastructure/runtime-state';
 import { formatFinalSummary } from '../interfaces/formatter';
+import { execFileSync } from 'node:child_process';
 import { writeFile, readFile, unlink, mkdir, rename } from 'fs/promises';
 import { join } from 'path';
 
@@ -91,6 +92,30 @@ export class WorkflowService {
     await mkdir(join(this.repo.projectRoot(), '.workflow'), { recursive: true });
     await writeFile(`${path}.tmp`, `${content}\n`, 'utf-8');
     await rename(`${path}.tmp`, path);
+  }
+
+  private createEmptyFinalCommit(title: string, summary: string): CommitResult {
+    const cwd = this.repo.projectRoot();
+    try {
+      execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd, stdio: 'pipe' });
+    } catch {
+      return { status: 'skipped', reason: 'no-files' };
+    }
+
+    const msg = `task-finish: ${title}\n\n${summary}`;
+    try {
+      execFileSync('git', ['commit', '--allow-empty', '-F', '-'], {
+        cwd,
+        stdio: 'pipe',
+        input: msg,
+      });
+      return { status: 'committed' };
+    } catch (error: any) {
+      return {
+        status: 'failed',
+        error: `${cwd}: ${error?.stderr?.toString?.() || error?.message || String(error)}`,
+      };
+    }
   }
 
   private async getResumeDirtyState(currentDirtyFiles = this.repo.listChangedFiles()): Promise<{
@@ -859,7 +884,10 @@ export class WorkflowService {
     }
 
     const titles = done.map(t => `- ${t.id}: ${t.title}`).join('\n');
-    const commitResult = this.repo.commit('finish', data.name || '工作流完成', `${stats}\n\n${titles}`, finishBoundary.files);
+    const finishCommitSummary = `${stats}\n\n${titles}`;
+    const commitResult = finishBoundary.files.length > 0
+      ? this.repo.commit('finish', data.name || '工作流完成', finishCommitSummary, finishBoundary.files)
+      : this.createEmptyFinalCommit(data.name || '工作流完成', finishCommitSummary);
     if (commitResult.status === 'committed') {
       await this.persistFinalSummary(finalSummary);
       await runLifecycleHook('onWorkflowFinish', this.repo.projectRoot(), { WORKFLOW_NAME: data.name });

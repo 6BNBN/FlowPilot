@@ -238,7 +238,7 @@ Finalization 阶段（可选）：
 [ ] 未完成
 ```
 
-这样用户在 `.workflow/` 被清掉之前，就已经能在终端看见完整结果；同时流程内也可以验证“先总结、后清理”的顺序。需要注意的是：未执行 `flow review` 时，`flow finish` 不会结束工作流；即使 `review` 已完成，也只有最终 commit 真正成功后才会清理 `.workflow/` 并回到 idle。
+这样用户在 `.workflow/` 被清掉之前，就已经能在终端看见完整结果；同时流程内也可以验证“先总结、后清理”的顺序。需要注意的是：未执行 `flow review` 时，`flow finish` 不会结束工作流；即使 `review` 已完成，也只有最终 commit 真正成功后才会清理 `.workflow/` 并回到 idle。若 `review` 已完成但当前没有待提交文件，FlowPilot 会补一个显式最终收尾提交，以保持“只有 committed 才能结束工作流”的严格语义。
 
 进化结果直接影响工作流行为：
 

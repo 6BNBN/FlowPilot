@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -26,6 +27,12 @@ async function completeWorkflowWithoutReview(service: WorkflowService): Promise<
   await service.init(TASKS_MD);
   await service.next();
   await service.checkpoint('001', '完成任务');
+}
+
+function initGitRepo(baseDir: string): void {
+  execFileSync('git', ['init'], { cwd: baseDir, stdio: 'pipe' });
+  execFileSync('git', ['config', 'user.name', 'FlowPilot Tests'], { cwd: baseDir, stdio: 'pipe' });
+  execFileSync('git', ['config', 'user.email', 'flowpilot-tests@example.com'], { cwd: baseDir, stdio: 'pipe' });
 }
 
 beforeEach(async () => {
@@ -120,6 +127,7 @@ describe('WorkflowService finish verification messaging', () => {
   });
 
   it('finish 在 clearAll 前输出并落盘最终总结', async () => {
+    initGitRepo(dir);
     const repo = new FsWorkflowRepository(dir);
     vi.spyOn(repo, 'verify').mockReturnValue({
       passed: true,
@@ -136,6 +144,7 @@ describe('WorkflowService finish verification messaging', () => {
     });
     svc = new WorkflowService(repo, parseTasksMarkdown);
     await completeWorkflow(svc);
+    await svc.review();
 
     const msg = await svc.finish();
 
