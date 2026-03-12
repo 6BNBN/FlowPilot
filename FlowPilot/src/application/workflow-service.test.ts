@@ -1088,7 +1088,6 @@ describe('WorkflowService 集成测试', () => {
     await writeFile(join(dir, '.claude', 'settings.json'), preWorkflowDirtyContent, 'utf-8');
 
     const repo = new FsWorkflowRepository(dir);
-    vi.spyOn(repo, 'commit').mockReturnValue({ status: 'skipped', reason: 'no-files' });
     vi.spyOn(repo, 'verify').mockReturnValue({ passed: true, scripts: ['npm test'] });
     svc = new WorkflowService(repo, parseTasksMarkdown);
 
@@ -1098,9 +1097,10 @@ describe('WorkflowService 集成测试', () => {
     const msg = await svc.finish();
 
     expect(msg).not.toContain('拒绝最终提交');
-    expect(msg).toContain('未提交最终commit：未提供 --files，未自动提交');
+    expect(msg).toContain('已提交最终commit');
+    expect(msg).toContain('工作流回到待命状态');
     expect(await readFile(join(dir, '.claude', 'settings.json'), 'utf-8')).toBe(preWorkflowDirtyContent);
-    expect((await svc.status())?.status).toBe('finishing');
+    expect(await svc.status()).toBeNull();
   });
 
   it('finish在 ignored/untracked settings.json cleanup 后仍有 residue 时也会拒绝最终提交', async () => {
@@ -1229,10 +1229,19 @@ describe('WorkflowService 集成测试', () => {
 
   it('finish在git失败时保留工作流并提示手动提交', async () => {
     const repo = new FsWorkflowRepository(dir);
+    const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
+    changedFilesSpy.mockReturnValueOnce([]);
+    changedFilesSpy.mockReturnValue(['src/main.ts']);
     mockCommitResult(repo, { status: 'failed', error: 'git hooks failed' });
     vi.spyOn(repo, 'verify').mockReturnValue({ passed: true, scripts: [] });
     svc = new WorkflowService(repo, parseTasksMarkdown);
-    await completeWorkflow(svc);
+    await svc.init(TASKS_MD);
+    await svc.next();
+    await svc.checkpoint('001', '表结构设计完成', ['src/main.ts']);
+    await svc.next();
+    await svc.checkpoint('002', '页面完成');
+    await svc.next();
+    await svc.checkpoint('003', '文档完成');
     await svc.review();
 
     const msg = await svc.finish();

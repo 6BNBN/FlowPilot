@@ -77,10 +77,9 @@ describe('operational readiness smoke tests', () => {
     const finishOutput = runFlow(repoDir, ['finish'], undefined, ROOT_FLOW_CLI);
     expect(finishOutput).toContain('验证结果: 未发现可执行的验证命令');
     expect(finishOutput).toContain('1 done');
-    expect(finishOutput).toContain('未提交最终commit');
-    expect(finishOutput).toContain('最终commit尚未完成，工作流仍停留在收尾阶段');
-
-    expect((await stat(join(repoDir, '.workflow'))).isDirectory()).toBe(true);
+    expect(finishOutput).toContain('已提交最终commit');
+    expect(finishOutput).toContain('工作流回到待命状态');
+    await expect(access(join(repoDir, '.workflow'))).rejects.toThrow();
 
     expect(await readFile(join(repoDir, '.gitignore'), 'utf-8')).toBe('.workflow/\n.flowpilot/\n.claude/settings.json\n.claude/worktrees/\n');
 
@@ -88,13 +87,13 @@ describe('operational readiness smoke tests', () => {
     expect(status).toEqual(['?? .gitignore']);
 
     const flowpilotEntries = (await readdir(join(repoDir, '.flowpilot'))).sort();
-    expect(flowpilotEntries).not.toContain('history');
+    expect(flowpilotEntries).toContain('history');
 
     const commitCount = runGit(repoDir, ['rev-list', '--count', 'HEAD']);
-    expect(commitCount).toBe('1');
+    expect(commitCount).toBe('2');
 
     const committedFiles = runGit(repoDir, ['show', '--pretty=', '--name-only', 'HEAD']).split('\n').filter(Boolean);
-    expect(committedFiles).toEqual(['app.txt']);
+    expect(committedFiles).toEqual([]);
 
     expect((await stat(join(repoDir, 'app.txt'))).isFile()).toBe(true);
     expect(await readFile(join(repoDir, 'app.txt'), 'utf-8')).toBe('hello smoke\n');
