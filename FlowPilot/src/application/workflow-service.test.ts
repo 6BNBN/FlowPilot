@@ -1036,7 +1036,8 @@ describe('WorkflowService 集成测试', () => {
     expect(await svc.status()).toBeNull();
   });
 
-  it('finish在 cleanup 后若 AGENTS.md 残留用户改动则拒绝最终提交', async () => {
+  it('finish在 cleanup 后若 AGENTS.md 残留用户改动则允许最终收尾并保留用户内容', async () => {
+    await initGitRepo(dir);
     const repo = new FsWorkflowRepository(dir);
     const changedFilesSpy = vi.spyOn(repo, 'listChangedFiles');
     changedFilesSpy.mockReturnValueOnce([]);
@@ -1051,10 +1052,12 @@ describe('WorkflowService 集成测试', () => {
 
     const msg = await svc.finish();
 
-    expect(msg).toContain('拒绝最终提交');
-    expect(msg).toContain('AGENTS.md');
+    expect(msg).not.toContain('拒绝最终提交');
+    expect(msg).toContain('已提交最终commit');
+    expect(msg).toContain('工作流回到待命状态');
     expect(commitSpy).not.toHaveBeenCalledWith('finish', expect.any(String), expect.any(String), expect.anything());
-    expect((await svc.status())?.status).toBe('finishing');
+    expect(await readFile(join(dir, 'AGENTS.md'), 'utf-8')).toContain('User residue');
+    expect(await svc.status()).toBeNull();
   });
 
   it('finish在 cleanup 后若 .gitignore 残留用户改动则拒绝最终提交', async () => {

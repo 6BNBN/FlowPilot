@@ -34,6 +34,7 @@ function isExplicitFailureCheckpoint(detail: string): boolean {
 }
 
 const CANONICAL_SETUP_NON_COMMITTABLE_FILES = ['AGENTS.md', 'CLAUDE.md', '.gitignore'] as const;
+const NON_BLOCKING_SETUP_RESIDUE_FILES = new Set(['AGENTS.md', 'CLAUDE.md', 'ROLE.md']);
 
 export class WorkflowService {
   private stopHeartbeat: (() => void) | null = null;
@@ -734,7 +735,11 @@ export class WorkflowService {
       };
     }
 
-    const leftoverSetupOwnedFiles = comparison.newDirtyFiles.filter(file => setupOwnedSet.has(file) && !(file === '.gitignore' && gitignorePolicyMatches));
+    const leftoverSetupOwnedFiles = comparison.newDirtyFiles.filter(
+      file => setupOwnedSet.has(file)
+        && !NON_BLOCKING_SETUP_RESIDUE_FILES.has(file)
+        && !(file === '.gitignore' && gitignorePolicyMatches),
+    );
     if (leftoverSetupOwnedFiles.length > 0) {
       return {
         ok: false,
