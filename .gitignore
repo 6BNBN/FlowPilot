@@ -1,0 +1,4 @@
+.workflow/
+.flowpilot/
+.claude/settings.json
+.claude/worktrees/

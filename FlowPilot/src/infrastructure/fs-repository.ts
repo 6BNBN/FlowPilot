@@ -3,16 +3,32 @@
  * @description 文件系统仓储 - 基于 .workflow/.flowpilot 目录的分层记忆存储
  */
 
-import { mkdir, readFile, writeFile, unlink, rm, rename, readdir, stat, access, rmdir } from 'fs/promises';
-import { join } from 'path';
-import { openSync, closeSync, writeFileSync } from 'fs';
-import { hostname } from 'os';
+import {
+  loadActivationState,
+ mkdir, readFile, writeFile, unlink, rm, rename, readdir, stat, access, rmdir } from 'fs/promises';
+import {
+  loadActivationState,
+ join } from 'path';
+import {
+  loadActivationState,
+ openSync, closeSync, writeFileSync } from 'fs';
+import {
+  loadActivationState,
+ hostname } from 'os';
 import type { ProgressData, SetupClient, TaskEntry, WorkflowStats, EvolutionEntry } from '../domain/types';
 import type { WorkflowRepository, VerifyResult, CommitResult, TaskPulseUpdate } from '../domain/repository';
-import { autoCommit, gitCleanup, tagTask, rollbackToTask, cleanTags as gitCleanTags, listChangedFiles as gitListChangedFiles } from './git';
-import { runVerify } from './verify';
-import { getProtocolTemplate, PROTOCOL_TEMPLATE } from './protocol-template';
 import {
+  loadActivationState,
+ autoCommit, gitCleanup, tagTask, rollbackToTask, cleanTags as gitCleanTags, listChangedFiles as gitListChangedFiles } from './git';
+import {
+  loadActivationState,
+ runVerify } from './verify';
+import {
+  loadActivationState,
+ getProtocolTemplate, PROTOCOL_TEMPLATE } from './protocol-template';
+import {
+  loadActivationState,
+
   clearTaskPulse as clearRuntimeTaskPulse,
   createRuntimeLockMetadata,
   defaultInvalidLockStaleAfterMs,
@@ -495,7 +511,18 @@ export class FsWorkflowRepository implements WorkflowRepository {
       const raw = await readFile(join(this.root, 'progress.md'), 'utf-8');
       const data = parseProgressMarkdown(raw);
       const pulseState = await loadTaskPulseState(this.base);
-      return mergeTaskPulsesIntoProgress(data, pulseState);
+      const activationState = await loadActivationState(this.base);
+      
+      // 合并激活时间到任务
+      const dataWithActivation = {
+        ...data,
+        tasks: data.tasks.map(task => ({
+          ...task,
+          activatedAt: activationState[task.id]?.time,
+        })),
+      };
+      
+      return mergeTaskPulsesIntoProgress(dataWithActivation, pulseState);
     } catch {
       return null;
     }

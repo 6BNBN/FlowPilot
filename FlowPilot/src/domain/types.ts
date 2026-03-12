@@ -38,6 +38,8 @@ export interface TaskEntry {
   phaseUpdatedAt?: string;
   /** 子代理最近一次上报的一句话进展 */
   phaseNote?: string;
+  /** 任务激活时间戳 (ms) */
+  activatedAt?: number;
 }
 
 /** 工作流全局状态 */

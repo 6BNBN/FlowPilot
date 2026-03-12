@@ -1080,7 +1080,7 @@ async function saveReconcileState(basePath2, taskIds) {
 }
 async function clearReconcileState(basePath2) {
   try {
-    await unlink(runtimePath(basePath2, RECONCILE_STATE_FILE));
+    await (0, import_fs.unlink)(runtimePath(basePath2, RECONCILE_STATE_FILE));
   } catch {
   }
 }
@@ -1534,7 +1534,15 @@ var FsWorkflowRepository = class {
       const raw = await (0, import_promises2.readFile)((0, import_path2.join)(this.root, "progress.md"), "utf-8");
       const data = parseProgressMarkdown(raw);
       const pulseState = await loadTaskPulseState(this.base);
-      return mergeTaskPulsesIntoProgress(data, pulseState);
+      const activationState = await loadActivationState(this.base);
+      const dataWithActivation = {
+        ...data,
+        tasks: data.tasks.map((task) => ({
+          ...task,
+          activatedAt: activationState[task.id]?.time
+        }))
+      };
+      return mergeTaskPulsesIntoProgress(dataWithActivation, pulseState);
     } catch {
       return null;
     }
@@ -3983,14 +3991,31 @@ function readLiveValue(task, keys) {
   }
   return void 0;
 }
+function calcActiveDuration(activatedAt) {
+  if (!activatedAt) return null;
+  const elapsed = Date.now() - activatedAt;
+  const mins = Math.floor(elapsed / 6e4);
+  const secs = Math.floor(elapsed % 6e4 / 1e3);
+  if (mins === 0) return `\u23F1\uFE0F ${secs}\u79D2`;
+  return `\u23F1\uFE0F ${mins}\u5206${secs}\u79D2`;
+}
+function isTimeout(activatedAt) {
+  if (!activatedAt) return false;
+  return Date.now() - activatedAt > 5 * 60 * 1e3;
+}
 function formatTaskMeta(task) {
   const stage = readLiveValue(task, ["stage", "phase", "liveStage"]);
   const recent = readLiveValue(task, ["recentActivity", "lastActivityText", "activityAge"]);
   const progress = readLiveValue(task, ["progressText", "latestProgress", "activitySummary"]);
+  const activatedAt = typeof task.activatedAt === "number" ? task.activatedAt : void 0;
+  const activeDuration = task.status === "active" ? calcActiveDuration(activatedAt) : null;
+  const timeoutWarning = task.status === "active" && isTimeout(activatedAt) ? "\u26A0\uFE0F \u8D85\u65F6" : "";
   const parts = [
     stage ? `\u{1F4CD} ${stage}` : "",
     recent ? `\u{1F550} ${recent}` : "",
-    progress ? `\u{1F4C8} ${progress}` : ""
+    progress ? `\u{1F4C8} ${progress}` : "",
+    activeDuration ? activeDuration : "",
+    timeoutWarning
   ].filter(Boolean);
   return parts.length ? `   ${parts.join(" \xB7 ")}` : null;
 }

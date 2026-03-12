@@ -59,14 +59,36 @@ function readLiveValue(task: TaskLike, keys: string[]): string | undefined {
   return undefined;
 }
 
+/** 计算激活时长 */
+function calcActiveDuration(activatedAt: number | undefined): string | null {
+  if (!activatedAt) return null;
+  const elapsed = Date.now() - activatedAt;
+  const mins = Math.floor(elapsed / 60000);
+  const secs = Math.floor((elapsed % 60000) / 1000);
+  if (mins === 0) return `⏱️ ${secs}秒`;
+  return `⏱️ ${mins}分${secs}秒`;
+}
+
+/** 判断是否超时 (>5分钟) */
+function isTimeout(activatedAt: number | undefined): boolean {
+  if (!activatedAt) return false;
+  return Date.now() - activatedAt > 5 * 60 * 1000;
+}
+
 function formatTaskMeta(task: TaskLike): string | null {
   const stage = readLiveValue(task, ['stage', 'phase', 'liveStage']);
   const recent = readLiveValue(task, ['recentActivity', 'lastActivityText', 'activityAge']);
   const progress = readLiveValue(task, ['progressText', 'latestProgress', 'activitySummary']);
+  const activatedAt = typeof task.activatedAt === 'number' ? task.activatedAt : undefined;
+  const activeDuration = task.status === 'active' ? calcActiveDuration(activatedAt) : null;
+  const timeoutWarning = task.status === 'active' && isTimeout(activatedAt) ? '⚠️ 超时' : '';
+  
   const parts = [
     stage ? `📍 ${stage}` : '',
     recent ? `🕐 ${recent}` : '',
     progress ? `📈 ${progress}` : '',
+    activeDuration ? activeDuration : '',
+    timeoutWarning,
   ].filter(Boolean);
   return parts.length ? `   ${parts.join(' · ')}` : null;
 }
