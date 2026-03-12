@@ -5190,7 +5190,7 @@ function readStdinIfPiped(timeout = 3e4) {
   });
 }
 var CLIENT_OPTIONS = [
-  { key: "1", value: "claude", label: "Claude Code", detail: "\u751F\u6210 AGENTS.md + .claude/settings.json" },
+  { key: "1", value: "claude", label: "Claude Code", detail: "\u9ED8\u8BA4\u751F\u6210 CLAUDE.md + .claude/settings.json" },
   { key: "2", value: "codex", label: "Codex", detail: "\u53EA\u751F\u6210 AGENTS.md" },
   { key: "3", value: "cursor", label: "Cursor", detail: "\u53EA\u751F\u6210 AGENTS.md" },
   { key: "4", value: "snow-cli", label: "snow-cli", detail: "\u751F\u6210 AGENTS.md + ROLE.md" },
