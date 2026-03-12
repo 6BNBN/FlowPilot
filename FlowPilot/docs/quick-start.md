@@ -50,6 +50,7 @@ cp FlowPilot目录/dist/flow.js  你的项目/
 cd 你的项目
 node flow.js init
 # 会确保 .workflow/、.flowpilot/、.claude/settings.json、.claude/worktrees/ 被写入 .gitignore（若缺失）
+# 选择 Claude Code 时，首次默认生成 CLAUDE.md；Codex / Cursor / Other 默认生成 AGENTS.md
 
 # 3. 启动你的客户端，直接描述需求
 claude --dangerously-skip-permissions

@@ -50,6 +50,7 @@ cp FlowPilot-directory/dist/flow.js  your-project/
 cd your-project
 node flow.js init
 # Ensures .workflow/, .flowpilot/, .claude/settings.json, and .claude/worktrees/ are added to .gitignore when missing
+# Choosing Claude Code creates CLAUDE.md by default on first setup; Codex / Cursor / Other default to AGENTS.md
 
 # 3. Launch your client and describe your requirements
 claude --dangerously-skip-permissions

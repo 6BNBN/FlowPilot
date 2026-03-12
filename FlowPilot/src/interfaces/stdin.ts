@@ -24,7 +24,7 @@ export function readStdinIfPiped(timeout = 30_000): Promise<string> {
 }
 
 const CLIENT_OPTIONS: Array<{ key: string; value: SetupClient; label: string; detail: string }> = [
-  { key: '1', value: 'claude', label: 'Claude Code', detail: '生成 AGENTS.md + .claude/settings.json' },
+  { key: '1', value: 'claude', label: 'Claude Code', detail: '默认生成 CLAUDE.md + .claude/settings.json' },
   { key: '2', value: 'codex', label: 'Codex', detail: '只生成 AGENTS.md' },
   { key: '3', value: 'cursor', label: 'Cursor', detail: '只生成 AGENTS.md' },
   { key: '4', value: 'snow-cli', label: 'snow-cli', detail: '生成 AGENTS.md + ROLE.md' },
