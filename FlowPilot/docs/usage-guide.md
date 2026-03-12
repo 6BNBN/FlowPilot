@@ -606,7 +606,7 @@ CC 自动 compact 后，说"继续任务"即可恢复。所有状态都在文件
 2. instruction file（`AGENTS.md` / 兼容旧 `CLAUDE.md`）、`.claude/settings.json`、`.gitignore` 在 cleanup 后仍残留用户改动
 3. 缺少 dirty baseline，无法证明工作流边界安全
 
-这时 FlowPilot 会停在 `finishing` 状态，并把可疑文件列出来，让你先处理，而不是替你误提交。只要最终 commit 没真正成功，工作流就不会被清掉。
+这时 FlowPilot 会停在 `finishing` 状态，并把可疑文件列出来，让你先处理，而不是替你误提交。只要最终 commit 没真正成功，工作流就不会被清掉。这里列出的 instruction file / `.claude/settings.json` / `.gitignore` 改动，应优先按“用户手动改动 / baseline 改动”理解；FlowPilot 不会自动恢复这些用户内容，也不应把它们误判成可自动清理的 workflow residue。
 
 **Q: `.workflow` 目录要提交到 git 吗？**
 通常不需要，也不建议提交。`.workflow/` 是本地临时运行态，`flow finish` 收尾成功后会自动清除；默认 `.gitignore` 也会忽略它。
@@ -616,7 +616,7 @@ CC 自动 compact 后，说"继续任务"即可恢复。所有状态都在文件
 - 如果是 FlowPilot 在 setup/init 阶段创建、且内容仍与注入内容完全一致，finish 会自动删除或精确回退
 - 如果这些文件原本就存在，finish 只会移除 FlowPilot 注入的那部分，保留你原来的内容
 - `.gitignore` 中由 FlowPilot 注入的本地状态规则默认包括 `.workflow/`、`.flowpilot/`、`.claude/settings.json`、`.claude/worktrees/`，但不会忽略整个 `.claude/` 目录
-- 如果 cleanup 之后仍有用户残留改动，finish 会拒绝最终提交并把文件列出来
+- 如果 cleanup 之后仍有用户残留改动，finish 会拒绝最终提交并把文件列出来；这些改动默认视为 user-owned，需要你自己决定保留、提交或手动整理，FlowPilot 不会自动恢复
 
 **Q: 任务很多时摘要会不会太长？**
 不会。超过 10 个已完成任务后，摘要会自动按类型压缩，只保留每组最近 3 个任务名。

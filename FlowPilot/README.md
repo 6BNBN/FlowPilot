@@ -304,7 +304,7 @@ Finalization 阶段（可选）：
 
 缺失插件会在输出中提醒。
 
-setup/init 写入的 instruction file（`Claude Code` 默认 `CLAUDE.md`，`Codex / Cursor / Other` 默认 `AGENTS.md`，旧项目继续兼容已有文件）、`.claude/settings.json`、`.gitignore` 遵循 ownership-based cleanup：FlowPilot 只清理自己创建或注入的部分，cleanup 后若仍有用户残留改动，`flow finish` 会拒绝最终提交。
+setup/init 写入的 instruction file（`Claude Code` 默认 `CLAUDE.md`，`Codex / Cursor / Other` 默认 `AGENTS.md`，旧项目继续兼容已有文件）、`.claude/settings.json`、`.gitignore` 遵循 ownership-based cleanup：FlowPilot 只清理自己创建或注入的部分，不会自动恢复你的手动改动；cleanup 后若仍有真正的用户残留改动，`flow finish` 会停在 `finishing` 并提示你人工处理，而不是把这些用户改动误判成可自动清理的 workflow residue。
 
 默认情况下，FlowPilot 还会在项目 `.gitignore` 中确保以下本地状态被忽略：`.workflow/`（本地临时运行态）、`.flowpilot/`（本地持久化产品状态）、`.claude/settings.json`（本地集成配置）、`.claude/worktrees/`（本地工作树目录）。不会忽略整个 `.claude/` 目录。
 
@@ -475,7 +475,7 @@ node flow.js init
 - **级联跳过** — 依赖了失败任务的后续任务自动标记 `skipped`
 - **中断恢复** — `active` 状态的任务在干净场景下会重置为 `pending`；若检测到工作流期间新增的未处理变更，工作流进入 `reconciling`。只有列出的 task-owned 变更适合 `adopt` / `restart`；归属未明的文件必须先人工确认，不能整文件 `git restore`
 - **验证失败** — `flow finish` 报错后可派子Agent修复，再次 finish
-- **最终提交拒绝** — `flow finish` 在 verify/review 之后还会检查 dirty baseline、checkpoint owned files、以及 instruction file（`AGENTS.md` / 兼容旧 `CLAUDE.md`）、`.claude/settings.json` / `.gitignore` 的 cleanup 结果；只要边界不安全，或最终 commit 没真正成功，就拒绝结束工作流并列出下一步处理信息
+- **最终提交拒绝** — `flow finish` 在 verify/review 之后还会检查 dirty baseline、checkpoint owned files、以及 instruction file（`AGENTS.md` / 兼容旧 `CLAUDE.md`）、`.claude/settings.json` / `.gitignore` 的 cleanup 结果；只要边界不安全，或最终 commit 没真正成功，就拒绝结束工作流并列出下一步处理信息。用户手动改动应被视为 user-owned/baseline，不会被 FlowPilot 自动恢复，也不应被误判为 task residue
 - **循环检测** — 三策略防护（重复失败/乒乓/全局熔断），自动注入警告到下一任务
 - **心跳自检** — 活跃任务超时（>30分钟）告警，记忆膨胀（>100条）自动压缩
 - **进化回滚** — 实验导致指标恶化时，`review` 自动回滚到实验前快照

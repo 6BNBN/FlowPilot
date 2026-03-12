@@ -259,7 +259,7 @@ In setup mode, `node flow.js init` now shows direct client options:
 
 Missing plugins are still reported in the output.
 
-Setup/init changes to the instruction file (`Claude Code` now defaults to `CLAUDE.md`, `Codex / Cursor / Other` default to `AGENTS.md`, and legacy projects keep their existing file), `.claude/settings.json`, and `.gitignore` follow ownership-based cleanup: FlowPilot only removes what it created or injected, and `flow finish` refuses the final commit if user residue still remains afterward.
+Setup/init changes to the instruction file (`Claude Code` now defaults to `CLAUDE.md`, `Codex / Cursor / Other` default to `AGENTS.md`, and legacy projects keep their existing file), `.claude/settings.json`, and `.gitignore` follow ownership-based cleanup: FlowPilot only removes what it created or injected, never auto-restores your manual edits, and `flow finish` stays in `finishing` if genuine user residue still remains afterward instead of misclassifying those edits as disposable workflow residue.
 
 By default, FlowPilot also ensures these local-only paths are ignored in the repo `.gitignore`: `.workflow/` (local transient runtime state), `.flowpilot/` (local persistent product state), `.claude/settings.json` (local integration state), and `.claude/worktrees/` (local worktree directory). It does not ignore the entire `.claude/` directory.
 
@@ -439,7 +439,7 @@ node flow.js init
 - **Cascade skip** — Downstream tasks depending on failed tasks auto-marked `skipped`
 - **Interruption recovery** — clean interruptions reset `active` tasks back to `pending`; when workflow-period changes remain, the workflow enters `reconciling`. Only the listed task-owned changes are safe for `adopt` / `restart`; ownership-ambiguous files must be reviewed manually and must not be cleared with a whole-file `git restore`
 - **Verification failure** — `flow finish` reports error, dispatch sub-agent to fix, retry finish
-- **Final commit refusal** — after verify/review, `flow finish` also checks the dirty baseline, checkpoint-owned files, and cleanup results for the instruction file (`AGENTS.md`, or legacy `CLAUDE.md`) / `.claude/settings.json` / `.gitignore`; any unsafe boundary, or any non-success final commit outcome, causes an explicit refusal and keeps the workflow active with the next-step guidance
+- **Final commit refusal** — after verify/review, `flow finish` also checks the dirty baseline, checkpoint-owned files, and cleanup results for the instruction file (`AGENTS.md`, or legacy `CLAUDE.md`) / `.claude/settings.json` / `.gitignore`; any unsafe boundary, or any non-success final commit outcome, causes an explicit refusal and keeps the workflow active with the next-step guidance. Manual user edits are treated as user-owned/baseline changes: FlowPilot does not auto-restore them and should not classify them as task residue
 - **Loop detection** — Three-strategy defense (repeated failures/ping-pong/global circuit breaker), auto-injects warnings into next task
 - **Health check** — Active task timeout (>30min) alerts, memory bloat (>100 entries) auto-compaction
 - **Evolution rollback** — If experiments degrade metrics, `review` auto-rolls back to pre-experiment snapshot

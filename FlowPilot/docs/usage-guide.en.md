@@ -423,7 +423,7 @@ The most common causes are:
 2. leftover user changes in the instruction file (`AGENTS.md`, or legacy `CLAUDE.md`), `.claude/settings.json`, or `.gitignore` after cleanup
 3. a missing dirty baseline, so FlowPilot can no longer prove the workflow boundary is safe
 
-When this happens, FlowPilot stays in `finishing` state and lists the suspicious files instead of committing on your behalf. As long as the final commit has not truly succeeded, the workflow is not cleared.
+When this happens, FlowPilot stays in `finishing` state and lists the suspicious files instead of committing on your behalf. As long as the final commit has not truly succeeded, the workflow is not cleared. In instruction files / `.claude/settings.json` / `.gitignore`, these leftovers should be interpreted as user-owned or baseline edits first: FlowPilot will not auto-restore that content, and those manual edits must not be treated as disposable workflow residue.
 
 **Q: Should .workflow be committed to git?**
 Usually no. `.workflow/` is local transient runtime state, `flow finish` removes it on successful completion, and the default `.gitignore` policy ignores it.
@@ -433,7 +433,7 @@ They follow ownership-based symmetric cleanup:
 - if FlowPilot created them during setup/init and the contents still exactly match the injected content, finish deletes them or restores them precisely
 - if they already existed, finish removes only the FlowPilot-owned injected portion and keeps your original content
 - the FlowPilot-owned `.gitignore` rules cover `.workflow/`, `.flowpilot/`, `.claude/settings.json`, and `.claude/worktrees/`, but do not ignore the entire `.claude/` directory
-- if user residue still remains after cleanup, finish refuses the final commit and names the file
+- if user residue still remains after cleanup, finish refuses the final commit and names the file; those changes are treated as user-owned and must be resolved manually rather than auto-restored
 
 **Q: Will summaries get too long with many tasks?**
 No. After 10+ completed tasks, summaries auto-compress by type, keeping only the 3 most recent task names per group.
