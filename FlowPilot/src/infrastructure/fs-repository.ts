@@ -21,6 +21,7 @@ import {
   isRuntimeLockStale,
   loadTaskPulseState,
   loadSetupInjectionManifest,
+  mergeTaskPulsesIntoProgress,
   mergeSetupInjectionManifest,
   parseRuntimeLock,
   recordTaskPulse,
@@ -492,7 +493,9 @@ export class FsWorkflowRepository implements WorkflowRepository {
   async loadProgress(): Promise<ProgressData | null> {
     try {
       const raw = await readFile(join(this.root, 'progress.md'), 'utf-8');
-      return parseProgressMarkdown(raw);
+      const data = parseProgressMarkdown(raw);
+      const pulseState = await loadTaskPulseState(this.base);
+      return mergeTaskPulsesIntoProgress(data, pulseState);
     } catch {
       return null;
     }

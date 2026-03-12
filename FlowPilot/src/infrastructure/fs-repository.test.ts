@@ -54,6 +54,23 @@ describe('FsWorkflowRepository', () => {
     expect(loaded?.tasks[1].deps).toEqual(['001']);
   });
 
+  it('loadProgress 会合并 task-pulses 里的实时阶段信息', async () => {
+    const data = makeData();
+    await repo.saveProgress(data);
+    await repo.saveTaskPulse('001', {
+      phase: 'implementation',
+      updatedAt: '2026-03-12T10:00:00.000Z',
+      note: '正在改 fs-repository.ts',
+    });
+
+    const loaded = await repo.loadProgress();
+
+    expect(loaded?.tasks[0].phase).toBe('implementation');
+    expect(loaded?.tasks[0].phaseUpdatedAt).toBe('2026-03-12T10:00:00.000Z');
+    expect(loaded?.tasks[0].phaseNote).toBe('正在改 fs-repository.ts');
+    expect(loaded?.tasks[1].phase).toBeUndefined();
+  });
+
   it('无文件时loadProgress返回null', async () => {
     expect(await repo.loadProgress()).toBeNull();
   });
