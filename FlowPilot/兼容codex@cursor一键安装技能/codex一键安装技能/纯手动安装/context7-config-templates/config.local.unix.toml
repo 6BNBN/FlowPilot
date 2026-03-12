@@ -1,0 +1,3 @@
+[mcp_servers.context7]
+command = "/home/YOUR_USER/.codex/run-context7.sh"
+args = []

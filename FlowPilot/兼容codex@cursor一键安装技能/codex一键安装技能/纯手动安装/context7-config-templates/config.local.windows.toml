@@ -1,0 +1,3 @@
+[mcp_servers.context7]
+command = "C:/Users/YOUR_USER/.codex/run-context7.cmd"
+args = []

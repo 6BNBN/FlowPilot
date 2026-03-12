@@ -7,8 +7,17 @@
 ## Setup (One Time Only)
 
 1. Make sure Node.js is installed (version 20+)
-2. Enable Agent Teams: add `"env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }` to `~/.claude/settings.json`
-3. Install plugins: run `/plugin` in CC, install `superpowers`, `frontend-design`, `feature-dev`, `code-review`, `context7`
+2. Enable parallel / auto-run according to your client:
+   - `Claude Code`: add `"env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }` to `~/.claude/settings.json`
+   - `Codex`: add to `~/.codex/config.toml`
+     ```toml
+     [features]
+     multi_agent = true
+     ```
+     For unattended execution, prefer `codex --yolo`
+   - `Cursor`: enable `Agents` in settings and set `Auto-Run Mode` to `Run Everything`
+   - `Other clients`: self-test multi-agent / auto-run behavior with that client
+3. Install plugins / skills (optional; skipping only degrades capability)
 4. (Optional) Configure environment variables to enable LLM-powered smart extraction and deep analysis:
    Add to the `env` section of `~/.claude/settings.json`:
    ```json
@@ -42,13 +51,16 @@ cd your-project
 node flow.js init
 # Ensures .workflow/, .flowpilot/, .claude/settings.json, and .claude/worktrees/ are added to .gitignore when missing
 
-# 3. Launch Claude Code in fully automated mode, describe your requirements
+# 3. Launch your client and describe your requirements
 claude --dangerously-skip-permissions
+
+# Codex can be started with:
+codex --yolo
 ```
 
 > `--dangerously-skip-permissions` skips all permission prompts for truly unattended operation. Without it, every action requires your confirmation.
 
-Then just tell CC what you want, for example:
+Then just tell the client what you want, for example:
 
 ```
 Build a blog system with user registration/login, article publishing, and comments
@@ -81,15 +93,26 @@ Whether the computer shuts down, CC crashes, or context fills up, it's all the s
 
 ```bash
 # Resume the most recent conversation, fully automated
+# Claude Code
 claude --dangerously-skip-permissions --continue
+
+# Codex
+codex --yolo
 ```
 
 Once inside, say "continue task" and it will automatically resume from the breakpoint. Nothing is lost.
 
-If the worktree is still dirty, `resume` now tells the truth about what survived:
-- baseline dirty files that already existed before the workflow started and are still present
-- newly dirty business files left behind by interrupted tasks and intentionally preserved
-- when the dirty baseline is missing, an explicit warning that FlowPilot cannot prove this is a clean restart
+- `Claude Code`: prefer `--continue` / `--resume`
+- `Codex`: re-enter the project directory, launch `codex --yolo`, then say "continue task"
+- `Cursor`: reopen the project and continue in the existing chat or a new one
+- `snow-cli` / other clients: reopen the project, restore or start a new session, then say "continue task"
+
+If the worktree still has unarchived changes, `resume` now tells the truth about what survived:
+- baseline unarchived changes that already existed before the workflow started and are still present
+- explicitly owned task changes that can be adopted as residue
+- workflow-period additions with ambiguous ownership, which may include manual user edits/deletions and will not be auto-restored by FlowPilot
+- if pending worktree changes exist, the workflow enters `reconciling` and requires `adopt` or restart after handling only the listed task-owned changes
+- when the dirty baseline is missing, an explicit warning that FlowPilot cannot prove this is a clean restart or distinguish user changes from task residue
 
 To pick from conversation history:
 ```bash
@@ -139,7 +162,7 @@ Or just ask CC: "How's the progress?"
 
 Finish will explicitly refuse the final commit instead of guessing when it sees:
 - newly dirty files that were never owned by a workflow checkpoint
-- leftover user changes in `CLAUDE.md`, `.claude/settings.json`, or `.gitignore` after cleanup runs
+- leftover user changes in the instruction file (`AGENTS.md`, or legacy `CLAUDE.md`), `.claude/settings.json`, or `.gitignore` after cleanup runs
 - a missing dirty baseline, so FlowPilot can no longer prove which dirty files predated the workflow
 
 In short: FlowPilot only final-commits business files that this workflow explicitly owned. Everything else must be resolved first.
@@ -150,3 +173,59 @@ Normal usage only requires remembering three things:
 1. Put a `flow.js` in the project, run `node flow.js init`
 2. Open CC, describe your development requirements
 3. If interrupted, open a new window and say "continue task"
+
+## Optional: One-Click Skill Installation (Codex / Cursor)
+
+> FlowPilot works without these installers. Skipping them only means some skill-driven capabilities may degrade.
+
+The repository includes bundled installers compatible with both `Codex` and `Cursor`:
+
+- Root folder: [`兼容codex@cursor一键安装技能/`](/work2026/tools/FlowPilot/兼容codex@cursor一键安装技能)
+- Codex package: [`兼容codex@cursor一键安装技能/codex一键安装技能/`](/work2026/tools/FlowPilot/兼容codex@cursor一键安装技能/codex一键安装技能)
+- Cursor package: [`兼容codex@cursor一键安装技能/cursor一键安装技能/`](/work2026/tools/FlowPilot/兼容codex@cursor一键安装技能/cursor一键安装技能)
+
+How to choose:
+- If you want skills/MCP for `Codex CLI`, use `codex一键安装技能/`
+- If you want skills/MCP for `Cursor`, use `cursor一键安装技能/`
+
+Common entry points:
+
+```bash
+# Codex (macOS / Linux)
+cd "兼容codex@cursor一键安装技能/codex一键安装技能"
+chmod +x install.sh repair.sh
+./install.sh --force
+
+# Cursor (macOS / Linux)
+cd "兼容codex@cursor一键安装技能/cursor一键安装技能"
+chmod +x install_cursor_skills.sh repair_cursor_skills.sh self_check_cursor_skills.sh
+./install_cursor_skills.sh
+```
+
+On Windows, use the bundled `.bat` / `.ps1` launchers in each package directory.
+
+After installation:
+- restart `Codex CLI` for Codex
+- restart `Cursor` for Cursor
+
+## Uninstalling FlowPilot
+
+If you no longer want FlowPilot in a project, remove the files it copied in or generated at runtime:
+
+- `flow.js` (the single-file tool you copied into the project)
+- the instruction file:
+  - usually `AGENTS.md` for new projects
+  - possibly `CLAUDE.md` for legacy-compatible setups
+  - `ROLE.md` as well in `snow-cli` mode
+- `.claude/settings.json` (if FlowPilot generated it in `Claude Code` mode)
+- `.workflow/` (local transient runtime state)
+- `.flowpilot/` (local persistent state)
+
+Typical cleanup:
+
+```bash
+rm -rf flow.js AGENTS.md CLAUDE.md ROLE.md .claude/settings.json .workflow .flowpilot
+```
+
+If this leaves `.claude/` empty, you can remove that directory too.
+If you manually added project guidance into any of those files later, keep what you need before deleting them.

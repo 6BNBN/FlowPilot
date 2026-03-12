@@ -7,8 +7,17 @@
 ## 准备工作（只做一次）
 
 1. 确保电脑装了 Node.js（版本 20 以上）
-2. 开启 Agent Teams：在 `~/.claude/settings.json` 中添加 `"env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }`
-3. 安装插件：在 CC 中执行 `/plugin`，选择安装 `superpowers`、`frontend-design`、`feature-dev`、`code-review`、`context7`
+2. 按客户端开启并行 / 自动运行：
+   - `Claude Code`：在 `~/.claude/settings.json` 中添加 `"env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }`
+   - `Codex`：在 `~/.codex/config.toml` 中加入：
+     ```toml
+     [features]
+     multi_agent = true
+     ```
+     全自动运行建议使用：`codex --yolo`
+   - `Cursor`：在设置的 `Agents` 中开启 `Agents`，并把 `Auto-Run Mode` 调成 `Run Everything`
+   - `其他客户端`：先按各自文档自测多代理 / 自动运行能力
+3. 安装插件 / 技能（可选，不安装也只是功能降级）
 4. （可选）配置环境变量，启用 LLM 智能提取和深度分析：
    在 `~/.claude/settings.json` 的 `env` 中添加：
    ```json
@@ -42,13 +51,16 @@ cd 你的项目
 node flow.js init
 # 会确保 .workflow/、.flowpilot/、.claude/settings.json、.claude/worktrees/ 被写入 .gitignore（若缺失）
 
-# 3. 用全自动模式启动 Claude Code，直接描述需求
+# 3. 启动你的客户端，直接描述需求
 claude --dangerously-skip-permissions
+
+# Codex 可直接用：
+codex --yolo
 ```
 
 > `--dangerously-skip-permissions` 会跳过所有权限确认弹窗，实现真正的全自动。不加的话每个操作都要你点确认。
 
-然后直接告诉 CC 你要做什么，比如：
+然后直接告诉客户端你要做什么，比如：
 
 ```
 帮我做一个博客系统，要有用户注册登录、文章发布、评论功能
@@ -81,15 +93,26 @@ node flow.js init
 
 ```bash
 # 接续最近一次对话，全自动继续
+# Claude Code
 claude --dangerously-skip-permissions --continue
+
+# Codex
+codex --yolo
 ```
 
 进去后说「继续任务」，它会自动从断点继续，之前做的不会丢。
 
-如果工作区里仍有脏业务文件，`resume` 现在会如实说明它们属于哪一类：
-- 工作流启动前就已经存在、恢复后仍保留的 baseline 脏文件
-- 中断任务留下、被保守保留的新增脏文件
-- 如果缺少 dirty baseline，则会明确提示“无法证明这是干净重启”，而不会误报一切干净
+- `Claude Code`：推荐直接用 `--continue` / `--resume`
+- `Codex`：重新进入项目目录后启动 `codex --yolo`，然后说「继续任务」
+- `Cursor`：重新打开项目，在原会话或新会话中说「继续任务」
+- `snow-cli` / 其他客户端：重新进入项目目录，恢复或新开会话后说「继续任务」
+
+如果工作区里仍有未归档变更，`resume` 现在会如实说明它们属于哪一类：
+- 工作流启动前就已经存在、恢复后仍保留的 baseline 未归档变更
+- 由显式 ownership 支撑的 task-owned 变更
+- 工作流期间新增但归属未明的变更（可能包含你的手动修改/删除，FlowPilot 不会自动恢复这些文件）
+- 如果存在待处理变更，工作流会进入 `reconciling`，必须先 `adopt` 或在确认并处理列出的本任务变更后 `restart`
+- 如果缺少 dirty baseline，则会明确提示“无法证明这是干净重启，也无法可靠区分用户操作与任务残留”
 
 如果想从历史对话列表里挑一个恢复：
 ```bash
@@ -139,7 +162,7 @@ node flow.js status
 
 如果 finish 发现以下情况，会明确拒绝最终提交，而不是帮你“赌一把”：
 - 存在不属于本轮 workflow checkpoint 的新增脏文件
-- `CLAUDE.md`、`.claude/settings.json`、`.gitignore` 在 cleanup 之后仍残留用户改动
+- instruction file（`AGENTS.md` / 兼容旧 `CLAUDE.md`）、`.claude/settings.json`、`.gitignore` 在 cleanup 之后仍残留用户改动
 - 缺少 dirty baseline，无法证明哪些脏文件是工作流之外的历史遗留
 
 一句话理解：FlowPilot 只会最终提交“本轮任务明确声明归属的业务文件”，其余脏文件一律先停下来让你处理。
@@ -150,3 +173,59 @@ node flow.js status
 1. 项目里放一个 `flow.js`，执行 `node flow.js init`
 2. 打开 CC，描述开发需求
 3. 中断了就新开窗口说「继续任务」
+
+## 可选：一键安装技能（Codex / Cursor）
+
+> 不安装也可以正常使用，只是部分技能驱动能力会降级。
+
+FlowPilot 仓库内置了兼容 `Codex` / `Cursor` 的一键安装包：
+
+- 总目录：[`兼容codex@cursor一键安装技能/`](/work2026/tools/FlowPilot/兼容codex@cursor一键安装技能)
+- Codex 包：[`兼容codex@cursor一键安装技能/codex一键安装技能/`](/work2026/tools/FlowPilot/兼容codex@cursor一键安装技能/codex一键安装技能)
+- Cursor 包：[`兼容codex@cursor一键安装技能/cursor一键安装技能/`](/work2026/tools/FlowPilot/兼容codex@cursor一键安装技能/cursor一键安装技能)
+
+如何选择：
+- 你要给 `Codex CLI` 安装技能和 MCP：用 `codex一键安装技能/`
+- 你要给 `Cursor` 安装技能和 MCP：用 `cursor一键安装技能/`
+
+常用入口：
+
+```bash
+# Codex（macOS / Linux）
+cd "兼容codex@cursor一键安装技能/codex一键安装技能"
+chmod +x install.sh repair.sh
+./install.sh --force
+
+# Cursor（macOS / Linux）
+cd "兼容codex@cursor一键安装技能/cursor一键安装技能"
+chmod +x install_cursor_skills.sh repair_cursor_skills.sh self_check_cursor_skills.sh
+./install_cursor_skills.sh
+```
+
+Windows 可直接使用目录中的 `.bat` / `.ps1` 脚本。
+
+安装完成后：
+- `Codex` 需要重启 `Codex CLI`
+- `Cursor` 需要重启 `Cursor`
+
+## 卸载 FlowPilot
+
+如果你之后不想继续在项目里使用 FlowPilot，只需要删除它带入或运行时生成的文件：
+
+- `flow.js`（你复制进项目的单文件工具）
+- instruction file：
+  - 新项目通常是 `AGENTS.md`
+  - 兼容旧项目时可能是 `CLAUDE.md`
+  - `snow-cli` 模式下还可能有 `ROLE.md`
+- `.claude/settings.json`（如果是 FlowPilot 在 `Claude Code` 模式下生成的）
+- `.workflow/`（本地临时运行态）
+- `.flowpilot/`（本地持久状态）
+
+常见做法：
+
+```bash
+rm -rf flow.js AGENTS.md CLAUDE.md ROLE.md .claude/settings.json .workflow .flowpilot
+```
+
+如果 `.claude/` 目录因此变成空目录，也可以一起删除。
+如果这些文件里后来有你手动补充的项目说明，请先保留需要的内容再删除。

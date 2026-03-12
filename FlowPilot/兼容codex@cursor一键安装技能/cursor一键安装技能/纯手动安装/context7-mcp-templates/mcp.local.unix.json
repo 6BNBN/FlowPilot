@@ -1,0 +1,8 @@
+﻿{
+  "mcpServers": {
+    "context7": {
+      "command": "/home/YOUR_USER/.cursor/run-context7.sh",
+      "args": []
+    }
+  }
+}

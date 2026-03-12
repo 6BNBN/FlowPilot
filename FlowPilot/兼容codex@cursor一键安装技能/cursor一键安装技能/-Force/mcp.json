@@ -1,0 +1,10 @@
+{
+    "mcpServers":  {
+                       "context7":  {
+                                        "args":  [
+
+                                                 ],
+                                        "command":  "-Force\\run-context7.cmd"
+                                    }
+                   }
+}
