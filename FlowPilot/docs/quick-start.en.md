@@ -59,6 +59,8 @@ claude --dangerously-skip-permissions
 codex --yolo
 ```
 
+> The more Claude-like output upgrade only changes wording and layout. It does not change task scheduling, protocol priority, command semantics, or checkpoint rules.
+
 > `--dangerously-skip-permissions` skips all permission prompts for truly unattended operation. Without it, every action requires your confirmation.
 
 Then just tell the client what you want, for example:

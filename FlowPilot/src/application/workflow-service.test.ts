@@ -145,7 +145,7 @@ describe('WorkflowService 集成测试', () => {
 
     const msg = await svc.resume();
 
-    expect(msg).toContain('已暂停继续调度');
+    expect(msg).toContain('已暂停调度');
     expect(msg).toContain('node flow.js adopt 001');
     expect(msg).toContain('归属未明');
     expect(msg).toContain('不要整文件 git restore');
@@ -296,7 +296,7 @@ describe('WorkflowService 集成测试', () => {
 
     const msg = await svc.resume();
 
-    expect(msg).toContain('已暂停继续调度');
+    expect(msg).toContain('已暂停调度');
     expect(msg).toContain('manual-delete.txt');
     expect(msg).toContain('用户手动修改/删除');
     expect(msg).toContain('不要整文件 git restore');
@@ -315,7 +315,7 @@ describe('WorkflowService 集成测试', () => {
 
     const msg = await svc.resume();
 
-    expect(msg).toContain('已暂停继续调度');
+    expect(msg).toContain('已暂停调度');
     expect(msg).toContain('node flow.js adopt 001');
     expect(msg).toContain('归属未明');
     await expect(svc.next()).rejects.toThrow(/adopt|restart|skip/);

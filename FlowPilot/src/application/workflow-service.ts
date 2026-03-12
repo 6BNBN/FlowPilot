@@ -546,7 +546,16 @@ export class WorkflowService {
     log.debug(`resume: status=${data.status}, current=${data.current}`);
     if (data.status === 'idle') return '工作流待命中，等待需求输入';
     if (data.status === 'completed') return '工作流已全部完成';
-    if (data.status === 'finishing') return `**当前状态**\n恢复工作流: ${data.name}\n状态: 收尾阶段\n\n**下一步**\n请执行 node flow.js finish`;
+    if (data.status === 'finishing') {
+      return [
+        '**═══ 当前状态 ═══**',
+        `🏁 工作流: ${data.name || '未命名工作流'}`,
+        '📍 状态: 收尾阶段',
+        '',
+        '**═══ 下一步 ═══**',
+        '👉 运行 `node flow.js finish` 完成最终收尾',
+      ].join('\n');
+    }
     if (data.status === 'reconciling') {
       const doneCount = data.tasks.filter(t => t.status === 'done').length;
       const total = data.tasks.length;
@@ -554,10 +563,15 @@ export class WorkflowService {
       const dirtyState = await this.getResumeDirtyState();
 
       return [
-        `恢复工作流: ${data.name}`,
-        `进度: ${doneCount}/${total}`,
-        `检测到待接管的中断任务: ${reconcile.taskIds.join(', ') || data.current || '未知'}`,
-        '已暂停继续调度；请先执行 node flow.js adopt <id> --files ...，或在确认并处理列出的本任务变更后 node flow.js restart <id>。若存在归属未明变更，必须先人工确认；不要整文件 git restore。不得处理 baseline 变更或未列出的其他项目代码',
+        '**═══ 恢复工作流 ═══**',
+        `📂 ${data.name}`,
+        `📊 进度: ${doneCount}/${total}`,
+        `⚠️ 待接管中断任务: ${reconcile.taskIds.join(', ') || data.current || '未知'}`,
+        '',
+        '👉 请先执行 `node flow.js adopt <id> --files ...`',
+        '   或在确认并处理列出的本任务变更后 `node flow.js restart <id>`',
+        '   若存在归属未明变更，必须先人工确认；不要整文件 git restore',
+        '   不得处理 baseline 变更或未列出的其他项目代码',
         ...dirtyState.lines,
       ].join('\n');
     }
@@ -590,14 +604,25 @@ export class WorkflowService {
     this.stopHeartbeat?.();
     this.stopHeartbeat = startHeartbeat(this.repo.projectRoot());
 
+    const statusIcon = shouldReconcile ? '⚠️' : (resetId ? '🔄' : '▶️');
+    const statusMsg = shouldReconcile
+      ? `检测到中断任务 ${hadActiveTasks.join(', ')} 的待处理变更，已暂停调度`
+      : (resetId ? `中断任务 ${resetId} 已重置，将重新执行` : '继续执行');
+    
     const lines = [
-      `恢复工作流: ${newData.name}`,
-      `进度: ${doneCount}/${total}`,
-      shouldReconcile
-        ? `检测到中断任务 ${hadActiveTasks.join(', ')} 的待处理变更，已暂停继续调度；请先执行 node flow.js adopt ${hadActiveTasks[0]} --files ...，或在确认并处理列出的本任务变更后 node flow.js restart ${hadActiveTasks[0]}。若存在归属未明变更，必须先人工确认；不要整文件 git restore。不得处理 baseline 变更或未列出的其他项目代码`
-        : (resetId ? `中断任务 ${resetId} 已重置，将重新执行` : '继续执行'),
+      '**═══ 恢复工作流 ═══**',
+      `📂 ${newData.name}`,
+      `📊 进度: ${doneCount}/${total}`,
+      statusIcon + ' ' + statusMsg,
       ...dirtyState.lines,
     ];
+    
+    if (shouldReconcile) {
+      lines.push('');
+      lines.push('👉 请先执行 `node flow.js adopt ' + hadActiveTasks[0] + ' --files ...`');
+      lines.push('   或确认并处理列出的本任务变更后 `node flow.js restart ' + hadActiveTasks[0] + '`');
+    }
+    
     return lines.join('\n');
   }
 
@@ -827,40 +852,45 @@ export class WorkflowService {
 
     if (existing && (existing.status === 'running' || existing.status === 'finishing')) {
       const done = existing.tasks.filter(t => t.status === 'done').length;
-      lines.push(`检测到进行中的工作流: ${existing.name}`);
-      lines.push(`进度: ${done}/${existing.tasks.length}`);
+      const statusIcon = existing.status === 'finishing' ? '🏁' : '🔄';
+      lines.push('**═══ 检测到进行中的工作流 ═══**');
+      lines.push(`📂 ${existing.name}`);
+      lines.push(`📊 进度: ${done}/${existing.tasks.length}`);
+      lines.push('');
       if (existing.status === 'finishing') {
-        lines.push('**当前状态**');
-        lines.push('状态: 收尾阶段，执行 node flow.js finish 继续');
+        lines.push('**═══ 当前状态 ═══**');
+        lines.push('📍 状态: 收尾阶段');
+        lines.push('👉 运行 `node flow.js finish` 继续');
       } else {
-        lines.push('**当前状态**');
-        lines.push('执行 node flow.js resume 继续');
+        lines.push('**═══ 当前状态 ═══**');
+        lines.push('⏸ 状态: ' + existing.status);
+        lines.push('👉 运行 `node flow.js resume` 继续');
       }
     } else {
-      lines.push('**项目状态**');
-      lines.push('项目已接管，工作流工具就绪');
-      lines.push('等待需求输入（文档或对话描述）');
+      lines.push('**═══ 项目状态 ═══**');
+      lines.push('✅ 项目已接管，工作流工具就绪');
+      lines.push('⏳ 等待需求输入（文档或对话描述）');
       lines.push('');
-      lines.push('**下一步**');
-      lines.push('描述你的开发任务即可启动全自动开发');
+      lines.push('**═══ 下一步 ═══**');
+      lines.push('💡 描述你的开发任务即可启动全自动开发');
     }
 
     lines.push('');
-    lines.push('**生成结果**');
+    lines.push('**═══ 生成结果 ═══**');
     if (wrote) {
       const instructionPath = (await loadSetupInjectionManifest(this.repo.projectRoot())).claudeMd?.path ?? 'AGENTS.md';
-      lines.push(`${instructionPath} 已更新: 添加了工作流协议`);
+      lines.push(`✓ ${instructionPath} 已更新：添加了工作流协议`);
     }
     if (roleWrote) {
-      lines.push('ROLE.md 已更新: 与 AGENTS.md 保持一致，供 snow-cli 使用');
+      lines.push('✓ ROLE.md 已更新：与 AGENTS.md 保持一致');
     }
     if (client === 'claude') {
-      lines.push('.claude/settings.json 已更新: 添加了 Claude Code Hooks');
+      lines.push('✓ .claude/settings.json 已更新：添加了 Claude Code Hooks');
     }
     if (!lines.includes('描述你的开发任务即可启动全自动开发')) {
       lines.push('');
-      lines.push('**下一步**');
-      lines.push('描述你的开发任务即可启动全自动开发');
+      lines.push('**═══ 下一步 ═══**');
+      lines.push('💡 描述你的开发任务即可启动全自动开发');
     }
     return lines.join('\n');
   }
@@ -869,9 +899,9 @@ export class WorkflowService {
   async review(): Promise<string> {
     const data = await this.requireProgress();
     if (!isAllDone(data.tasks)) throw new Error('还有未完成的任务，请先完成所有任务');
-    if (data.status === 'finishing') return '已处于review通过状态，可以执行 node flow.js finish';
+    if (data.status === 'finishing') return '**═══ 代码审查 ═══**\n✓ 已处于 review 通过状态\n\n**═══ 下一步 ═══**\n👉 运行 `node flow.js finish` 完成收尾';
     await this.repo.saveProgress({ ...data, status: 'finishing' });
-    return '**代码审查**\n代码审查已通过，请执行 node flow.js finish 完成收尾';
+    return '**═══ 代码审查 ═══**\n✅ 代码审查已通过\n\n**═══ 下一步 ═══**\n👉 运行 `node flow.js finish` 完成收尾';
   }
 
   /** finish: 智能收尾 - 先verify，review后置 */
@@ -889,13 +919,30 @@ export class WorkflowService {
     const result = this.repo.verify();
     log.debug(`finish: verify passed=${result.passed}`);
     if (!result.passed) {
-      return `验证失败: ${result.error}\n请修复后重新执行 node flow.js finish`;
+      return [
+        '**═══ 验证结果 ═══**',
+        '✗ 验证失败',
+        '',
+        '📋 错误详情:',
+        result.error,
+        '',
+        '👉 请修复后重新执行 `node flow.js finish`',
+      ].join('\n');
     }
     const verifySummary = this.formatVerifySummary(result);
 
     // 2. 验证通过，检查review是否已完成
     if (data.status !== 'finishing') {
-      return `**验证通过**\n${verifySummary}\n\n**下一步**\n请派子Agent执行 code-review，完成后执行 node flow.js review，再执行 node flow.js finish`;
+      return [
+        '**═══ 验证结果 ═══**',
+        '✅ 验证通过',
+        verifySummary,
+        '',
+        '**═══ 下一步 ═══**',
+        '1. 派子Agent执行 code-review',
+        '2. 完成后运行 `node flow.js review`',
+        '3. 再运行 `node flow.js finish`',
+      ].join('\n');
     }
 
     // 3. verify + review 都通过 → 最终提交
@@ -907,19 +954,35 @@ export class WorkflowService {
 
     const finishBoundary = await this.resolveFinishCommitFiles();
     if (finishBoundary.ok === false) {
-      return `${verifySummary}\n${stats}\n${finalSummary}\n${finishBoundary.message}`;
+      return [
+        '**═══ 验证结果 ═══**',
+        '✅ 验证通过',
+        verifySummary,
+        '',
+        '**═══ 完成统计 ═══**',
+        stats,
+        '',
+        finalSummary,
+        finishBoundary.message,
+      ].join('\n');
     }
 
     if (finishBoundary.ok === 'degraded') {
       await this.persistFinalSummary(finalSummary);
       return [
+        '**═══ 验证结果 ═══**',
+        '✅ 验证通过',
         verifySummary,
+        '',
+        '**═══ 完成统计 ═══**',
         stats,
+        '',
         finalSummary,
         finishBoundary.message,
-        '**下一步**',
-        '未提交最终commit：未找到 dirty baseline，保守跳过 auto-commit',
-        '工作流仍停留在收尾阶段，请先处理最终提交边界，再重新执行 node flow.js finish',
+        '',
+        '**═══ 下一步 ═══**',
+        '⚠️ 未提交最终commit：未找到 dirty baseline，保守跳过 auto-commit',
+        '👉 工作流仍停留在收尾阶段，请先处理最终提交边界，再重新执行 `node flow.js finish`',
       ].join('\n');
     }
 
@@ -964,14 +1027,41 @@ export class WorkflowService {
 
       this.repo.cleanTags();
       await this.repo.clearAll();
-      return `${verifySummary}\n${stats}\n${finalSummary}\n${evolutionSummary}${this.formatCommitMessage(commitResult, 'finish')}\n**完成**\n工作流回到待命状态\n等待下一个需求...`;
+      return [
+        '**═══ 验证结果 ═══**',
+        '✅ 验证通过',
+        verifySummary,
+        '',
+        '**═══ 完成统计 ═══**',
+        stats,
+        '',
+        finalSummary,
+        `${evolutionSummary}${this.formatCommitMessage(commitResult, 'finish')}`,
+        '',
+        '**═══ 工作流完成 ═══**',
+        '🎉 工作流已回到待命状态',
+        '⏳ 等待下一个需求...',
+      ].join('\n');
     }
 
     await this.persistFinalSummary(finalSummary);
     const nextStep = commitResult.status === 'failed'
       ? '最终commit失败，工作流仍停留在收尾阶段；请修复后重新执行 node flow.js finish'
       : '最终commit尚未完成，工作流仍停留在收尾阶段；请处理提交边界后重新执行 node flow.js finish';
-    return `${verifySummary}\n${stats}\n${finalSummary}${this.formatCommitMessage(commitResult, 'finish')}\n**下一步**\n${nextStep}`;
+    return [
+      '**═══ 验证结果 ═══**',
+      '✅ 验证通过',
+      verifySummary,
+      '',
+      '**═══ 完成统计 ═══**',
+      stats,
+      '',
+      finalSummary,
+      this.formatCommitMessage(commitResult, 'finish'),
+      '',
+      '**═══ 下一步 ═══**',
+      '⚠️ ' + nextStep,
+    ].join('\n');
   }
 
   /** 计算 config 变更的键列表（浅比较，键名排序） */

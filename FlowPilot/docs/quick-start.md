@@ -59,6 +59,8 @@ claude --dangerously-skip-permissions
 codex --yolo
 ```
 
+> 这轮“更像 Claude 的输出风格”升级只改表达和排版，不改任务调度、协议优先级、命令语义或 checkpoint 规则。
+
 > `--dangerously-skip-permissions` 会跳过所有权限确认弹窗，实现真正的全自动。不加的话每个操作都要你点确认。
 
 然后直接告诉客户端你要做什么，比如：

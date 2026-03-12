@@ -10,6 +10,7 @@ When you come back, the code is written, tests have passed, and git commits are 
 > Update: FlowPilot now supports `Claude Code`, `Codex`, `Cursor`, `snow-cli`, and other clients. During `init`, you can directly choose the target client and generate the matching instruction file / setup extras.
 
 > Update: The built-in instruction files / client-specific templates now include **response-style shaping**. They rein in the overly verbose default output common in GPT-style clients and make it closer to Claude-style communication: **conclusion first, details after, concise, direct, terminal-friendly** — while still enforcing parallelism, safety confirmation, and engineering discipline. FlowPilot's own terminal output is also moving toward stronger grouping, clearer status markers, and more explicit next-step hints.
+> This upgrade is **presentation-layer only**: friendlier wording, clearer grouping, and more legible terminal output. It does **not** change workflow scheduling, protocol priority, command semantics, or checkpoint rules.
 
 > Multi-client full-auto parallel switches:
 > - `Claude Code`: enable Agent Teams

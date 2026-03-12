@@ -77,6 +77,7 @@ node flow.js init
 - 生成的 instruction file 会将终端输出风格作为硬约束，并默认强化依赖分析、并行调度与危险操作确认；其中 `Codex` 额外补强子任务下发契约（代理名称 / 任务定义 / 执行动作 / 预期结果）
 - `status / next / finish / review / init` 也会使用更友好的终端风格：强分组标题、状态图标、下一步提示，以及更直观的实时状态卡片
 - `Codex` 的增强规则还会显式要求按“任务分析 → 并行调度与子任务下发 → 结果汇总 → 递归迭代”推进复杂任务
+- 上述风格升级只作用于**表现层**：不会改变工作流调度、协议流程优先级、命令参数格式、checkpoint 规则或状态机语义
 - `.workflow/` 目录 — 本地临时运行态
 - `.gitignore` 本地状态忽略规则（若缺失）— 默认忽略 `.workflow/`、`.flowpilot/`、`.claude/settings.json`、`.claude/worktrees/`
 

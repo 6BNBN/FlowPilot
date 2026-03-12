@@ -49,6 +49,7 @@ This auto-generates:
 - `status / next / finish / review / init` also adopt a friendlier terminal style with stronger grouping, status markers, next-step hints, and richer live status cards
 - `.workflow/` directory — local transient runtime state
 - local-state `.gitignore` rules when missing — by default `.workflow/`, `.flowpilot/`, `.claude/settings.json`, and `.claude/worktrees/`
+- These output-style upgrades are **presentation-layer only**: they do not change workflow scheduling, protocol priority, command syntax, checkpoint rules, or state-machine semantics
 
 ### Step 3: Describe Your Requirements
 

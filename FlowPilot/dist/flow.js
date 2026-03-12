@@ -385,6 +385,33 @@ var COMMON_AGENT_GUIDELINES = `
 - **\u907F\u514D**\u4F7F\u7528\u8D85\u957F\u8868\u683C\u3001\u8D85\u957F\u6BB5\u843D\u3001\u8D85\u957F\u8DEF\u5F84\u548C\u5927\u6BB5\u65E0\u7ED3\u6784\u6587\u672C\u3002
 - **\u53EF\u9002\u5EA6**\u4F7F\u7528 emoji \u5F3A\u5316\u89C6\u89C9\u5F15\u5BFC\uFF0C\u4F46\u4E0D\u5F97\u5806\u780C\u6216\u5F71\u54CD\u53EF\u8BFB\u6027\u3002
 
+### AI \u5BF9\u7528\u6237\u8F93\u51FA\u98CE\u683C\uFF08\u53EA\u6539\u8868\u8FBE\uFF0C\u4E0D\u6539\u89C4\u5219\uFF09
+- **\u5FC5\u987B**\u4F18\u5148\u4F7F\u7528\u53CB\u597D\u3001\u76F4\u63A5\u3001\u50CF\u540C\u4F34\u534F\u4F5C\u7684\u8BED\u6C14\uFF1B\u4E0D\u8981\u50F5\u786C\u64AD\u62A5\u5F0F\u8F93\u51FA\u3002
+- **\u5FC5\u987B**\u4F18\u5148\u4F7F\u7528\u4EE5\u4E0B\u5206\u7EC4\u951A\u70B9\u7EC4\u7EC7\u7528\u6237\u53EF\u89C1\u56DE\u590D\uFF1A
+  - \`**\u7ED3\u8BBA**\`
+  - \`**\u5F53\u524D\u8FDB\u5C55**\`
+  - \`**\u539F\u56E0**\`
+  - \`**\u4E0B\u4E00\u6B65**\`
+  - \`**\u98CE\u9669**\`
+- **\u5EFA\u8BAE**\u5728\u4E0D\u5F71\u54CD\u53EF\u8BFB\u6027\u7684\u524D\u63D0\u4E0B\u4F7F\u7528\u5C11\u91CF\u6587\u5B57\u56FE\u6807\u6216 emoji \u5F3A\u5316\u626B\u63CF\u4F53\u9A8C\uFF0C\u4F8B\u5982\uFF1A
+  - \`\u5B8C\u6210\` / \`\u5DF2\u5904\u7406\`
+  - \`\u63D0\u793A\` / \`\u6CE8\u610F\`
+  - \`\u4E0B\u4E00\u6B65\`
+  - \`\u26A0\uFE0F\`\uFF08\u4EC5\u7528\u4E8E\u98CE\u9669\u6216\u963B\u585E\uFF09
+- **\u5FC5\u987B**\u8BA9\u72B6\u6001\u66F4\u65B0\u5C3D\u91CF\u7B26\u5408\u4EE5\u4E0B\u6837\u5F0F\uFF1A
+\`\`\`text
+**\u5F53\u524D\u8FDB\u5C55**
+\u5DF2\u5B8C\u6210 ...
+
+**\u539F\u56E0**
+\u73B0\u5728\u9700\u8981\u5148\u5904\u7406 ...
+
+**\u4E0B\u4E00\u6B65**
+\u63A5\u4E0B\u6765\u6211\u4F1A ...
+\`\`\`
+- **\u5FC5\u987B**\u4FDD\u6301\u534F\u8BAE\u6307\u4EE4\u3001\u547D\u4EE4\u3001checkpoint \u8981\u6C42\u7684\u539F\u610F\u4E0D\u53D8\uFF1B\u53EA\u80FD\u4F18\u5316\u8868\u8FBE\u548C\u6392\u7248\uFF0C\u4E0D\u80FD\u6539\u8BED\u4E49\u3002
+- **\u907F\u514D**\u201C\u53E3\u53F7\u5F0F\u5938\u8D5E\u201D\u201C\u8FC7\u5EA6\u9F13\u52B1\u201D\u201C\u7A7A\u6D1E\u5BA2\u5957\u201D\uFF1B\u53CB\u597D\u4E0D\u7B49\u4E8E\u5197\u957F\u3002
+
 ### \u4EFB\u52A1\u6267\u884C
 - **\u5FC5\u987B**\u5148\u5206\u6790\uFF0C\u518D\u6267\u884C\u3002
 - **\u5FC5\u987B**\u5148\u8BC6\u522B\u4F9D\u8D56\u5173\u7CFB\u56FE\uFF0C\u533A\u5206\u300C\u53EF\u5E76\u884C\u8282\u70B9\u300D\u4E0E\u300C\u5FC5\u987B\u4E32\u884C\u8282\u70B9\u300D\u3002
@@ -528,6 +555,18 @@ Each sub-agent prompt MUST contain these sections in order:
   - \`blocked\`\uFF1A\u9047\u5230\u5361\u70B9\u3001\u73AF\u5883\u95EE\u9898\u6216\u8FB9\u754C\u4E0D\u6E05
 - \u82E5\u5E73\u53F0\u6216 CLI \u63D0\u4F9B\u8FDB\u5EA6\u4E0A\u62A5\u547D\u4EE4\uFF08\u4F8B\u5982 \`node flow.js pulse ...\`\uFF09\uFF0C**\u5FC5\u987B\u4F18\u5148**\u4F7F\u7528\uFF1B\u5426\u5219\u81F3\u5C11\u5728\u56DE\u590D\u4E2D\u660E\u786E\u9636\u6BB5\u3001\u6700\u8FD1\u6D3B\u52A8\u548C\u963B\u585E\u539F\u56E0\u3002
 - \u82E5\u5355\u4E2A\u9636\u6BB5\u6301\u7EED\u65F6\u95F4\u8FC7\u957F\u4E14\u65E0\u65B0 checkpoint\uFF0C\u5FC5\u987B\u4E3B\u52A8\u4E0A\u62A5\u201C\u4ECD\u5728\u6267\u884C\u201D\u6216\u201C\u5DF2\u963B\u585E\u201D\uFF0C\u907F\u514D\u4E3B\u4EE3\u7406\u53EA\u80FD\u770B\u5230\u7B49\u5F85\u9762\u677F\u3002
+- **\u5EFA\u8BAE**\u9636\u6BB5\u6027\u56DE\u590D\u5C3D\u91CF\u7B26\u5408\u4EE5\u4E0B\u683C\u5F0F\uFF1A
+\`\`\`text
+**\u5F53\u524D\u8FDB\u5C55**
+\u9636\u6BB5\uFF1Aimplementation
+\u6B63\u5728\u5904\u7406\uFF1A...
+
+**\u539F\u56E0**
+\u9700\u8981\u5148\u5B8C\u6210 ...
+
+**\u4E0B\u4E00\u6B65**
+\u5B8C\u6210\u540E\u6211\u4F1A ...
+\`\`\`
 
 ### Sub-Agent Checkpoint (Iron Rule #4 \u2014 most common violation)
 Sub-agent's LAST Bash command before replying MUST be:
@@ -3913,17 +3952,12 @@ async function detect(basePath2, taskId, summary, failed, activeHours) {
 
 // src/interfaces/formatter.ts
 var ICON = {
-  pending: "[ ]",
-  active: "[>]",
-  done: "[x]",
-  skipped: "[-]",
-  failed: "[!]"
+  pending: "\u25CB",
+  active: "\u23F3",
+  done: "\u2713",
+  skipped: "\u2298",
+  failed: "\u2717"
 };
-function section(title, lines) {
-  const body = lines.filter((line) => Boolean(line && line.trim()));
-  return body.length ? `**${title}**
-${body.join("\n")}` : `**${title}**`;
-}
 function workflowName2(name) {
   return name?.trim() ? name : "\u672A\u547D\u540D\u5DE5\u4F5C\u6D41";
 }
@@ -3933,13 +3967,14 @@ function summarizeCounts(data) {
   const pending = data.tasks.filter((t) => t.status === "pending").length;
   const skipped2 = data.tasks.filter((t) => t.status === "skipped").length;
   const failed = data.tasks.filter((t) => t.status === "failed").length;
-  const extras = [
-    active ? `${active} \u8FDB\u884C\u4E2D` : "",
-    pending ? `${pending} \u5F85\u6267\u884C` : "",
-    skipped2 ? `${skipped2} \u8DF3\u8FC7` : "",
-    failed ? `${failed} \u5931\u8D25` : ""
-  ].filter(Boolean).join(" | ");
-  return `${done}/${data.tasks.length} \u5DF2\u5B8C\u6210${extras ? ` | ${extras}` : ""}`;
+  const parts = [
+    done === data.tasks.length ? "\u2713 \u5168\u90E8\u5B8C\u6210" : `${done}/${data.tasks.length} \u5DF2\u5B8C\u6210`,
+    active ? `\u23F3 ${active} \u8FDB\u884C\u4E2D` : "",
+    pending ? `\u25CB ${pending} \u5F85\u6267\u884C` : "",
+    skipped2 ? `\u2298 ${skipped2} \u8DF3\u8FC7` : "",
+    failed ? `\u2717 ${failed} \u5931\u8D25` : ""
+  ].filter(Boolean);
+  return parts.join(" | ");
 }
 function readLiveValue(task, keys) {
   for (const key of keys) {
@@ -3953,55 +3988,70 @@ function formatTaskMeta(task) {
   const recent = readLiveValue(task, ["recentActivity", "lastActivityText", "activityAge"]);
   const progress = readLiveValue(task, ["progressText", "latestProgress", "activitySummary"]);
   const parts = [
-    stage ? `\u9636\u6BB5: ${stage}` : "",
-    recent ? `\u6700\u8FD1\u6D3B\u52A8: ${recent}` : "",
-    progress ? `\u8FDB\u5C55: ${progress}` : ""
+    stage ? `\u{1F4CD} ${stage}` : "",
+    recent ? `\u{1F550} ${recent}` : "",
+    progress ? `\u{1F4C8} ${progress}` : ""
   ].filter(Boolean);
-  return parts.length ? `   ${parts.join(" | ")}` : null;
+  return parts.length ? `   ${parts.join(" \xB7 ")}` : null;
 }
 function formatTaskLine(task) {
-  const lines = [`${ICON[task.status] ?? "[ ]"} ${task.id} [${task.type}] ${task.title}${task.summary ? ` - ${task.summary}` : ""}`];
+  const icon = ICON[task.status] ?? "\u25CB";
+  const typeTag = `[${task.type}]`;
+  const summary = task.summary ? ` \u2014 ${task.summary}` : "";
+  const lines = [`${icon} ${task.id} ${typeTag} ${task.title}${summary}`];
   const meta = formatTaskMeta(task);
   if (meta) lines.push(meta);
   return lines;
 }
 function formatStatus(data) {
+  const activeTasks = data.tasks.filter((task) => task.status === "active");
+  const blockedTasks = data.tasks.filter((task) => readLiveValue(task, ["stage", "phase", "liveStage"]) === "blocked");
+  const statusEmoji = data.status === "running" ? "\u{1F504}" : data.status === "finishing" ? "\u{1F3C1}" : "\u23F8";
   const lines = [
-    section("\u5F53\u524D\u72B6\u6001", [
-      `\u5DE5\u4F5C\u6D41: ${workflowName2(data.name)}`,
-      `\u72B6\u6001: ${data.status}`,
-      `\u8FDB\u5EA6: ${summarizeCounts(data)}`
-    ]),
+    `**\u2550\u2550\u2550 \u5DE5\u4F5C\u6D41\u72B6\u6001 \u2550\u2550\u2550**`,
+    `${statusEmoji} ${workflowName2(data.name)} \xB7 ${data.status}`,
+    `\u{1F4CA} ${summarizeCounts(data)}`,
     "",
-    section("\u4EFB\u52A1\u8FDB\u5EA6", data.tasks.flatMap((task) => formatTaskLine(task)))
+    "**\u2550\u2550\u2550 \u4EFB\u52A1\u8FDB\u5EA6 \u2550\u2550\u2550**",
+    ...data.tasks.flatMap((task) => formatTaskLine(task))
   ];
+  const nextSteps = [
+    activeTasks.length ? `\u23F3 \u7EE7\u7EED\u8DDF\u8FDB\u8FDB\u884C\u4E2D\u7684\u4EFB\u52A1 (${activeTasks.map((task) => task.id).join(", ")})` : "",
+    blockedTasks.length ? `\u26A0\uFE0F \u4F18\u5148\u5904\u7406\u963B\u585E\u4EFB\u52A1 (${blockedTasks.map((task) => task.id).join(", ")})` : "",
+    !activeTasks.length && !blockedTasks.length && data.tasks.some((task) => task.status === "pending") ? "\u{1F4A1} \u8FD0\u884C `node flow.js next` \u83B7\u53D6\u4E0B\u4E00\u6279\u4EFB\u52A1" : ""
+  ].filter(Boolean);
+  if (nextSteps.length) {
+    lines.push("", "**\u2550\u2550\u2550 \u4E0B\u4E00\u6B65 \u2550\u2550\u2550**", ...nextSteps.map((step) => `- ${step}`));
+  }
   return lines.join("\n");
 }
 function formatTask(task, context) {
+  const icon = ICON[task.status] ?? "\u25CB";
+  const typeIcon = task.type === "frontend" ? "\u{1F3A8}" : task.type === "backend" ? "\u2699\uFE0F" : "\u{1F4CB}";
   const lines = [
-    section(`\u4EFB\u52A1 ${task.id}`, [
-      `\u6807\u9898: ${task.title}`,
-      `\u7C7B\u578B: ${task.type}`,
-      `\u4F9D\u8D56: ${task.deps.length ? task.deps.join(", ") : "\u65E0"}`,
-      task.description ? `\u63CF\u8FF0: ${task.description}` : null
-    ]),
+    `**\u2550\u2550\u2550 \u4EFB\u52A1 ${task.id} \u2550\u2550\u2550**`,
+    `${icon} **${task.title}**`,
     "",
-    section("Checkpoint \u6307\u4EE4", [
-      `\u5B8C\u6210\u65F6: echo '\u4E00\u53E5\u8BDD\u6458\u8981' | node flow.js checkpoint ${task.id} --files <changed-file-1> <changed-file-2>`,
-      `\u5931\u8D25\u65F6: echo 'FAILED' | node flow.js checkpoint ${task.id}`
-    ])
+    `${typeIcon} \u7C7B\u578B: ${task.type}`,
+    `\u{1F4CE} \u4F9D\u8D56: ${task.deps.length ? task.deps.join(", ") : "\u65E0"}`,
+    `\u{1F3AF} \u76EE\u6807: ${task.description || "\u672A\u63D0\u4F9B\u989D\u5916\u63CF\u8FF0"}`,
+    "",
+    "**Checkpoint \u6307\u4EE4**",
+    "```",
+    `echo '\u4E00\u53E5\u8BDD\u6458\u8981' | node flow.js checkpoint ${task.id} --files <file1> <file2>`,
+    "```"
   ];
   if (context) {
-    lines.push("", section("\u4E0A\u4E0B\u6587", [context]));
+    lines.push("", "**\u2550\u2550\u2550 \u4E0A\u4E0B\u6587 \u2550\u2550\u2550**", context);
   }
   return lines.join("\n");
 }
 function formatBatch(items) {
   const lines = [
-    section("\u5E76\u884C\u4EFB\u52A1\u6279\u6B21", [
-      `\u672C\u8F6E\u5171 ${items.length} \u4E2A\u4EFB\u52A1`,
-      "\u8981\u6C42: \u5FC5\u987B\u5728\u540C\u4E00\u6761\u6D88\u606F\u4E2D\u5E76\u884C\u6D3E\u53D1\u5168\u90E8\u4EFB\u52A1\uFF1B\u4E0D\u8981\u4E3A\u4E86\u4FDD\u5B88\u800C\u964D\u6210\u4E32\u884C\u3002"
-    ]),
+    "**\u2550\u2550\u2550 \u5E76\u884C\u4EFB\u52A1\u6279\u6B21 \u2550\u2550\u2550**",
+    `\u{1F4E6} \u672C\u8F6E\u5171 ${items.length} \u4E2A\u72EC\u7ACB\u4EFB\u52A1`,
+    "\u26A1 \u8981\u6C42: \u5728\u540C\u4E00\u6761\u6D88\u606F\u4E2D\u5E76\u884C\u6D3E\u53D1\u5168\u90E8\u4EFB\u52A1",
+    "\u{1F4A1} \u63D0\u793A: \u53EF\u628A\u8FD9\u4E00\u6279\u5F53\u4F5C\u540C\u4E00\u8F6E\u5E76\u884C\u524D\u6CBF\uFF0C\u4E00\u6B21\u6D3E\u5B8C\u518D\u7EDF\u4E00\u6C47\u603B",
     ""
   ];
   for (const { task, context } of items) {
@@ -4014,15 +4064,19 @@ function formatFinalSummary(data) {
   const skipped2 = data.tasks.filter((t) => t.status === "skipped").length;
   const failed = data.tasks.filter((t) => t.status === "failed").length;
   const pending = data.tasks.filter((t) => t.status === "pending" || t.status === "active").length;
-  const stats = `${done} \u5B8C\u6210${skipped2 ? `, ${skipped2} \u8DF3\u8FC7` : ""}${failed ? `, ${failed} \u5931\u8D25` : ""}${pending ? `, ${pending} \u672A\u5B8C\u6210` : ""}`;
+  const stats = [
+    `\u2713 ${done} \u5B8C\u6210`,
+    skipped2 ? `\u2298 ${skipped2} \u8DF3\u8FC7` : "",
+    failed ? `\u2717 ${failed} \u5931\u8D25` : "",
+    pending ? `\u25CB ${pending} \u672A\u5B8C\u6210` : ""
+  ].filter(Boolean).join(" \xB7 ");
   return [
-    "\u6700\u7EC8\u603B\u7ED3:",
-    section("\u5B8C\u6210\u60C5\u51B5", [
-      `\u5DE5\u4F5C\u6D41: ${workflowName2(data.name)}`,
-      `\u7EDF\u8BA1: ${stats}`
-    ]),
+    "**\u2550\u2550\u2550 \u6700\u7EC8\u603B\u7ED3 \u2550\u2550\u2550**",
+    `\u{1F4CB} \u5DE5\u4F5C\u6D41: ${workflowName2(data.name)}`,
+    `\u{1F4CA} \u7EDF\u8BA1: ${stats}`,
     "",
-    section("\u4EFB\u52A1\u5217\u8868", data.tasks.flatMap((task) => formatTaskLine(task)))
+    "**\u2550\u2550\u2550 \u4EFB\u52A1\u5217\u8868 \u2550\u2550\u2550**",
+    ...data.tasks.flatMap((task) => formatTaskLine(task))
   ].join("\n");
 }
 
@@ -4041,6 +4095,7 @@ function isExplicitFailureCheckpoint(detail) {
   return CHECKPOINT_FAILURE_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 var CANONICAL_SETUP_NON_COMMITTABLE_FILES = ["AGENTS.md", "CLAUDE.md", ".gitignore"];
+var NON_BLOCKING_SETUP_RESIDUE_FILES = /* @__PURE__ */ new Set(["AGENTS.md", "CLAUDE.md", "ROLE.md"]);
 var WorkflowService = class {
   constructor(repo2, parse) {
     this.repo = repo2;
@@ -4475,22 +4530,31 @@ ${warns.join("\n")}` : msg;
     log.debug(`resume: status=${data.status}, current=${data.current}`);
     if (data.status === "idle") return "\u5DE5\u4F5C\u6D41\u5F85\u547D\u4E2D\uFF0C\u7B49\u5F85\u9700\u6C42\u8F93\u5165";
     if (data.status === "completed") return "\u5DE5\u4F5C\u6D41\u5DF2\u5168\u90E8\u5B8C\u6210";
-    if (data.status === "finishing") return `**\u5F53\u524D\u72B6\u6001**
-\u6062\u590D\u5DE5\u4F5C\u6D41: ${data.name}
-\u72B6\u6001: \u6536\u5C3E\u9636\u6BB5
-
-**\u4E0B\u4E00\u6B65**
-\u8BF7\u6267\u884C node flow.js finish`;
+    if (data.status === "finishing") {
+      return [
+        "**\u2550\u2550\u2550 \u5F53\u524D\u72B6\u6001 \u2550\u2550\u2550**",
+        `\u{1F3C1} \u5DE5\u4F5C\u6D41: ${data.name || "\u672A\u547D\u540D\u5DE5\u4F5C\u6D41"}`,
+        "\u{1F4CD} \u72B6\u6001: \u6536\u5C3E\u9636\u6BB5",
+        "",
+        "**\u2550\u2550\u2550 \u4E0B\u4E00\u6B65 \u2550\u2550\u2550**",
+        "\u{1F449} \u8FD0\u884C `node flow.js finish` \u5B8C\u6210\u6700\u7EC8\u6536\u5C3E"
+      ].join("\n");
+    }
     if (data.status === "reconciling") {
       const doneCount2 = data.tasks.filter((t) => t.status === "done").length;
       const total2 = data.tasks.length;
       const reconcile = await loadReconcileState(this.repo.projectRoot());
       const dirtyState2 = await this.getResumeDirtyState();
       return [
-        `\u6062\u590D\u5DE5\u4F5C\u6D41: ${data.name}`,
-        `\u8FDB\u5EA6: ${doneCount2}/${total2}`,
-        `\u68C0\u6D4B\u5230\u5F85\u63A5\u7BA1\u7684\u4E2D\u65AD\u4EFB\u52A1: ${reconcile.taskIds.join(", ") || data.current || "\u672A\u77E5"}`,
-        "\u5DF2\u6682\u505C\u7EE7\u7EED\u8C03\u5EA6\uFF1B\u8BF7\u5148\u6267\u884C node flow.js adopt <id> --files ...\uFF0C\u6216\u5728\u786E\u8BA4\u5E76\u5904\u7406\u5217\u51FA\u7684\u672C\u4EFB\u52A1\u53D8\u66F4\u540E node flow.js restart <id>\u3002\u82E5\u5B58\u5728\u5F52\u5C5E\u672A\u660E\u53D8\u66F4\uFF0C\u5FC5\u987B\u5148\u4EBA\u5DE5\u786E\u8BA4\uFF1B\u4E0D\u8981\u6574\u6587\u4EF6 git restore\u3002\u4E0D\u5F97\u5904\u7406 baseline \u53D8\u66F4\u6216\u672A\u5217\u51FA\u7684\u5176\u4ED6\u9879\u76EE\u4EE3\u7801",
+        "**\u2550\u2550\u2550 \u6062\u590D\u5DE5\u4F5C\u6D41 \u2550\u2550\u2550**",
+        `\u{1F4C2} ${data.name}`,
+        `\u{1F4CA} \u8FDB\u5EA6: ${doneCount2}/${total2}`,
+        `\u26A0\uFE0F \u5F85\u63A5\u7BA1\u4E2D\u65AD\u4EFB\u52A1: ${reconcile.taskIds.join(", ") || data.current || "\u672A\u77E5"}`,
+        "",
+        "\u{1F449} \u8BF7\u5148\u6267\u884C `node flow.js adopt <id> --files ...`",
+        "   \u6216\u5728\u786E\u8BA4\u5E76\u5904\u7406\u5217\u51FA\u7684\u672C\u4EFB\u52A1\u53D8\u66F4\u540E `node flow.js restart <id>`",
+        "   \u82E5\u5B58\u5728\u5F52\u5C5E\u672A\u660E\u53D8\u66F4\uFF0C\u5FC5\u987B\u5148\u4EBA\u5DE5\u786E\u8BA4\uFF1B\u4E0D\u8981\u6574\u6587\u4EF6 git restore",
+        "   \u4E0D\u5F97\u5904\u7406 baseline \u53D8\u66F4\u6216\u672A\u5217\u51FA\u7684\u5176\u4ED6\u9879\u76EE\u4EE3\u7801",
         ...dirtyState2.lines
       ].join("\n");
     }
@@ -4514,12 +4578,20 @@ ${warns.join("\n")}` : msg;
     const total = newData.tasks.length;
     this.stopHeartbeat?.();
     this.stopHeartbeat = startHeartbeat(this.repo.projectRoot());
+    const statusIcon = shouldReconcile ? "\u26A0\uFE0F" : resetId ? "\u{1F504}" : "\u25B6\uFE0F";
+    const statusMsg = shouldReconcile ? `\u68C0\u6D4B\u5230\u4E2D\u65AD\u4EFB\u52A1 ${hadActiveTasks.join(", ")} \u7684\u5F85\u5904\u7406\u53D8\u66F4\uFF0C\u5DF2\u6682\u505C\u8C03\u5EA6` : resetId ? `\u4E2D\u65AD\u4EFB\u52A1 ${resetId} \u5DF2\u91CD\u7F6E\uFF0C\u5C06\u91CD\u65B0\u6267\u884C` : "\u7EE7\u7EED\u6267\u884C";
     const lines = [
-      `\u6062\u590D\u5DE5\u4F5C\u6D41: ${newData.name}`,
-      `\u8FDB\u5EA6: ${doneCount}/${total}`,
-      shouldReconcile ? `\u68C0\u6D4B\u5230\u4E2D\u65AD\u4EFB\u52A1 ${hadActiveTasks.join(", ")} \u7684\u5F85\u5904\u7406\u53D8\u66F4\uFF0C\u5DF2\u6682\u505C\u7EE7\u7EED\u8C03\u5EA6\uFF1B\u8BF7\u5148\u6267\u884C node flow.js adopt ${hadActiveTasks[0]} --files ...\uFF0C\u6216\u5728\u786E\u8BA4\u5E76\u5904\u7406\u5217\u51FA\u7684\u672C\u4EFB\u52A1\u53D8\u66F4\u540E node flow.js restart ${hadActiveTasks[0]}\u3002\u82E5\u5B58\u5728\u5F52\u5C5E\u672A\u660E\u53D8\u66F4\uFF0C\u5FC5\u987B\u5148\u4EBA\u5DE5\u786E\u8BA4\uFF1B\u4E0D\u8981\u6574\u6587\u4EF6 git restore\u3002\u4E0D\u5F97\u5904\u7406 baseline \u53D8\u66F4\u6216\u672A\u5217\u51FA\u7684\u5176\u4ED6\u9879\u76EE\u4EE3\u7801` : resetId ? `\u4E2D\u65AD\u4EFB\u52A1 ${resetId} \u5DF2\u91CD\u7F6E\uFF0C\u5C06\u91CD\u65B0\u6267\u884C` : "\u7EE7\u7EED\u6267\u884C",
+      "**\u2550\u2550\u2550 \u6062\u590D\u5DE5\u4F5C\u6D41 \u2550\u2550\u2550**",
+      `\u{1F4C2} ${newData.name}`,
+      `\u{1F4CA} \u8FDB\u5EA6: ${doneCount}/${total}`,
+      statusIcon + " " + statusMsg,
       ...dirtyState.lines
     ];
+    if (shouldReconcile) {
+      lines.push("");
+      lines.push("\u{1F449} \u8BF7\u5148\u6267\u884C `node flow.js adopt " + hadActiveTasks[0] + " --files ...`");
+      lines.push("   \u6216\u786E\u8BA4\u5E76\u5904\u7406\u5217\u51FA\u7684\u672C\u4EFB\u52A1\u53D8\u66F4\u540E `node flow.js restart " + hadActiveTasks[0] + "`");
+    }
     return lines.join("\n");
   }
   async adopt(id, detail, files) {
@@ -4640,7 +4712,9 @@ ${warns.join("\n")}` : msg;
         ].join("\n")
       };
     }
-    const leftoverSetupOwnedFiles = comparison.newDirtyFiles.filter((file) => setupOwnedSet.has(file) && !(file === ".gitignore" && gitignorePolicyMatches));
+    const leftoverSetupOwnedFiles = comparison.newDirtyFiles.filter(
+      (file) => setupOwnedSet.has(file) && !NON_BLOCKING_SETUP_RESIDUE_FILES.has(file) && !(file === ".gitignore" && gitignorePolicyMatches)
+    );
     if (leftoverSetupOwnedFiles.length > 0) {
       return {
         ok: false,
@@ -4728,39 +4802,44 @@ ${warns.join("\n")}` : msg;
     const lines = [];
     if (existing && (existing.status === "running" || existing.status === "finishing")) {
       const done = existing.tasks.filter((t) => t.status === "done").length;
-      lines.push(`\u68C0\u6D4B\u5230\u8FDB\u884C\u4E2D\u7684\u5DE5\u4F5C\u6D41: ${existing.name}`);
-      lines.push(`\u8FDB\u5EA6: ${done}/${existing.tasks.length}`);
+      const statusIcon = existing.status === "finishing" ? "\u{1F3C1}" : "\u{1F504}";
+      lines.push("**\u2550\u2550\u2550 \u68C0\u6D4B\u5230\u8FDB\u884C\u4E2D\u7684\u5DE5\u4F5C\u6D41 \u2550\u2550\u2550**");
+      lines.push(`\u{1F4C2} ${existing.name}`);
+      lines.push(`\u{1F4CA} \u8FDB\u5EA6: ${done}/${existing.tasks.length}`);
+      lines.push("");
       if (existing.status === "finishing") {
-        lines.push("**\u5F53\u524D\u72B6\u6001**");
-        lines.push("\u72B6\u6001: \u6536\u5C3E\u9636\u6BB5\uFF0C\u6267\u884C node flow.js finish \u7EE7\u7EED");
+        lines.push("**\u2550\u2550\u2550 \u5F53\u524D\u72B6\u6001 \u2550\u2550\u2550**");
+        lines.push("\u{1F4CD} \u72B6\u6001: \u6536\u5C3E\u9636\u6BB5");
+        lines.push("\u{1F449} \u8FD0\u884C `node flow.js finish` \u7EE7\u7EED");
       } else {
-        lines.push("**\u5F53\u524D\u72B6\u6001**");
-        lines.push("\u6267\u884C node flow.js resume \u7EE7\u7EED");
+        lines.push("**\u2550\u2550\u2550 \u5F53\u524D\u72B6\u6001 \u2550\u2550\u2550**");
+        lines.push("\u23F8 \u72B6\u6001: " + existing.status);
+        lines.push("\u{1F449} \u8FD0\u884C `node flow.js resume` \u7EE7\u7EED");
       }
     } else {
-      lines.push("**\u9879\u76EE\u72B6\u6001**");
-      lines.push("\u9879\u76EE\u5DF2\u63A5\u7BA1\uFF0C\u5DE5\u4F5C\u6D41\u5DE5\u5177\u5C31\u7EEA");
-      lines.push("\u7B49\u5F85\u9700\u6C42\u8F93\u5165\uFF08\u6587\u6863\u6216\u5BF9\u8BDD\u63CF\u8FF0\uFF09");
+      lines.push("**\u2550\u2550\u2550 \u9879\u76EE\u72B6\u6001 \u2550\u2550\u2550**");
+      lines.push("\u2705 \u9879\u76EE\u5DF2\u63A5\u7BA1\uFF0C\u5DE5\u4F5C\u6D41\u5DE5\u5177\u5C31\u7EEA");
+      lines.push("\u23F3 \u7B49\u5F85\u9700\u6C42\u8F93\u5165\uFF08\u6587\u6863\u6216\u5BF9\u8BDD\u63CF\u8FF0\uFF09");
       lines.push("");
-      lines.push("**\u4E0B\u4E00\u6B65**");
-      lines.push("\u63CF\u8FF0\u4F60\u7684\u5F00\u53D1\u4EFB\u52A1\u5373\u53EF\u542F\u52A8\u5168\u81EA\u52A8\u5F00\u53D1");
+      lines.push("**\u2550\u2550\u2550 \u4E0B\u4E00\u6B65 \u2550\u2550\u2550**");
+      lines.push("\u{1F4A1} \u63CF\u8FF0\u4F60\u7684\u5F00\u53D1\u4EFB\u52A1\u5373\u53EF\u542F\u52A8\u5168\u81EA\u52A8\u5F00\u53D1");
     }
     lines.push("");
-    lines.push("**\u751F\u6210\u7ED3\u679C**");
+    lines.push("**\u2550\u2550\u2550 \u751F\u6210\u7ED3\u679C \u2550\u2550\u2550**");
     if (wrote) {
       const instructionPath = (await loadSetupInjectionManifest(this.repo.projectRoot())).claudeMd?.path ?? "AGENTS.md";
-      lines.push(`${instructionPath} \u5DF2\u66F4\u65B0: \u6DFB\u52A0\u4E86\u5DE5\u4F5C\u6D41\u534F\u8BAE`);
+      lines.push(`\u2713 ${instructionPath} \u5DF2\u66F4\u65B0\uFF1A\u6DFB\u52A0\u4E86\u5DE5\u4F5C\u6D41\u534F\u8BAE`);
     }
     if (roleWrote) {
-      lines.push("ROLE.md \u5DF2\u66F4\u65B0: \u4E0E AGENTS.md \u4FDD\u6301\u4E00\u81F4\uFF0C\u4F9B snow-cli \u4F7F\u7528");
+      lines.push("\u2713 ROLE.md \u5DF2\u66F4\u65B0\uFF1A\u4E0E AGENTS.md \u4FDD\u6301\u4E00\u81F4");
     }
     if (client === "claude") {
-      lines.push(".claude/settings.json \u5DF2\u66F4\u65B0: \u6DFB\u52A0\u4E86 Claude Code Hooks");
+      lines.push("\u2713 .claude/settings.json \u5DF2\u66F4\u65B0\uFF1A\u6DFB\u52A0\u4E86 Claude Code Hooks");
     }
     if (!lines.includes("\u63CF\u8FF0\u4F60\u7684\u5F00\u53D1\u4EFB\u52A1\u5373\u53EF\u542F\u52A8\u5168\u81EA\u52A8\u5F00\u53D1")) {
       lines.push("");
-      lines.push("**\u4E0B\u4E00\u6B65**");
-      lines.push("\u63CF\u8FF0\u4F60\u7684\u5F00\u53D1\u4EFB\u52A1\u5373\u53EF\u542F\u52A8\u5168\u81EA\u52A8\u5F00\u53D1");
+      lines.push("**\u2550\u2550\u2550 \u4E0B\u4E00\u6B65 \u2550\u2550\u2550**");
+      lines.push("\u{1F4A1} \u63CF\u8FF0\u4F60\u7684\u5F00\u53D1\u4EFB\u52A1\u5373\u53EF\u542F\u52A8\u5168\u81EA\u52A8\u5F00\u53D1");
     }
     return lines.join("\n");
   }
@@ -4768,9 +4847,9 @@ ${warns.join("\n")}` : msg;
   async review() {
     const data = await this.requireProgress();
     if (!isAllDone(data.tasks)) throw new Error("\u8FD8\u6709\u672A\u5B8C\u6210\u7684\u4EFB\u52A1\uFF0C\u8BF7\u5148\u5B8C\u6210\u6240\u6709\u4EFB\u52A1");
-    if (data.status === "finishing") return "\u5DF2\u5904\u4E8Ereview\u901A\u8FC7\u72B6\u6001\uFF0C\u53EF\u4EE5\u6267\u884C node flow.js finish";
+    if (data.status === "finishing") return "**\u2550\u2550\u2550 \u4EE3\u7801\u5BA1\u67E5 \u2550\u2550\u2550**\n\u2713 \u5DF2\u5904\u4E8E review \u901A\u8FC7\u72B6\u6001\n\n**\u2550\u2550\u2550 \u4E0B\u4E00\u6B65 \u2550\u2550\u2550**\n\u{1F449} \u8FD0\u884C `node flow.js finish` \u5B8C\u6210\u6536\u5C3E";
     await this.repo.saveProgress({ ...data, status: "finishing" });
-    return "**\u4EE3\u7801\u5BA1\u67E5**\n\u4EE3\u7801\u5BA1\u67E5\u5DF2\u901A\u8FC7\uFF0C\u8BF7\u6267\u884C node flow.js finish \u5B8C\u6210\u6536\u5C3E";
+    return "**\u2550\u2550\u2550 \u4EE3\u7801\u5BA1\u67E5 \u2550\u2550\u2550**\n\u2705 \u4EE3\u7801\u5BA1\u67E5\u5DF2\u901A\u8FC7\n\n**\u2550\u2550\u2550 \u4E0B\u4E00\u6B65 \u2550\u2550\u2550**\n\u{1F449} \u8FD0\u884C `node flow.js finish` \u5B8C\u6210\u6536\u5C3E";
   }
   /** finish: 智能收尾 - 先verify，review后置 */
   async finish() {
@@ -4783,16 +4862,28 @@ ${warns.join("\n")}` : msg;
     const result = this.repo.verify();
     log.debug(`finish: verify passed=${result.passed}`);
     if (!result.passed) {
-      return `\u9A8C\u8BC1\u5931\u8D25: ${result.error}
-\u8BF7\u4FEE\u590D\u540E\u91CD\u65B0\u6267\u884C node flow.js finish`;
+      return [
+        "**\u2550\u2550\u2550 \u9A8C\u8BC1\u7ED3\u679C \u2550\u2550\u2550**",
+        "\u2717 \u9A8C\u8BC1\u5931\u8D25",
+        "",
+        "\u{1F4CB} \u9519\u8BEF\u8BE6\u60C5:",
+        result.error,
+        "",
+        "\u{1F449} \u8BF7\u4FEE\u590D\u540E\u91CD\u65B0\u6267\u884C `node flow.js finish`"
+      ].join("\n");
     }
     const verifySummary = this.formatVerifySummary(result);
     if (data.status !== "finishing") {
-      return `**\u9A8C\u8BC1\u901A\u8FC7**
-${verifySummary}
-
-**\u4E0B\u4E00\u6B65**
-\u8BF7\u6D3E\u5B50Agent\u6267\u884C code-review\uFF0C\u5B8C\u6210\u540E\u6267\u884C node flow.js review\uFF0C\u518D\u6267\u884C node flow.js finish`;
+      return [
+        "**\u2550\u2550\u2550 \u9A8C\u8BC1\u7ED3\u679C \u2550\u2550\u2550**",
+        "\u2705 \u9A8C\u8BC1\u901A\u8FC7",
+        verifySummary,
+        "",
+        "**\u2550\u2550\u2550 \u4E0B\u4E00\u6B65 \u2550\u2550\u2550**",
+        "1. \u6D3E\u5B50Agent\u6267\u884C code-review",
+        "2. \u5B8C\u6210\u540E\u8FD0\u884C `node flow.js review`",
+        "3. \u518D\u8FD0\u884C `node flow.js finish`"
+      ].join("\n");
     }
     const done = data.tasks.filter((t) => t.status === "done");
     const skipped2 = data.tasks.filter((t) => t.status === "skipped");
@@ -4801,21 +4892,34 @@ ${verifySummary}
     const finalSummary = formatFinalSummary(data);
     const finishBoundary = await this.resolveFinishCommitFiles();
     if (finishBoundary.ok === false) {
-      return `${verifySummary}
-${stats}
-${finalSummary}
-${finishBoundary.message}`;
+      return [
+        "**\u2550\u2550\u2550 \u9A8C\u8BC1\u7ED3\u679C \u2550\u2550\u2550**",
+        "\u2705 \u9A8C\u8BC1\u901A\u8FC7",
+        verifySummary,
+        "",
+        "**\u2550\u2550\u2550 \u5B8C\u6210\u7EDF\u8BA1 \u2550\u2550\u2550**",
+        stats,
+        "",
+        finalSummary,
+        finishBoundary.message
+      ].join("\n");
     }
     if (finishBoundary.ok === "degraded") {
       await this.persistFinalSummary(finalSummary);
       return [
+        "**\u2550\u2550\u2550 \u9A8C\u8BC1\u7ED3\u679C \u2550\u2550\u2550**",
+        "\u2705 \u9A8C\u8BC1\u901A\u8FC7",
         verifySummary,
+        "",
+        "**\u2550\u2550\u2550 \u5B8C\u6210\u7EDF\u8BA1 \u2550\u2550\u2550**",
         stats,
+        "",
         finalSummary,
         finishBoundary.message,
-        "**\u4E0B\u4E00\u6B65**",
-        "\u672A\u63D0\u4EA4\u6700\u7EC8commit\uFF1A\u672A\u627E\u5230 dirty baseline\uFF0C\u4FDD\u5B88\u8DF3\u8FC7 auto-commit",
-        "\u5DE5\u4F5C\u6D41\u4ECD\u505C\u7559\u5728\u6536\u5C3E\u9636\u6BB5\uFF0C\u8BF7\u5148\u5904\u7406\u6700\u7EC8\u63D0\u4EA4\u8FB9\u754C\uFF0C\u518D\u91CD\u65B0\u6267\u884C node flow.js finish"
+        "",
+        "**\u2550\u2550\u2550 \u4E0B\u4E00\u6B65 \u2550\u2550\u2550**",
+        "\u26A0\uFE0F \u672A\u63D0\u4EA4\u6700\u7EC8commit\uFF1A\u672A\u627E\u5230 dirty baseline\uFF0C\u4FDD\u5B88\u8DF3\u8FC7 auto-commit",
+        "\u{1F449} \u5DE5\u4F5C\u6D41\u4ECD\u505C\u7559\u5728\u6536\u5C3E\u9636\u6BB5\uFF0C\u8BF7\u5148\u5904\u7406\u6700\u7EC8\u63D0\u4EA4\u8FB9\u754C\uFF0C\u518D\u91CD\u65B0\u6267\u884C `node flow.js finish`"
       ].join("\n");
     }
     const titles = done.map((t) => `- ${t.id}: ${t.title}`).join("\n");
@@ -4852,21 +4956,38 @@ ${titles}`;
       });
       this.repo.cleanTags();
       await this.repo.clearAll();
-      return `${verifySummary}
-${stats}
-${finalSummary}
-${evolutionSummary}${this.formatCommitMessage(commitResult, "finish")}
-**\u5B8C\u6210**
-\u5DE5\u4F5C\u6D41\u56DE\u5230\u5F85\u547D\u72B6\u6001
-\u7B49\u5F85\u4E0B\u4E00\u4E2A\u9700\u6C42...`;
+      return [
+        "**\u2550\u2550\u2550 \u9A8C\u8BC1\u7ED3\u679C \u2550\u2550\u2550**",
+        "\u2705 \u9A8C\u8BC1\u901A\u8FC7",
+        verifySummary,
+        "",
+        "**\u2550\u2550\u2550 \u5B8C\u6210\u7EDF\u8BA1 \u2550\u2550\u2550**",
+        stats,
+        "",
+        finalSummary,
+        `${evolutionSummary}${this.formatCommitMessage(commitResult, "finish")}`,
+        "",
+        "**\u2550\u2550\u2550 \u5DE5\u4F5C\u6D41\u5B8C\u6210 \u2550\u2550\u2550**",
+        "\u{1F389} \u5DE5\u4F5C\u6D41\u5DF2\u56DE\u5230\u5F85\u547D\u72B6\u6001",
+        "\u23F3 \u7B49\u5F85\u4E0B\u4E00\u4E2A\u9700\u6C42..."
+      ].join("\n");
     }
     await this.persistFinalSummary(finalSummary);
     const nextStep = commitResult.status === "failed" ? "\u6700\u7EC8commit\u5931\u8D25\uFF0C\u5DE5\u4F5C\u6D41\u4ECD\u505C\u7559\u5728\u6536\u5C3E\u9636\u6BB5\uFF1B\u8BF7\u4FEE\u590D\u540E\u91CD\u65B0\u6267\u884C node flow.js finish" : "\u6700\u7EC8commit\u5C1A\u672A\u5B8C\u6210\uFF0C\u5DE5\u4F5C\u6D41\u4ECD\u505C\u7559\u5728\u6536\u5C3E\u9636\u6BB5\uFF1B\u8BF7\u5904\u7406\u63D0\u4EA4\u8FB9\u754C\u540E\u91CD\u65B0\u6267\u884C node flow.js finish";
-    return `${verifySummary}
-${stats}
-${finalSummary}${this.formatCommitMessage(commitResult, "finish")}
-**\u4E0B\u4E00\u6B65**
-${nextStep}`;
+    return [
+      "**\u2550\u2550\u2550 \u9A8C\u8BC1\u7ED3\u679C \u2550\u2550\u2550**",
+      "\u2705 \u9A8C\u8BC1\u901A\u8FC7",
+      verifySummary,
+      "",
+      "**\u2550\u2550\u2550 \u5B8C\u6210\u7EDF\u8BA1 \u2550\u2550\u2550**",
+      stats,
+      "",
+      finalSummary,
+      this.formatCommitMessage(commitResult, "finish"),
+      "",
+      "**\u2550\u2550\u2550 \u4E0B\u4E00\u6B65 \u2550\u2550\u2550**",
+      "\u26A0\uFE0F " + nextStep
+    ].join("\n");
   }
   /** 计算 config 变更的键列表（浅比较，键名排序） */
   diffConfigKeys(before, after) {
@@ -5204,9 +5325,14 @@ function resolveSetupClientChoice(answer) {
 async function promptSetupClient() {
   if (!isTTY()) return "other";
   process.stdout.write([
-    "\u8BF7\u9009\u62E9\u76EE\u6807\u5BA2\u6237\u7AEF\uFF1A",
+    "**\u5BA2\u6237\u7AEF\u9009\u62E9**",
+    "\u8BF7\u9009\u62E9\u76EE\u6807\u5BA2\u6237\u7AEF\u3002\u8FD9\u91CC\u7684\u9009\u62E9\u53EA\u5F71\u54CD\u751F\u6210\u8BF4\u660E\u6587\u4EF6\u4E0E\u5BA2\u6237\u7AEF\u914D\u7F6E\uFF0C\u4E0D\u4F1A\u6539\u53D8 FlowPilot \u7684\u534F\u8BAE\u4F18\u5148\u7EA7\u548C\u8C03\u5EA6\u89C4\u5219\u3002",
     ...CLIENT_OPTIONS.map((option) => `${option.key}. ${option.label} - ${option.detail}`),
-    "\u76F4\u63A5\u56DE\u8F66\u9ED8\u8BA4\u9009\u62E9 5. Other",
+    "",
+    "**\u63D0\u793A**",
+    "- Claude Code \u9ED8\u8BA4\u751F\u6210 CLAUDE.md",
+    "- Codex / Cursor / Other \u9ED8\u8BA4\u751F\u6210 AGENTS.md",
+    "- \u76F4\u63A5\u56DE\u8F66\u9ED8\u8BA4\u9009\u62E9 5. Other",
     ""
   ].join("\n"));
   const rl = (0, import_promises11.createInterface)({ input: process.stdin, output: process.stdout });
@@ -5269,25 +5395,26 @@ var CLI = class {
         let out;
         if (md.trim()) {
           const data = await s.init(md, force);
-          out = `\u5DF2\u521D\u59CB\u5316\u5DE5\u4F5C\u6D41: ${data.name} (${data.tasks.length} \u4E2A\u4EFB\u52A1)`;
+          out = `\u2705 \u5DF2\u521D\u59CB\u5316\u5DE5\u4F5C\u6D41: ${data.name} (${data.tasks.length} \u4E2A\u4EFB\u52A1)`;
         } else {
           const client = await (this.deps.promptSetupClient ?? promptSetupClient)();
           out = await s.setup(client);
         }
         return `${out}
 
-**\u63D0\u793A**
-- \u5EFA\u8BAE\u5148\u901A\u8FC7 /plugin \u5B89\u88C5\u63D2\u4EF6 superpowers\u3001frontend-design\u3001feature-dev\u3001code-review\u3001context7
-- \u672A\u5B89\u88C5\u65F6\uFF0C\u5B50Agent\u65E0\u6CD5\u4F7F\u7528\u4E13\u4E1A\u6280\u80FD\uFF0C\u4F53\u9A8C\u4F1A\u964D\u7EA7`;
+**\u2550\u2550\u2550 \u63D0\u793A \u2550\u2550\u2550**
+\u{1F4A1} \u5EFA\u8BAE\u5148\u901A\u8FC7 /plugin \u5B89\u88C5\u63D2\u4EF6: superpowers\u3001frontend-design\u3001feature-dev\u3001code-review\u3001context7
+   \u672A\u5B89\u88C5\u65F6\uFF0C\u5B50Agent\u65E0\u6CD5\u4F7F\u7528\u4E13\u4E1A\u6280\u80FD\uFF0C\u4F53\u9A8C\u4F1A\u964D\u7EA7
+   \u5982\u9700\u67E5\u770B\u5F53\u524D\u72B6\u6001\uFF0C\u53EF\u6267\u884C \`node flow.js status\``;
       }
       case "next": {
         if (rest.includes("--batch")) {
           const items = await s.nextBatch();
-          if (!items.length) return "\u5168\u90E8\u5B8C\u6210";
+          if (!items.length) return "\u2705 \u5168\u90E8\u5B8C\u6210";
           return formatBatch(items);
         }
         const result = await s.next();
-        if (!result) return "\u5168\u90E8\u5B8C\u6210";
+        if (!result) return "\u2705 \u5168\u90E8\u5B8C\u6210";
         return formatTask(result.task, result.context);
       }
       case "checkpoint": {
@@ -5366,7 +5493,7 @@ var CLI = class {
       }
       case "status": {
         const data = await s.status();
-        if (!data) return "\u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41";
+        if (!data) return "\u23F3 \u65E0\u6D3B\u8DC3\u5DE5\u4F5C\u6D41";
         return formatStatus(data);
       }
       case "review":
@@ -5406,25 +5533,28 @@ var CLI = class {
     }
   }
 };
-var USAGE = `\u7528\u6CD5: node flow.js [--verbose] <command>
-  init [--force]       \u521D\u59CB\u5316\u5DE5\u4F5C\u6D41 (stdin\u4F20\u5165\u4EFB\u52A1markdown\uFF0C\u65E0stdin\u5219\u663E\u793A\u5BA2\u6237\u7AEF\u9009\u9879\u5E76\u63A5\u7BA1\u9879\u76EE)
-  next [--batch]       \u83B7\u53D6\u4E0B\u4E00\u4E2A\u5F85\u6267\u884C\u4EFB\u52A1 (--batch \u8FD4\u56DE\u6240\u6709\u53EF\u5E76\u884C\u4EFB\u52A1)
+var USAGE = `**\u2550\u2550\u2550 FlowPilot \u7528\u6CD5 \u2550\u2550\u2550**
+node flow.js [--verbose] <command>
+
+\u{1F4CB} \u5DE5\u4F5C\u6D41\u547D\u4EE4:
+  init [--force]       \u521D\u59CB\u5316\u5DE5\u4F5C\u6D41 (stdin\u4F20\u5165\u4EFB\u52A1markdown\uFF0C\u65E0stdin\u5219\u663E\u793A\u5BA2\u6237\u7AEF\u9009\u9879)
+  next [--batch]       \u83B7\u53D6\u4E0B\u4E00\u6279\u5F85\u6267\u884C\u4EFB\u52A1 (--batch \u8FD4\u56DE\u6240\u6709\u53EF\u5E76\u884C\u4EFB\u52A1)
   checkpoint <id>      \u8BB0\u5F55\u4EFB\u52A1\u5B8C\u6210 [--file <path> | stdin | \u5185\u8054\u6587\u672C] [--files f1 f2 ...]
-  pulse <id> <phase>   \u8BB0\u5F55\u4EFB\u52A1\u9636\u6BB5\u8FDB\u5C55 [--phase <phase>] [--note <text>]
-  adopt <id>           \u63A5\u7BA1\u4E2D\u65AD\u540E\u5F85\u63A5\u7BA1\u53D8\u66F4\u5E76\u8865 checkpoint [--file <path> | stdin | \u5185\u8054\u6587\u672C] [--files f1 f2 ...]
-  restart <id>         \u5728\u786E\u8BA4\u5E76\u5904\u7406\u5217\u51FA\u7684\u672C\u4EFB\u52A1\u53D8\u66F4\u540E\u5141\u8BB8\u4EFB\u52A1\u4ECE\u5934\u91CD\u505A\uFF1B\u5F52\u5C5E\u672A\u660E\u53D8\u66F4\u9700\u4EBA\u5DE5\u786E\u8BA4\uFF0C\u7981\u6B62\u6574\u6587\u4EF6 git restore
+  pulse <id> <phase>   \u8BB0\u5F55\u4EFB\u52A1\u9636\u6BB5 [--phase <phase>] [--note <text>]
+  adopt <id>           \u63A5\u7BA1\u4E2D\u65AD\u53D8\u66F4\u5E76\u8865 checkpoint [--file <path> | stdin] [--files f1 f2 ...]
+  restart <id>         \u786E\u8BA4\u53D8\u66F4\u540E\u5141\u8BB8\u4EFB\u52A1\u91CD\u505A (\u9700\u5148\u5904\u7406\u5F52\u5C5E\u660E\u786E\u7684\u53D8\u66F4)
   skip <id>            \u624B\u52A8\u8DF3\u8FC7\u4EFB\u52A1
-  review               \u6807\u8BB0code-review\u5DF2\u5B8C\u6210 (finish\u524D\u5FC5\u987B\u6267\u884C)
-  finish               \u667A\u80FD\u6536\u5C3E (\u9A8C\u8BC1+\u603B\u7ED3+\u56DE\u5230\u5F85\u547D\uFF0C\u9700\u5148review)
+  review               \u6807\u8BB0 code-review \u5DF2\u5B8C\u6210 (finish \u524D\u5FC5\u987B\u6267\u884C)
+  finish               \u667A\u80FD\u6536\u5C3E (\u9A8C\u8BC1+\u603B\u7ED3+\u63D0\u4EA4\uFF0C\u9700\u5148 review)
   status               \u67E5\u770B\u5168\u5C40\u8FDB\u5EA6
   resume               \u4E2D\u65AD\u6062\u590D
   abort                \u4E2D\u6B62\u5DE5\u4F5C\u6D41\u5E76\u6E05\u7406 .workflow/ \u76EE\u5F55
-  rollback <id>        \u56DE\u6EDA\u5230\u6307\u5B9A\u4EFB\u52A1\u7684\u5FEB\u7167 (git revert + \u91CD\u7F6E\u540E\u7EED\u4EFB\u52A1)
-  evolve               \u63A5\u6536AI\u53CD\u601D\u7ED3\u679C\u5E76\u6267\u884C\u8FDB\u5316 (stdin\u4F20\u5165)
+  rollback <id>        \u56DE\u6EDA\u5230\u6307\u5B9A\u4EFB\u52A1 (git revert + \u91CD\u7F6E\u540E\u7EED\u4EFB\u52A1)
+  evolve               \u63A5\u6536 AI \u53CD\u601D\u7ED3\u679C\u5E76\u6267\u884C\u8FDB\u5316 (stdin \u4F20\u5165)
   recall <\u5173\u952E\u8BCD>       \u67E5\u8BE2\u76F8\u5173\u8BB0\u5FC6
   add <\u63CF\u8FF0>           \u8FFD\u52A0\u4EFB\u52A1 [--type frontend|backend|general]
 
-\u5168\u5C40\u9009\u9879:
+\u2699\uFE0F \u5168\u5C40\u9009\u9879:
   --verbose            \u8F93\u51FA\u8C03\u8BD5\u65E5\u5FD7 (\u7B49\u540C FLOWPILOT_VERBOSE=1)`;
 
 // src/main.ts

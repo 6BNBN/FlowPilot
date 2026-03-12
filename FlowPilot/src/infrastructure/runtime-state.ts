@@ -3,7 +3,7 @@
  * @description 运行时状态辅助 - 文件锁元数据与判定逻辑
  */
 
-import { readFileSync } from 'fs';
+import { readFileSync, unlink } from 'fs';
 import { mkdir, readFile, rename, writeFile } from 'fs/promises';
 import { hostname as getHostname } from 'os';
 import { join } from 'path';

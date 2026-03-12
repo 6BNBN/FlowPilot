@@ -70,22 +70,22 @@ export class CLI {
         let out: string;
         if (md.trim()) {
           const data = await s.init(md, force);
-          out = `已初始化工作流: ${data.name} (${data.tasks.length} 个任务)`;
+          out = `✅ 已初始化工作流: ${data.name} (${data.tasks.length} 个任务)`;
         } else {
           const client = await (this.deps.promptSetupClient ?? promptSetupClient)();
           out = await s.setup(client);
         }
-        return `${out}\n\n**提示**\n- 建议先通过 /plugin 安装插件 superpowers、frontend-design、feature-dev、code-review、context7\n- 未安装时，子Agent无法使用专业技能，体验会降级`;
+        return `${out}\n\n**═══ 提示 ═══**\n💡 建议先通过 /plugin 安装插件: superpowers、frontend-design、feature-dev、code-review、context7\n   未安装时，子Agent无法使用专业技能，体验会降级\n   如需查看当前状态，可执行 \`node flow.js status\``;
       }
 
       case 'next': {
         if (rest.includes('--batch')) {
           const items = await s.nextBatch();
-          if (!items.length) return '全部完成';
+          if (!items.length) return '✅ 全部完成';
           return formatBatch(items);
         }
         const result = await s.next();
-        if (!result) return '全部完成';
+        if (!result) return '✅ 全部完成';
         return formatTask(result.task, result.context);
       }
 
@@ -175,7 +175,7 @@ export class CLI {
 
       case 'status': {
         const data = await s.status();
-        if (!data) return '无活跃工作流';
+        if (!data) return '⏳ 无活跃工作流';
         return formatStatus(data);
       }
 
@@ -225,23 +225,26 @@ export class CLI {
   }
 }
 
-const USAGE = `用法: node flow.js [--verbose] <command>
-  init [--force]       初始化工作流 (stdin传入任务markdown，无stdin则显示客户端选项并接管项目)
-  next [--batch]       获取下一个待执行任务 (--batch 返回所有可并行任务)
+const USAGE = `**═══ FlowPilot 用法 ═══**
+node flow.js [--verbose] <command>
+
+📋 工作流命令:
+  init [--force]       初始化工作流 (stdin传入任务markdown，无stdin则显示客户端选项)
+  next [--batch]       获取下一批待执行任务 (--batch 返回所有可并行任务)
   checkpoint <id>      记录任务完成 [--file <path> | stdin | 内联文本] [--files f1 f2 ...]
-  pulse <id> <phase>   记录任务阶段进展 [--phase <phase>] [--note <text>]
-  adopt <id>           接管中断后待接管变更并补 checkpoint [--file <path> | stdin | 内联文本] [--files f1 f2 ...]
-  restart <id>         在确认并处理列出的本任务变更后允许任务从头重做；归属未明变更需人工确认，禁止整文件 git restore
+  pulse <id> <phase>   记录任务阶段 [--phase <phase>] [--note <text>]
+  adopt <id>           接管中断变更并补 checkpoint [--file <path> | stdin] [--files f1 f2 ...]
+  restart <id>         确认变更后允许任务重做 (需先处理归属明确的变更)
   skip <id>            手动跳过任务
-  review               标记code-review已完成 (finish前必须执行)
-  finish               智能收尾 (验证+总结+回到待命，需先review)
+  review               标记 code-review 已完成 (finish 前必须执行)
+  finish               智能收尾 (验证+总结+提交，需先 review)
   status               查看全局进度
   resume               中断恢复
   abort                中止工作流并清理 .workflow/ 目录
-  rollback <id>        回滚到指定任务的快照 (git revert + 重置后续任务)
-  evolve               接收AI反思结果并执行进化 (stdin传入)
+  rollback <id>        回滚到指定任务 (git revert + 重置后续任务)
+  evolve               接收 AI 反思结果并执行进化 (stdin 传入)
   recall <关键词>       查询相关记忆
   add <描述>           追加任务 [--type frontend|backend|general]
 
-全局选项:
+⚙️ 全局选项:
   --verbose            输出调试日志 (等同 FLOWPILOT_VERBOSE=1)`;
