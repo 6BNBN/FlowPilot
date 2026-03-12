@@ -147,7 +147,7 @@ CC：恢复工作流: 博客系统 | 进度: 7/12 | 检测到中断任务 008 �
 | `node flow.js skip <id>` | 跳过某个任务 |
 | `node flow.js resume` | 中断恢复（必要时进入 reconciling） |
 | `node flow.js review` | 标记code-review已完成（finish前必须执行） |
-| `node flow.js finish` | 智能收尾（执行自动验证、输出最终任务总结、必要时拒绝最终提交，需先review） |
+| `node flow.js finish` | 智能收尾（执行自动验证、输出最终任务总结；未review或最终commit未成功时不会结束工作流） |
 | `node flow.js add <描述> [--type T]` | 追加新任务（参数顺序任意） |
 | `node flow.js recall <关键词>` | 检索历史记忆（BM25 + MMR + 时间衰减） |
 | `node flow.js evolve` | 接收 AI 反思结果并执行进化（stdin 传入） |
@@ -164,9 +164,9 @@ CC：恢复工作流: 博客系统 | 进度: 7/12 | 检测到中断任务 008 �
    终端会打印完整任务列表，并用 `[x] / [-] / [!] / [ ]` 标记完成、跳过、失败、未完成。
 3. 在删除 `.workflow/` 前先写出 `.workflow/final-summary.md`  
    这样流程内可以验证“先总结、后清理”，用户也能在目录清理前拿到 summary 文件。
-4. 最后才执行清理与最终提交/待命切换
+4. 只有在 `review` 已完成且最终 commit 真正成功后，才会执行清理并切回 idle
 
-如果验证失败，`finish` 仍会像以前一样中断收尾并要求先修复；但只要进入成功收尾路径，就一定会先输出总结，再清理临时目录。
+如果验证失败，`finish` 会中断收尾并要求先修复。即使验证通过，只要还没执行 `review`，或者最终 commit 因边界不安全 / 无可提交文件等原因没有成功，FlowPilot 也会保留工作流并明确提示下一步，而不是提前清理 `.workflow/`。
 
 ## 任务输入格式
 
@@ -476,8 +476,8 @@ finish(verify) → review(code-review) → evolve → finish(再次verify)
 具体流程：
 1. `flow finish` — 运行验证，并用 `验证结果:` 列出每个命令的通过/跳过情况
 2. 验证通过后提示执行 code-review → `flow review` 标记完成
-3. `flow finish` 再次执行 → 先做 cleanup，再检查 dirty baseline / owned files 边界，边界安全时才触发 reflect + experiment + 最终提交
-4. 如果验证失败，或存在未归属脏文件 / setup-owned 文件残留用户改动，则 finish 会拒绝最终提交；修复后重新 finish，循环直到 verify + review + ownership boundary 都通过
+3. `flow finish` 再次执行 → 检查 dirty baseline / owned files 边界，并尝试最终 commit；只有最终 commit 真正成功才会 cleanup、触发 reflect + experiment，并结束工作流
+4. 如果验证失败，或存在未归属脏文件 / setup-owned 文件残留用户改动，或最终 commit 被跳过 / 降级，finish 都会拒绝结束工作流；修复后重新 finish，循环直到 verify + review + ownership boundary + final commit 全部通过
 
 ### 进化结果消费
 
@@ -580,7 +580,7 @@ CC 自动 compact 后，说"继续任务"即可恢复。所有状态都在文件
 2. instruction file（`AGENTS.md` / 兼容旧 `CLAUDE.md`）、`.claude/settings.json`、`.gitignore` 在 cleanup 后仍残留用户改动
 3. 缺少 dirty baseline，无法证明工作流边界安全
 
-这时 FlowPilot 会停在 `finishing` 状态，并把可疑文件列出来，让你先处理，而不是替你误提交。
+这时 FlowPilot 会停在 `finishing` 状态，并把可疑文件列出来，让你先处理，而不是替你误提交。只要最终 commit 没真正成功，工作流就不会被清掉。
 
 **Q: `.workflow` 目录要提交到 git 吗？**
 通常不需要，也不建议提交。`.workflow/` 是本地临时运行态，`flow finish` 收尾成功后会自动清除；默认 `.gitignore` 也会忽略它。

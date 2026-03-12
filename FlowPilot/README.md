@@ -238,7 +238,7 @@ Finalization 阶段（可选）：
 [ ] 未完成
 ```
 
-这样用户在 `.workflow/` 被清掉之前，就已经能在终端看见完整结果；同时流程内也可以验证“先总结、后清理”的顺序。
+这样用户在 `.workflow/` 被清掉之前，就已经能在终端看见完整结果；同时流程内也可以验证“先总结、后清理”的顺序。需要注意的是：未执行 `flow review` 时，`flow finish` 不会结束工作流；即使 `review` 已完成，也只有最终 commit 真正成功后才会清理 `.workflow/` 并回到 idle。
 
 进化结果直接影响工作流行为：
 
@@ -431,7 +431,7 @@ node flow.js next [--batch]       # 获取下一个/所有可并行任务
 node flow.js checkpoint <id>      # 记录任务完成（stdin/--file/内联）[--files f1 f2 ...]
 node flow.js skip <id>            # 手动跳过任务
 node flow.js review               # 标记code-review已完成 + 进化自愈检查
-node flow.js finish               # 智能收尾（验证+总结+边界安全时才最终提交，需先review）
+node flow.js finish               # 智能收尾（验证+总结；未review或最终commit未成功时不会结束工作流）
 node flow.js status               # 查看全局进度
 node flow.js resume               # 中断恢复
 node flow.js add <描述> [--type]  # 追加任务（frontend/backend/general）
@@ -466,7 +466,7 @@ node flow.js init
                    ↓
               flow evolve（可选，CC 深度反思）
                    ↓
-              flow finish ──→ 验证通过 → 最终提交 → idle
+              flow finish ──→ 验证通过 + final commit 成功 → idle
 ```
 
 ## 错误处理
@@ -475,7 +475,7 @@ node flow.js init
 - **级联跳过** — 依赖了失败任务的后续任务自动标记 `skipped`
 - **中断恢复** — `active` 状态的任务在干净场景下会重置为 `pending`；若检测到工作流期间新增的未处理变更，工作流进入 `reconciling`。只有列出的 task-owned 变更适合 `adopt` / `restart`；归属未明的文件必须先人工确认，不能整文件 `git restore`
 - **验证失败** — `flow finish` 报错后可派子Agent修复，再次 finish
-- **最终提交拒绝** — `flow finish` 在 verify/review 之后还会检查 dirty baseline、checkpoint owned files、以及 instruction file（`AGENTS.md` / 兼容旧 `CLAUDE.md`）、`.claude/settings.json` / `.gitignore` 的 cleanup 结果；只要边界不安全，就拒绝最终提交并列出文件
+- **最终提交拒绝** — `flow finish` 在 verify/review 之后还会检查 dirty baseline、checkpoint owned files、以及 instruction file（`AGENTS.md` / 兼容旧 `CLAUDE.md`）、`.claude/settings.json` / `.gitignore` 的 cleanup 结果；只要边界不安全，或最终 commit 没真正成功，就拒绝结束工作流并列出下一步处理信息
 - **循环检测** — 三策略防护（重复失败/乒乓/全局熔断），自动注入警告到下一任务
 - **心跳自检** — 活跃任务超时（>30分钟）告警，记忆膨胀（>100条）自动压缩
 - **进化回滚** — 实验导致指标恶化时，`review` 自动回滚到实验前快照

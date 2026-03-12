@@ -117,7 +117,7 @@ If the worktree still has unarchived changes, `resume` also reports the real bou
 | `node flow.js skip <id>` | Skip a task |
 | `node flow.js resume` | Interruption recovery (enters reconciling when needed) |
 | `node flow.js review` | Mark code-review as done (required before finish) |
-| `node flow.js finish` | Smart finalization (run auto verification, print the final task summary, and refuse unsafe final commits when needed; review required) |
+| `node flow.js finish` | Smart finalization (run auto verification and print the final task summary; the workflow does not end until review is done and the final commit succeeds) |
 | `node flow.js add <desc> [--type T]` | Add new task (argument order flexible) |
 | `node flow.js recall <keyword>` | Search historical memories (BM25 + MMR + temporal decay) |
 | `node flow.js evolve` | Accept AI reflection results and apply evolution (stdin) |
@@ -134,9 +134,9 @@ If the worktree still has unarchived changes, `resume` also reports the real bou
    The terminal output includes the full task list with `[x] / [-] / [!] / [ ]` markers for done, skipped, failed, and incomplete tasks.
 3. Write `.workflow/final-summary.md` before deleting `.workflow/`  
    This preserves the "summarize first, clear later" ordering and leaves a summary file in place until cleanup actually happens.
-4. Only then perform cleanup and final commit / idle transition
+4. Only after `review` is complete and the final commit actually succeeds does FlowPilot clean up and return to idle
 
-If verification fails, `finish` still aborts finalization and asks you to fix the issue first. But once finish enters the successful shutdown path, summary output now always happens before temporary workflow cleanup.
+If verification fails, `finish` aborts finalization and asks you to fix the issue first. Even after verification passes, FlowPilot keeps the workflow alive until `review` is done and the final commit truly succeeds; if the final commit is skipped or degraded, `.workflow/` is preserved and the next step is explained explicitly.
 
 ## Task Input Format
 
@@ -397,7 +397,7 @@ The most common causes are:
 2. leftover user changes in the instruction file (`AGENTS.md`, or legacy `CLAUDE.md`), `.claude/settings.json`, or `.gitignore` after cleanup
 3. a missing dirty baseline, so FlowPilot can no longer prove the workflow boundary is safe
 
-When this happens, FlowPilot stays in `finishing` state and lists the suspicious files instead of committing on your behalf.
+When this happens, FlowPilot stays in `finishing` state and lists the suspicious files instead of committing on your behalf. As long as the final commit has not truly succeeded, the workflow is not cleared.
 
 **Q: Should .workflow be committed to git?**
 Usually no. `.workflow/` is local transient runtime state, `flow finish` removes it on successful completion, and the default `.gitignore` policy ignores it.
@@ -566,8 +566,8 @@ finish(verify) → review(code-review) → evolve → finish(verify again)
 Detailed flow:
 1. `flow finish` — runs verification and prints each step as passed or skipped under `Verification result:`
 2. On pass, prompts for code-review → `flow review` marks it done
-3. `flow finish` again → runs cleanup first, then checks the dirty baseline and owned-file boundary; only a safe boundary can proceed to reflect + experiment + final commit
-4. If verification fails, or if unowned dirty files / leftover user changes remain in setup-owned files, finish refuses the final commit; fix the issue and run finish again until verify + review + ownership boundary all pass
+3. `flow finish` again → checks the dirty baseline and owned-file boundary, then attempts the final commit; only a real final commit success can proceed to cleanup, reflect + experiment, and idle
+4. If verification fails, or if unowned dirty files / leftover user changes remain in setup-owned files, or if the final commit is skipped / degraded, finish refuses to end the workflow; fix the issue and run finish again until verify + review + ownership boundary + final commit all pass
 
 ### Evolution Result Consumption
 

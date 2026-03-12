@@ -195,7 +195,7 @@ The summary lists every task with explicit status markers:
 [ ] incomplete
 ```
 
-This way the user sees the full outcome immediately, and the workflow can still verify the "summarize first, clear later" ordering before `.workflow/` is removed.
+This way the user sees the full outcome immediately, and the workflow can still verify the "summarize first, clear later" ordering before `.workflow/` is removed. Also note the stricter shutdown rule: without `flow review`, `flow finish` does not end the workflow; even after review, cleanup only happens after the final commit truly succeeds.
 
 Evolution results directly affect workflow behavior:
 
@@ -395,7 +395,7 @@ node flow.js next [--batch]       # Get next/all parallelizable tasks
 node flow.js checkpoint <id>      # Record task completion (stdin/--file/inline) [--files f1 f2 ...]
 node flow.js skip <id>            # Manually skip a task
 node flow.js review               # Mark code-review as done + evolution self-healing check
-node flow.js finish               # Smart finalization (verify+summarize+final commit only when boundary is safe)
+node flow.js finish               # Smart finalization (verify+summarize; the workflow stays active until review is done and the final commit succeeds)
 node flow.js status               # View global progress
 node flow.js resume               # Interruption recovery
 node flow.js add <desc> [--type]  # Add task (frontend/backend/general)
@@ -430,7 +430,7 @@ node flow.js init
                    ↓
               flow evolve (optional, CC deep reflection)
                    ↓
-              flow finish ──→ Verification passed → Final commit → idle
+              flow finish ──→ Verification passed + final commit succeeded → idle
 ```
 
 ## Error Handling
@@ -439,7 +439,7 @@ node flow.js init
 - **Cascade skip** — Downstream tasks depending on failed tasks auto-marked `skipped`
 - **Interruption recovery** — clean interruptions reset `active` tasks back to `pending`; when workflow-period changes remain, the workflow enters `reconciling`. Only the listed task-owned changes are safe for `adopt` / `restart`; ownership-ambiguous files must be reviewed manually and must not be cleared with a whole-file `git restore`
 - **Verification failure** — `flow finish` reports error, dispatch sub-agent to fix, retry finish
-- **Final commit refusal** — after verify/review, `flow finish` also checks the dirty baseline, checkpoint-owned files, and cleanup results for the instruction file (`AGENTS.md`, or legacy `CLAUDE.md`) / `.claude/settings.json` / `.gitignore`; any unsafe boundary causes an explicit refusal with the file list
+- **Final commit refusal** — after verify/review, `flow finish` also checks the dirty baseline, checkpoint-owned files, and cleanup results for the instruction file (`AGENTS.md`, or legacy `CLAUDE.md`) / `.claude/settings.json` / `.gitignore`; any unsafe boundary, or any non-success final commit outcome, causes an explicit refusal and keeps the workflow active with the next-step guidance
 - **Loop detection** — Three-strategy defense (repeated failures/ping-pong/global circuit breaker), auto-injects warnings into next task
 - **Health check** — Active task timeout (>30min) alerts, memory bloat (>100 entries) auto-compaction
 - **Evolution rollback** — If experiments degrade metrics, `review` auto-rolls back to pre-experiment snapshot
